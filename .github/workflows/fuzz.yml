@@ -1,0 +1,57 @@
+name: fuzz
+
+on:
+  pull_request:
+    paths:
+      - "crates/mosaic-core/**"
+      - "crates/mosaic-groth16/**"
+      - "crates/mosaic-fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "23 4 * * *"   # nightly 04:23 UTC
+  workflow_dispatch:
+
+jobs:
+  fuzz-pr:
+    name: PR fuzz (10 min per harness)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_groth16_proof_bytes
+          - fuzz_vk_bytes
+          - fuzz_public_inputs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600
+        working-directory: crates/mosaic-fuzz
+
+  fuzz-nightly:
+    name: Nightly fuzz (4 hours per harness)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_groth16_proof_bytes
+          - fuzz_vk_bytes
+          - fuzz_public_inputs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=14400
+        working-directory: crates/mosaic-fuzz
+      - name: Upload corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: crates/mosaic-fuzz/fuzz/corpus/${{ matrix.target }}/

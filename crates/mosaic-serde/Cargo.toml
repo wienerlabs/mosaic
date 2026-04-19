@@ -1,0 +1,61 @@
+[package]
+name = "mosaic-serde"
+description = "Format adapters that convert proofs from snarkjs/arkworks/gnark/halo2/plonky3/risc0 to Mosaic canonical bytes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+mosaic-core = { workspace = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+num-bigint = { workspace = true, optional = true }
+
+ark-bn254 = { workspace = true, optional = true }
+ark-ec = { workspace = true, optional = true }
+ark-ff = { workspace = true, optional = true }
+ark-groth16 = { workspace = true, optional = true }
+ark-serialize = { workspace = true, optional = true }
+ark-std = { workspace = true, optional = true }
+
+[features]
+default = []
+std = [
+    "mosaic-core/std",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:hex",
+    "dep:num-bigint",
+    "serde/std",
+    "serde_json/std",
+    "hex/std",
+    "num-bigint/std",
+]
+host-backend = [
+    "std",
+    "mosaic-core/host-backend",
+    "dep:ark-bn254",
+    "dep:ark-ec",
+    "dep:ark-ff",
+    "dep:ark-groth16",
+    "dep:ark-serialize",
+    "dep:ark-std",
+    "ark-bn254/std",
+    "ark-ec/std",
+    "ark-ff/std",
+    "ark-groth16/std",
+    "ark-serialize/std",
+    "ark-std/std",
+]
+solana = ["mosaic-core/solana"]
+
+[lints]
+workspace = true

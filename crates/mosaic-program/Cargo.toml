@@ -1,0 +1,34 @@
+[package]
+name = "mosaic-program"
+description = "Reference Solana on-chain program demonstrating multi-system proof verification dispatch."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+mosaic-core = { workspace = true, features = ["solana"] }
+mosaic-groth16 = { workspace = true, features = ["solana"] }
+mosaic-chunked = { workspace = true, features = ["solana"] }
+solana-program = { workspace = true }
+borsh = { workspace = true }
+
+[features]
+default = []
+no-entrypoint = []
+test-bpf = []
+
+[lints]
+workspace = true
+
+[package.metadata.solana]
+program-id = "MosA1cVer1f1er11111111111111111111111111111"

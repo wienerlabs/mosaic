@@ -1,0 +1,11 @@
+[toolchain]
+# Host-side stable toolchain for the Mosaic workspace.
+#
+# **Note**: `cargo-build-sbf` ships its own pinned platform-tools (currently
+# rustc 1.84.1 in solana-cargo-build-sbf 3.0.x) and ignores this file when
+# invoked on `crates/mosaic-program`. We pick a newer host channel so the
+# rest of the workspace can pull modern dependencies (edition2024, etc.).
+channel = "1.87.0"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"]
+profile = "default"

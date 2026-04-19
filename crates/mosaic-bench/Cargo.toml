@@ -1,0 +1,38 @@
+[package]
+name = "mosaic-bench"
+description = "Criterion micro-benchmarks for host-side verification and on-chain CU regression harness."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+mosaic-core = { workspace = true, features = ["std", "host-backend"] }
+mosaic-groth16 = { workspace = true, features = ["std", "host-backend"] }
+mosaic-serde = { workspace = true, features = ["std", "host-backend"] }
+solana-program-test = { workspace = true }
+solana-sdk = { workspace = true }
+borsh = { workspace = true, features = ["std"] }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "groth16_host"
+harness = false
+
+[[bin]]
+name = "bpf-bench"
+path = "src/bin/bpf_bench.rs"
+
+[lints]
+workspace = true

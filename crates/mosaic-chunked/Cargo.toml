@@ -1,0 +1,27 @@
+[package]
+name = "mosaic-chunked"
+description = "Chunked proof upload protocol with rolling-hash commitment for proofs that exceed the 1232-byte instruction limit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+mosaic-core = { workspace = true }
+borsh = { workspace = true }
+bytemuck = { workspace = true }
+
+[features]
+default = []
+std = ["mosaic-core/std", "borsh/std"]
+solana = ["mosaic-core/solana"]
+host-backend = ["mosaic-core/host-backend"]
+
+[lints]
+workspace = true

@@ -1,0 +1,45 @@
+[package]
+name = "mosaic-fuzz"
+description = "cargo-fuzz harnesses for the Mosaic verifier suite."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+mosaic-core = { workspace = true, features = ["std", "host-backend"] }
+mosaic-groth16 = { workspace = true, features = ["std", "host-backend"] }
+mosaic-serde = { workspace = true, features = ["std", "host-backend"] }
+libfuzzer-sys = { workspace = true }
+arbitrary = { workspace = true }
+
+[[bin]]
+name = "fuzz_groth16_proof_bytes"
+path = "fuzz_targets/fuzz_groth16_proof_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_vk_bytes"
+path = "fuzz_targets/fuzz_vk_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_public_inputs"
+path = "fuzz_targets/fuzz_public_inputs.rs"
+test = false
+doc = false
+
+[lints]
+workspace = true

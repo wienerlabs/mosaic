@@ -1,0 +1,166 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mosaic-core",
+    "crates/mosaic-groth16",
+    "crates/mosaic-plonk",
+    "crates/mosaic-stark",
+    "crates/mosaic-nova",
+    "crates/mosaic-serde",
+    "crates/mosaic-chunked",
+    "crates/mosaic-program",
+    "crates/mosaic-sdk",
+    "crates/mosaic-bench",
+    "crates/mosaic-fuzz",
+    "tests/differential",
+]
+default-members = [
+    "crates/mosaic-core",
+    "crates/mosaic-groth16",
+    "crates/mosaic-serde",
+    "crates/mosaic-chunked",
+    "crates/mosaic-sdk",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85.0"
+license = "Apache-2.0 OR MIT"
+authors = ["Wiener Labs <hello@wienerlabs.com>"]
+homepage = "https://github.com/wienerlabs/mosaic"
+repository = "https://github.com/wienerlabs/mosaic"
+documentation = "https://docs.rs/mosaic-core"
+readme = "README.md"
+keywords = ["solana", "zk", "groth16", "verifier", "cryptography"]
+categories = ["cryptography", "no-std"]
+
+[workspace.dependencies]
+# Workspace member crates
+mosaic-core = { version = "0.1.0", path = "crates/mosaic-core", default-features = false }
+mosaic-groth16 = { version = "0.1.0", path = "crates/mosaic-groth16", default-features = false }
+mosaic-plonk = { version = "0.1.0", path = "crates/mosaic-plonk", default-features = false }
+mosaic-stark = { version = "0.1.0", path = "crates/mosaic-stark", default-features = false }
+mosaic-nova = { version = "0.1.0", path = "crates/mosaic-nova", default-features = false }
+mosaic-serde = { version = "0.1.0", path = "crates/mosaic-serde", default-features = false }
+mosaic-chunked = { version = "0.1.0", path = "crates/mosaic-chunked", default-features = false }
+mosaic-program = { version = "0.1.0", path = "crates/mosaic-program" }
+mosaic-sdk = { version = "0.1.0", path = "crates/mosaic-sdk" }
+
+# Solana — pinned to 2.x; Solana 3.0 CLI is backward-compatible with 2.x program SDK.
+# We deliberately avoid the unstable 3.x API surface during phase 1 to keep MSRV stable.
+solana-program = { version = "2.1.0", default-features = false }
+# alt_bn128 + keccak got split out of solana-program in 2.x — depend explicitly.
+solana-bn254 = { version = "2.2", default-features = false }
+solana-keccak-hasher = { version = "2.2", default-features = false }
+
+# Arkworks — host-side cryptographic correctness oracle and reference impl.
+ark-bn254 = { version = "0.5.0", default-features = false, features = ["curve"] }
+ark-ec = { version = "0.5.0", default-features = false }
+ark-ff = { version = "0.5.0", default-features = false }
+ark-groth16 = { version = "0.5.0", default-features = false }
+ark-relations = { version = "0.5.0", default-features = false }
+ark-serialize = { version = "0.5.0", default-features = false, features = ["derive"] }
+ark-std = { version = "0.5.0", default-features = false }
+
+# Serialization
+borsh = { version = "1.5.1", default-features = false, features = ["derive"] }
+serde = { version = "1.0.210", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.128", default-features = false, features = ["alloc"] }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+
+# Error handling
+thiserror = { version = "1.0.69", default-features = false }
+
+# Memory / safety primitives
+bytemuck = { version = "1.18.0", features = ["derive"] }
+zeroize = { version = "1.8.1", default-features = false, features = ["derive"] }
+subtle = { version = "2.6.1", default-features = false }
+arrayvec = { version = "0.7.6", default-features = false }
+num-bigint = { version = "0.4.6", default-features = false }
+
+# Logging — feature-gated, never enabled by default in library crates.
+log = { version = "0.4.22", default-features = false }
+tracing = { version = "0.1.40", default-features = false }
+
+# Host-side hashes (mirror Solana hashv syscall semantics for differential
+# testing). Never compiled into SBF builds.
+sha2 = { version = "0.10.8", default-features = false }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+light-poseidon = "0.3.0"
+
+# Testing & fuzzing
+criterion = { version = "0.5.1", default-features = false }
+proptest = "1.5.0"
+arbitrary = { version = "1.3.2", features = ["derive"] }
+libfuzzer-sys = "0.4.7"
+honggfuzz = "0.5.56"
+
+# SDK
+solana-sdk = "2.1.0"
+solana-client = "2.1.0"
+solana-program-test = "2.1.0"
+anyhow = "1.0.89"
+tokio = { version = "1.40.0", features = ["full"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+rust_2024_compatibility = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# Pedantic + nursery raise the bar but generate noise on test / bench / fuzz
+# code. Phase 1 keeps them at `allow` so CI doesn't block on style; the
+# security-critical lints are individually pinned to `warn` below. When the
+# workspace stabilizes we'll re-enable pedantic with crate-level allow lists.
+pedantic = { level = "allow", priority = -1 }
+nursery = { level = "allow", priority = -1 }
+cargo = { level = "allow", priority = -1 }
+# Hard-deny patterns that would break on-chain code:
+# `unwrap_used` / `expect_used` are kept at `allow` because they fire on
+# every test module and are noisy. We rely on code review and the
+# `disallowed_methods` clippy.toml entry as the actual enforcement
+# mechanism for library code.
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
+todo = "warn"
+unimplemented = "warn"
+# Soft warns — informational, often false positives in cryptographic code
+# where bounds are proven by length checks above. Documented exceptions go
+# in the calling function with a `#[allow(clippy::indexing_slicing)]`.
+arithmetic_side_effects = "allow"
+indexing_slicing = "allow"
+missing_panics_doc = "allow"
+disallowed_macros = "allow"            # Bench / SDK use eprintln intentionally.
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = "none"
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+
+# SBF target inherits release profile but cargo-build-sbf overrides as needed.

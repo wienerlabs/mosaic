@@ -1,0 +1,31 @@
+# Strict clippy configuration for security-critical on-chain code.
+# Many lints are configured at the workspace level in `Cargo.toml` under
+# `[workspace.lints.clippy]`; this file only contains the lint *configuration
+# parameters* that cannot be set there.
+
+avoid-breaking-exported-api = false
+disallowed-names = ["foo", "bar", "baz", "tmp", "temp"]
+cognitive-complexity-threshold = 25
+too-many-arguments-threshold = 8
+type-complexity-threshold = 250
+single-char-binding-names-threshold = 4
+trivial-copy-size-limit = 16
+pass-by-value-size-limit = 256
+literal-representation-threshold = 1024
+enum-variant-name-threshold = 3
+
+# Disallowed methods are intentionally kept empty in phase 1. We rely on
+# code review for `unwrap()` / `expect()` in library code; the workspace
+# Cargo.toml documents the rationale. Tests and benches are allowed to
+# panic. When the library code surface stabilizes we'll re-introduce a
+# scoped disallow list with crate-specific exceptions.
+disallowed-methods = []
+
+# Macros that produce non-deterministic output (banned on-chain).
+disallowed-macros = [
+    { path = "std::print", reason = "No stdout in on-chain code; use `solana_program::msg!`." },
+    { path = "std::println", reason = "No stdout in on-chain code; use `solana_program::msg!`." },
+    { path = "std::dbg", reason = "Debug macro must not appear in committed code." },
+    { path = "std::eprint", reason = "No stderr in on-chain code." },
+    { path = "std::eprintln", reason = "No stderr in on-chain code." },
+]

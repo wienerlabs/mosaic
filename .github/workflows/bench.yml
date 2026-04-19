@@ -1,0 +1,46 @@
+name: bench
+
+on:
+  pull_request:
+    paths:
+      - "crates/mosaic-core/**"
+      - "crates/mosaic-groth16/**"
+      - "crates/mosaic-bench/**"
+      - ".github/workflows/bench.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/mosaic-core/**"
+      - "crates/mosaic-groth16/**"
+      - "crates/mosaic-bench/**"
+  workflow_dispatch:
+
+jobs:
+  criterion:
+    name: criterion (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo bench -p mosaic-bench --bench groth16_host -- --output-format bencher | tee output.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: criterion-output
+          path: output.txt
+
+  bpf-cu:
+    name: bpf-bench CU regression
+    runs-on: ubuntu-latest
+    needs: criterion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.15/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - run: cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
+      - run: cargo run --release -p mosaic-bench --bin bpf-bench
+        # TODO(mosaic-014): wire CU thresholding into the bpf-bench binary
+        # so this step fails on regression > 5%.

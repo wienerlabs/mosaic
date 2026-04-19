@@ -1,0 +1,74 @@
+[package]
+name = "mosaic-core"
+description = "Core trait hierarchy, error taxonomy, and syscall abstraction for the Mosaic on-chain proof verifier library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+borsh = { workspace = true }
+thiserror = { workspace = true, optional = true }
+zeroize = { workspace = true }
+subtle = { workspace = true }
+arrayvec = { workspace = true }
+
+# Solana syscalls — only enabled with the `solana` feature; SBF target needs
+# this to compile. Host tests use the `host-backend` feature instead.
+solana-program = { workspace = true, optional = true }
+solana-bn254 = { workspace = true, optional = true }
+solana-keccak-hasher = { workspace = true, optional = true }
+
+# Arkworks — host-side oracle backend; not pulled in for SBF builds.
+ark-bn254 = { workspace = true, optional = true }
+ark-ec = { workspace = true, optional = true }
+ark-ff = { workspace = true, optional = true }
+ark-serialize = { workspace = true, optional = true }
+ark-std = { workspace = true, optional = true }
+
+# Host-side hash crates (mirror Solana syscall semantics).
+sha2 = { workspace = true, optional = true }
+tiny-keccak = { workspace = true, optional = true }
+light-poseidon = { workspace = true, optional = true }
+
+# Logging — strictly opt-in.
+tracing = { workspace = true, optional = true }
+
+[features]
+default = []
+std = ["thiserror", "borsh/std", "arrayvec/std", "zeroize/std", "subtle/std"]
+solana = ["dep:solana-program", "dep:solana-bn254", "dep:solana-keccak-hasher"]
+host-backend = [
+    "std",
+    "dep:ark-bn254",
+    "dep:ark-ec",
+    "dep:ark-ff",
+    "dep:ark-serialize",
+    "dep:ark-std",
+    "ark-bn254/std",
+    "ark-ec/std",
+    "ark-ff/std",
+    "ark-serialize/std",
+    "ark-std/std",
+    "dep:sha2",
+    "sha2/std",
+    "dep:tiny-keccak",
+    "dep:light-poseidon",
+]
+diagnostics = ["std", "dep:tracing"]
+formal-verify = []
+wasm = ["std"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
