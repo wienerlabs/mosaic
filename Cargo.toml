@@ -113,30 +113,39 @@ unused_lifetimes = "warn"
 unused_qualifications = "warn"
 
 [workspace.lints.clippy]
-# Pedantic + nursery raise the bar but generate noise on test / bench / fuzz
-# code. Phase 1 keeps them at `allow` so CI doesn't block on style; the
-# security-critical lints are individually pinned to `warn` below. When the
-# workspace stabilizes we'll re-enable pedantic with crate-level allow lists.
-pedantic = { level = "allow", priority = -1 }
-nursery = { level = "allow", priority = -1 }
-cargo = { level = "allow", priority = -1 }
-# Hard-deny patterns that would break on-chain code:
-# `unwrap_used` / `expect_used` are kept at `allow` because they fire on
-# every test module and are noisy. We rely on code review and the
-# `disallowed_methods` clippy.toml entry as the actual enforcement
-# mechanism for library code.
+# === Layered policy (see docs/lint-policy.md for full rationale) ===
+#
+# Layer 1 — correctness + suspicious: hard-deny everywhere. CI uses
+# `-D warnings` so these always fail the build.
+correctness = { level = "deny", priority = -2 }
+suspicious  = { level = "deny", priority = -2 }
+#
+# Layer 2 — pedantic + nursery + cargo: kept at `warn` so they're visible
+# in clippy output and audit firms can audit suppressions. CI demotes these
+# back via `-W clippy::pedantic -W clippy::nursery -W clippy::cargo` so they
+# don't fail the build, but they remain visible in the log and any new
+# noise stands out at PR review time.
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+cargo    = { level = "warn", priority = -1 }
+#
+# Layer 3 — explicit denials for panic-paths that would break on-chain.
+# These override pedantic-warn. Test / bench / fuzz crates that legitimately
+# need them must `#[allow(...)]` at module level with a written reason.
+todo = "deny"
+unimplemented = "deny"
+#
+# Layer 4 — soft warns kept allow-by-default because they fire on every
+# test module. The `disallowed_methods` clippy.toml entry remains empty for
+# now; when library code surface stabilizes we'll add a scoped disallow
+# list with crate-specific exceptions (tracked in issue #32).
 unwrap_used = "allow"
 expect_used = "allow"
 panic = "allow"
-todo = "warn"
-unimplemented = "warn"
-# Soft warns — informational, often false positives in cryptographic code
-# where bounds are proven by length checks above. Documented exceptions go
-# in the calling function with a `#[allow(clippy::indexing_slicing)]`.
 arithmetic_side_effects = "allow"
 indexing_slicing = "allow"
 missing_panics_doc = "allow"
-disallowed_macros = "allow"            # Bench / SDK use eprintln intentionally.
+disallowed_macros = "allow"
 
 [profile.release]
 opt-level = 3

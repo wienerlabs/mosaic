@@ -26,9 +26,16 @@ use crate::error::OnChainError;
 /// to hand out multiple concurrent `&mut` references. So this arena offers
 /// **single-borrow alloc**: each call to [`Self::alloc_slice`] returns a
 /// `&mut [u8]` tied to `&mut self`, meaning you cannot keep two live arena
-/// allocations simultaneously. The `alloc_split` API for multi-slice carving
-/// is tracked by TODO(mosaic-016) — Phase 2 once we identify a verifier
-/// that needs two concurrent scratch buffers.
+/// allocations simultaneously.
+///
+/// A real bump allocator (with `UnsafeCell`-backed multi-borrow) is tracked
+/// by [issue #58](https://github.com/wienerlabs/mosaic/issues/58); it ships
+/// behind an `unsafe-arena` feature flag with Miri CI as the lockstep
+/// quality gate. The single-borrow API here remains the default.
+///
+/// `alloc_split` for multi-slice carving is tracked by
+/// [issue #15](https://github.com/wienerlabs/mosaic/issues/15) — Phase 2
+/// once we identify a verifier that needs two concurrent scratch buffers.
 ///
 /// This is sufficient for typical verifier scratch patterns:
 ///
