@@ -77,6 +77,10 @@ pub enum OnChainError {
     SessionAlreadyFinalized = 0x0033,
     /// Session was finalized in a different transaction than `commit_and_verify`.
     SessionContextMismatch = 0x0034,
+    /// `InitializeSession` called for a PDA that already holds session state.
+    SessionAlreadyInitialized = 0x0035,
+    /// `CancelExpiredSession` called before `expires_at_slot`.
+    SessionNotExpired = 0x0036,
 
     // 0x0040..0x004F — syscall surface errors
     /// `sol_alt_bn128_group_op` returned a non-zero status.
@@ -133,6 +137,8 @@ impl OnChainError {
             Self::ChunkOverflow => "chunk_overflow",
             Self::SessionAlreadyFinalized => "session_already_finalized",
             Self::SessionContextMismatch => "session_context_mismatch",
+            Self::SessionAlreadyInitialized => "session_already_initialized",
+            Self::SessionNotExpired => "session_not_expired",
             Self::AltBn128SyscallFailed => "alt_bn128_syscall_failed",
             Self::AltBn128CompressionSyscallFailed => "alt_bn128_compression_syscall_failed",
             Self::PoseidonSyscallFailed => "poseidon_syscall_failed",
@@ -240,6 +246,8 @@ mod tests {
         assert_eq!(OnChainError::ProofLengthMismatch.code(), 0x0001);
         assert_eq!(OnChainError::PairingCheckFailed.code(), 0x0020);
         assert_eq!(OnChainError::ChunkCommitmentMismatch.code(), 0x0031);
+        assert_eq!(OnChainError::SessionAlreadyInitialized.code(), 0x0035);
+        assert_eq!(OnChainError::SessionNotExpired.code(), 0x0036);
         assert_eq!(OnChainError::AltBn128SyscallFailed.code(), 0x0040);
         assert_eq!(OnChainError::InternalInvariantViolation.code(), 0x00FF);
     }

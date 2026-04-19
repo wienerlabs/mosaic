@@ -3148,6 +3148,9 @@ dependencies = [
  "mosaic-core",
  "mosaic-groth16",
  "solana-program",
+ "solana-program-test",
+ "solana-sdk",
+ "tokio",
 ]
 
 [[package]]

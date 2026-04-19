@@ -2,8 +2,16 @@
 //!
 //! Reference Solana on-chain program for the Mosaic verifier suite.
 //!
-//! Exposes a single `VerifyProof` instruction whose first data byte is a
-//! [`ProofSystemId`] discriminant. Subsequent layout is system-specific.
+//! Top-level instruction dispatch:
+//!
+//! | Tag      | Operation |
+//! |---|---|
+//! | `0x01`   | `VerifyProof` (single transaction, ≤1232 B payload) |
+//! | `0x10`   | `InitializeSession` (chunked upload) |
+//! | `0x11`   | `AppendChunk` (chunked upload) |
+//! | `0x12`   | `CommitAndVerify` (chunked upload) |
+//! | `0x13`   | `CancelSession` (chunked upload) |
+//! | `0x14`   | `CancelExpiredSession` (chunked upload, permissionless GC) |
 //!
 //! ## Compute budget
 //!
@@ -23,6 +31,8 @@
 #![allow(unexpected_cfgs)]
 
 extern crate alloc;
+
+pub mod chunked;
 
 use alloc::{format, vec::Vec};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -47,14 +57,15 @@ solana_program::entrypoint!(process_instruction);
 pub const PROGRAM_ID: Pubkey =
     solana_program::pubkey!("MosA1cVer1f1er11111111111111111111111111111");
 
-/// Top-level instruction discriminant.
+/// Top-level instruction discriminant for the single-shot `VerifyProof`
+/// path. Chunked-upload instructions use the 0x10..=0x1F range and are
+/// dispatched separately (see [`chunked`]).
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum InstructionTag {
-    /// Verify a single proof. Data layout: `tag || ProofSystemId || vk_len:u32 || vk || proof_len:u32 || proof || pi_len:u32 || pi`.
+    /// Verify a single proof. Data layout:
+    /// `tag || ProofSystemId || vk_len:u32 || vk || proof_len:u32 || proof || pi_len:u32 || pi`.
     VerifyProof = 0x01,
-    /// Chunked-upload entry points share the prefix range 0x10..=0x1F (see `mosaic-chunked`).
-    ChunkedSession = 0x10,
 }
 
 /// Decoded `VerifyProof` payload.
@@ -73,7 +84,7 @@ pub struct VerifyProofData {
 /// Top-level entrypoint.
 pub fn process_instruction(
     program_id: &Pubkey,
-    _accounts: &[AccountInfo<'_>],
+    accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
     if program_id != &PROGRAM_ID {
@@ -85,10 +96,9 @@ pub fn process_instruction(
         .ok_or(ProgramError::InvalidInstructionData)?;
     match *tag {
         x if x == InstructionTag::VerifyProof as u8 => handle_verify_proof(rest),
-        x if x == InstructionTag::ChunkedSession as u8 => {
-            // TODO(mosaic-006): wire chunked-session handlers from `mosaic-chunked`.
-            Err(ProgramError::Custom(OnChainError::UnimplementedProofSystem.code()))
-        },
+        // Chunked-upload instructions: 0x10..=0x1F is reserved for this group.
+        // Re-prepend the tag because the sub-dispatcher reads it again.
+        x if (0x10..=0x1F).contains(&x) => chunked::dispatch(program_id, accounts, instruction_data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
@@ -98,14 +108,25 @@ fn handle_verify_proof(data: &[u8]) -> ProgramResult {
         .map_err(|_| ProgramError::InvalidInstructionData)?;
     let id = ProofSystemId::from_byte(payload.proof_system_id).map_err(ProgramError::from)?;
     msg!("mosaic: dispatch {}", id.slug());
+    dispatch_verify(id, &payload.vk, &payload.proof, &payload.public_inputs)
+        .map_err(ProgramError::from)
+}
+
+/// Shared verifier-dispatch helper used by both `handle_verify_proof` and
+/// `chunked::commit_and_verify`. Reads canonical bytes, picks the verifier,
+/// invokes it against the Solana syscall backend.
+pub(crate) fn dispatch_verify(
+    id: ProofSystemId,
+    vk: &[u8],
+    proof: &[u8],
+    public_inputs: &[u8],
+) -> Result<(), OnChainError> {
     let backend = SolanaSyscallBackend::new();
-    let result = match id {
+    match id {
         ProofSystemId::Groth16Bn254 => {
             let v = Groth16Verifier::<_, false>::new(&backend);
-            ProofSystem::verify(&v, &payload.vk, &payload.proof, &payload.public_inputs)
+            ProofSystem::verify(&v, vk, proof, public_inputs)
         },
-        // Phase 2/3 systems route to their stubs — they all return
-        // `UnimplementedProofSystem` until their crates ship.
         ProofSystemId::PlonkKzgBn254
         | ProofSystemId::HyperPlonkKzgBn254
         | ProofSystemId::Halo2KzgBn254
@@ -116,6 +137,5 @@ fn handle_verify_proof(data: &[u8]) -> ProgramResult {
         // `ProofSystemId` is `#[non_exhaustive]`; new variants land via
         // ADR-0001 amendment and add their dispatch arms above.
         _ => Err(OnChainError::UnknownProofSystem),
-    };
-    result.map_err(ProgramError::from)
+    }
 }

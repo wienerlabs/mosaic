@@ -22,6 +22,13 @@ mosaic-chunked = { workspace = true, features = ["solana"] }
 solana-program = { workspace = true }
 borsh = { workspace = true }
 
+[dev-dependencies]
+mosaic-chunked = { workspace = true, features = ["std"] }
+solana-program-test = { workspace = true }
+solana-sdk = { workspace = true }
+borsh = { workspace = true, features = ["std"] }
+tokio = { workspace = true }
+
 [features]
 default = []
 no-entrypoint = []
