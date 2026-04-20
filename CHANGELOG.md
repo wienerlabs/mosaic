@@ -7,16 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for v0.3.0 / Phase 3
+### Planned beyond v0.3.0-phase3-scaffolds
 
-- **HyperPlonk-KZG** verifier (issue [#2](https://github.com/wienerlabs/mosaic/issues/2)).
-- **Halo2-KZG** verifier + adapter (issue [#11](https://github.com/wienerlabs/mosaic/issues/11)).
-- **gnark** format adapter for Groth16 + PLONK (issue [#10](https://github.com/wienerlabs/mosaic/issues/10)).
-- **FRI-STARK** verifier via chunked-upload (issue [#3](https://github.com/wienerlabs/mosaic/issues/3)).
-- **Nova / HyperNova / ProtoStar** folding-scheme verifiers (issue [#4](https://github.com/wienerlabs/mosaic/issues/4)).
-- CU optimization: Pippenger MSM (issue [#37](https://github.com/wienerlabs/mosaic/issues/37)) + Fr in-place (issue [#38](https://github.com/wienerlabs/mosaic/issues/38)) → PLONK ~600K target.
-- Real Circom-sourced Groth16 fixtures (issue [#24](https://github.com/wienerlabs/mosaic/issues/24)).
-- External security audit (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+- **HyperPlonk-KZG** full verifier body — sumcheck + MLE-batched KZG
+  opening. Scaffold already frozen in this release (issue
+  [#2](https://github.com/wienerlabs/mosaic/issues/2)).
+- **Halo2-KZG** full verifier body — custom gates + lookups + multipoint
+  KZG (issue [#64](https://github.com/wienerlabs/mosaic/issues/64)).
+- **FRI-STARK** full verifier body — Merkle auth + FRI queries + PoW
+  grinding, delivered via chunked-upload (issue
+  [#3](https://github.com/wienerlabs/mosaic/issues/3)).
+- **Nova / HyperNova / ProtoStar** folding-scheme verifiers (issue
+  [#4](https://github.com/wienerlabs/mosaic/issues/4)) — Phase-3
+  scaffold pending.
+- **`mosaic-zk-primitives` extraction** — HyperPlonk and Halo2 both
+  reuse `mosaic-plonk`'s Fr/MSM/transcript; extract into a dedicated
+  primitives crate once Nova or a fourth consumer lands (tracked as
+  a follow-up refactor).
+- **gnark** format adapter for Groth16 + PLONK (issue
+  [#10](https://github.com/wienerlabs/mosaic/issues/10)).
+- CU optimization: Pippenger MSM evaluation (issue
+  [#37](https://github.com/wienerlabs/mosaic/issues/37)) — preliminary
+  analysis shows Pippenger regresses on Solana's per-G1Add syscall
+  cost profile; issue to be rescoped around zero/one-scalar shortcut
+  and pre-reduced IC aggregation instead.
+- Real Circom-sourced Groth16 fixtures (issue
+  [#24](https://github.com/wienerlabs/mosaic/issues/24)).
+- External security audit (issue
+  [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+
+## [0.3.0-phase3-scaffolds] — 2026-04-20
+
+**Phase-3 scaffold surface is frozen at this tag.** Three new verifier
+scaffolds (HyperPlonk-KZG, Halo2-KZG, FRI-STARK) ship with full
+canonical byte layouts, `ProofSystem` trait implementations, and
+`mosaic-program` dispatcher wire-up. Full verifier bodies (round
+transcripts, MSM/FRI inner loops, final pairing/hash check) land in
+subsequent 0.3.x releases.
+
+This tag is the reference point for "Phase-3 scope entered" —
+ecosystem collaborators building adapters against any of these three
+systems can target the canonical layouts documented here with
+confidence the wire formats are stable modulo ADR amendments.
+
+### Added — verifier scaffolds
+
+- **`mosaic-hyperplonk`** — HyperPlonk-KZG over BN254 (eprint
+  2022/1355, multilinear-extension PLONK variant). Wire format,
+  round-by-round plan documented in module rustdoc, 11 tests green.
+  CU estimate: ~505K under 900K cap (ADR-0005).
+- **`mosaic-halo2`** — Halo2-KZG over BN254 (Privacy Scaling
+  Explorations fork). Placeholder layout parametrized by 4 u32
+  counters (advice columns / lookups / quotient chunks / evaluations)
+  plus variable-length G1/Fr sections. 14 tests green. CU estimate:
+  ~580K under 700K cap.
+- **`mosaic-stark`** — FRI-STARK over Goldilocks / BabyBear /
+  Mersenne31 (Plonky3 family, eprint 2025/1741 envelope). Upgraded
+  from a single-file stub to a full scaffold with `StarkFieldId` tag
+  byte, variable-length proof decoder, `FriStarkVerifyingKey`, and
+  VK-vs-proof cross-checks. 18 tests green. Depends only on
+  `mosaic-core` — no BN254 primitives reused since STARKs are purely
+  hash-based.
+
+### Added — infrastructure
+
+- **New `OnChainError::VerifyingKeyProofMismatch = 0x0008`** variant
+  for VK/proof configuration disagreement. ABI-stable append (no
+  existing discriminants changed). Locked in `discriminant_stability`
+  test.
+- **Dispatcher 0x04 and 0x05 arms** in `mosaic-program` route to
+  Halo2 and FRI-STARK scaffolds respectively. HyperPlonk was already
+  wired at 0x03 in the late-Phase-2 landing.
+- **GitHub labels** `crate: mosaic-halo2` and `crate: mosaic-hyperplonk`
+  added; Phase-3 scaffold tracking issue [#64] opened for Halo2.
+
+### Changed
+
+- **Workspace version** 0.2.0-phase2 → 0.3.0-phase3-scaffolds.
+- **Crate count**: 12 → **13** (adds `mosaic-halo2`; `mosaic-stark`
+  was already a member but is now fleshed out).
+- **Test count**: 131 → **163** passing, 0 failed (+32 new scaffold
+  tests: 11 HyperPlonk + 14 Halo2 + 7 STARK, plus one error-ABI test).
+- **SBF binary size**: 557 KB → **564 KB** (three scaffold verifiers
+  add wire-format validation paths; cryptographic hot paths still
+  Phase-2 only, so binary growth is minimal).
+
+### Not changed
+
+- No production verifier or protocol surface was modified — Phase-2
+  byte layouts, CU measurements, and audit scope remain the
+  authoritative reference for `v0.2.0-phase2`. Downstream consumers
+  that only care about Groth16 / PLONK can stay pinned to the
+  previous tag until Phase-3 bodies land.
 
 ## [0.2.0-phase2] — 2026-04-20
 

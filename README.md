@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.2.0-phase2](https://img.shields.io/badge/release-v0.2.0--phase2-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.2.0-phase2)
+[![Release: v0.3.0-phase3-scaffolds](https://img.shields.io/badge/release-v0.3.0--phase3--scaffolds-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.3.0-phase3-scaffolds)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -32,8 +32,11 @@ verifier.verify(&vk_bytes, &proof_bytes, &public_inputs_bytes)?;
 
 ## Status
 
-**Phase 2 (this release)**: production PLONK verifier + Groth16 batch
-verification shipping alongside Phase-1 Groth16 single-proof path.
+**Phase-3 scaffolds (this release)**: three new verifier scaffolds
+(HyperPlonk-KZG, Halo2-KZG, FRI-STARK) ship with full canonical byte
+layouts + dispatcher wire-up. Full verifier bodies land in subsequent
+0.3.x releases. Phase-2 production verifiers (Groth16, PLONK) remain
+unchanged at their frozen CU budgets.
 
 | Component | Status | On-chain CU |
 |---|---|---|
@@ -41,13 +44,16 @@ verification shipping alongside Phase-1 Groth16 single-proof path.
 | `mosaic-groth16` single verify | ✅ Production | 80,296 |
 | `mosaic-groth16` batch verify (N=5, Bowe-Gabizon) | ✅ Production | 230,626 (46K/proof, **-42%**) |
 | `mosaic-plonk` KZG-PLONK BN254 verifier | ✅ Production | 747,666 |
+| `mosaic-hyperplonk` KZG BN254 verifier | 🟡 Phase-3 scaffold (wire-format only) | target ~505K |
+| `mosaic-halo2` KZG BN254 verifier (PSE fork) | 🟡 Phase-3 scaffold (wire-format only) | target ~580K |
+| `mosaic-stark` FRI-STARK (Goldilocks / BabyBear / Mersenne31) | 🟡 Phase-3 scaffold (wire-format only) | target ~9.4M |
 | `mosaic-serde` snarkjs adapter (Groth16 + PLONK) | ✅ Production | — |
 | `mosaic-serde` arkworks adapter | ✅ Production | — |
 | `mosaic-serde` gnark / halo2 / plonky3 / risc0 | 🚧 Stub (Phase 3) | — |
-| `mosaic-stark` / `mosaic-nova` / HyperPlonk | 🚧 Stub (Phase 3) | — |
+| `mosaic-nova` / folding schemes | 🚧 Stub (Phase 3) | — |
 | `mosaic-chunked` data model | ✅ Implemented | — |
 | `mosaic-chunked` instruction handlers | ✅ Production | — |
-| Reference Solana program | ✅ 557 KB SBF ELF | — |
+| Reference Solana program | ✅ 564 KB SBF ELF (was 557 KB, +7 KB scaffolds) | — |
 | Differential test harness (arkworks + snarkjs fixture) | ✅ Production | — |
 | Fuzz harnesses (3) | ✅ Scaffolded | — |
 | External audit | 🔴 Not yet commissioned | — |
@@ -174,6 +180,11 @@ same locally.
 
 - **Phase-1 scope freeze:** [`v0.1.0-phase1`](https://github.com/wienerlabs/mosaic/releases/tag/v0.1.0-phase1).
   External audit-ready (pending firm engagement per issue [#19](https://github.com/wienerlabs/mosaic/issues/19) / [#61](https://github.com/wienerlabs/mosaic/issues/61)).
+- **Phase-2 scope freeze:** [`v0.2.0-phase2`](https://github.com/wienerlabs/mosaic/releases/tag/v0.2.0-phase2).
+  Production PLONK + Groth16 batch verification.
+- **Phase-3 scaffold freeze:** [`v0.3.0-phase3-scaffolds`](https://github.com/wienerlabs/mosaic/releases/tag/v0.3.0-phase3-scaffolds).
+  HyperPlonk + Halo2 + FRI-STARK wire formats locked; verifier bodies
+  in flight under issues [#2](https://github.com/wienerlabs/mosaic/issues/2) / [#64](https://github.com/wienerlabs/mosaic/issues/64) / [#3](https://github.com/wienerlabs/mosaic/issues/3).
 - **Vulnerability reports:** see [SECURITY.md](SECURITY.md) and the
   [disclosure-timeline SLA](docs/responsible-disclosure-timeline.md).
 - **Audit history:** see [AUDIT.md](AUDIT.md).
