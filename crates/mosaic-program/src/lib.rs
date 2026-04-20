@@ -58,15 +58,18 @@ solana_program::entrypoint!(process_instruction);
 pub const PROGRAM_ID: Pubkey =
     solana_program::pubkey!("MosA1cVer1f1er11111111111111111111111111111");
 
-/// Top-level instruction discriminant for the single-shot `VerifyProof`
-/// path. Chunked-upload instructions use the 0x10..=0x1F range and are
-/// dispatched separately (see [`chunked`]).
+/// Top-level instruction discriminant. Chunked-upload instructions use
+/// the 0x10..=0x1F range and are dispatched separately (see [`chunked`]).
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum InstructionTag {
-    /// Verify a single proof. Data layout:
-    /// `tag || ProofSystemId || vk_len:u32 || vk || proof_len:u32 || proof || pi_len:u32 || pi`.
+    /// Verify a single proof. Borsh payload: `VerifyProofData`.
     VerifyProof = 0x01,
+    /// Verify N proofs sharing the same VK. Borsh payload:
+    /// `VerifyProofBatchData`. Amortizes the pairing check via
+    /// Bowe-Gabizon aggregation when the proof system supports it
+    /// (Groth16); falls back to looped single-verify otherwise.
+    VerifyProofBatch = 0x02,
 }
 
 /// Decoded `VerifyProof` payload.
@@ -80,6 +83,23 @@ pub struct VerifyProofData {
     pub proof: Vec<u8>,
     /// Public inputs (canonical format).
     pub public_inputs: Vec<u8>,
+}
+
+/// Decoded `VerifyProofBatch` payload.
+///
+/// `proofs.len()` must equal `public_inputs.len()`. Empty batch is
+/// accepted and succeeds trivially (matches `batch_verify` semantics).
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct VerifyProofBatchData {
+    /// Proof system selector (applies to all proofs).
+    pub proof_system_id: u8,
+    /// Verifying key bytes shared by all N proofs.
+    pub vk: Vec<u8>,
+    /// N proof byte buffers in canonical format.
+    pub proofs: Vec<Vec<u8>>,
+    /// N public-input byte buffers. `public_inputs[i]` corresponds to
+    /// `proofs[i]`.
+    pub public_inputs: Vec<Vec<u8>>,
 }
 
 /// Top-level entrypoint.
@@ -97,6 +117,7 @@ pub fn process_instruction(
         .ok_or(ProgramError::InvalidInstructionData)?;
     match *tag {
         x if x == InstructionTag::VerifyProof as u8 => handle_verify_proof(rest),
+        x if x == InstructionTag::VerifyProofBatch as u8 => handle_verify_proof_batch(rest),
         // Chunked-upload instructions: 0x10..=0x1F is reserved for this group.
         // Re-prepend the tag because the sub-dispatcher reads it again.
         x if (0x10..=0x1F).contains(&x) => chunked::dispatch(program_id, accounts, instruction_data),
@@ -111,6 +132,19 @@ fn handle_verify_proof(data: &[u8]) -> ProgramResult {
     msg!("mosaic: dispatch {}", id.slug());
     dispatch_verify(id, &payload.vk, &payload.proof, &payload.public_inputs)
         .map_err(ProgramError::from)
+}
+
+fn handle_verify_proof_batch(data: &[u8]) -> ProgramResult {
+    let payload = VerifyProofBatchData::try_from_slice(data)
+        .map_err(|_| ProgramError::InvalidInstructionData)?;
+    if payload.proofs.len() != payload.public_inputs.len() {
+        return Err(OnChainError::PublicInputCountMismatch.into());
+    }
+    let id = ProofSystemId::from_byte(payload.proof_system_id).map_err(ProgramError::from)?;
+    let proof_refs: Vec<&[u8]> = payload.proofs.iter().map(|v| v.as_slice()).collect();
+    let pi_refs: Vec<&[u8]> = payload.public_inputs.iter().map(|v| v.as_slice()).collect();
+    msg!("mosaic: batch {} n={}", id.slug(), payload.proofs.len());
+    dispatch_verify_batch(id, &payload.vk, &proof_refs, &pi_refs).map_err(ProgramError::from)
 }
 
 /// Shared verifier-dispatch helper used by both `handle_verify_proof` and
@@ -141,5 +175,29 @@ pub(crate) fn dispatch_verify(
         // `ProofSystemId` is `#[non_exhaustive]`; new variants land via
         // ADR-0001 amendment and add their dispatch arms above.
         _ => Err(OnChainError::UnknownProofSystem),
+    }
+}
+
+/// Batched dispatch counterpart to [`dispatch_verify`]. Only Groth16
+/// has true amortization today; other systems would loop via the trait
+/// default, which offers no CU savings — we return `UnsupportedOperation`
+/// for them until per-system batch implementations land.
+pub(crate) fn dispatch_verify_batch(
+    id: ProofSystemId,
+    vk: &[u8],
+    proofs: &[&[u8]],
+    public_inputs: &[&[u8]],
+) -> Result<(), OnChainError> {
+    let backend = SolanaSyscallBackend::new();
+    match id {
+        ProofSystemId::Groth16Bn254 => {
+            let v = Groth16Verifier::<_, false>::new(&backend);
+            ProofSystem::batch_verify(&v, vk, proofs, public_inputs)
+        },
+        // PLONK/Halo2/STARK/Nova don't amortize batch today. Explicit
+        // UnsupportedOperation rather than silent looped fallback —
+        // callers who want N independent verifications should send N
+        // separate VerifyProof transactions.
+        _ => Err(OnChainError::UnsupportedOperation),
     }
 }

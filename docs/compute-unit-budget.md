@@ -43,12 +43,17 @@ estimate; actual on-chain CU is higher because of Borsh deserialization
 of the `VerifyProofData` payload, instruction dispatch, `msg!` logging,
 and the `solana-bn254` syscall wrapper allocations.
 
-### Phase 1 measured baselines (2026-04-20)
+### Phase 1 / 2 measured baselines (2026-04-20)
 
 | System | Fixture | Measured | Cap | Headroom |
 |---|---|---|---|---|
 | Groth16 BN254 | `mul-circuit` (1 PI) | **80,296 CU** | 180,000 | 55.4% |
+| Groth16 BN254 batch N=5 | same proof × 5 | **230,626 CU** (46,125/proof) | 300,000 | 23% |
 | KZG-PLONK BN254 | `mul-circuit` (1 PI) | **747,666 CU** | 800,000 | 6.5% |
+
+**Batch savings**: 5 × 80,370 loop CU = 401,850 baseline; batched 230,626
+= **42.6% reduction**. Per-proof CU drops from 80K to 46K. Break-even
+at N=2; savings grow with N (projected ~50% at N=10 once measured).
 
 Sources: `mosaic-bench/src/bin/bpf_bench.rs` against canonical fixtures.
 Baselines pinned in `TARGETS[i].baseline_cu`; bench warns on >5% drift.

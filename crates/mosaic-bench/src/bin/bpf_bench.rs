@@ -76,6 +76,15 @@ const TARGETS: &[SystemTarget] = &[
         baseline_cu: 80_296,
     },
     SystemTarget {
+        name: "groth16_batch_n5_mul_circuit_1pi",
+        // Batched verification of 5 Groth16 proofs sharing one VK via
+        // Bowe-Gabizon aggregation (one alt_bn128_pairing with 8 pairs).
+        // Measured 2026-04-20: 230 626 CU total, 46 125 CU per proof —
+        // a 42.6% reduction vs the single-proof path (80 370 × 5).
+        hard_cap_cu: 300_000, // 30% headroom over baseline
+        baseline_cu: 230_626,
+    },
+    SystemTarget {
         name: "plonk_bn254_mul_circuit_1pi",
         // ADR-0005 originally targeted 600K based on algorithmic
         // estimate (15K transcript + 200K linearization MSM + 24K
@@ -97,6 +106,14 @@ struct VerifyProofData {
     vk: Vec<u8>,
     proof: Vec<u8>,
     public_inputs: Vec<u8>,
+}
+
+#[derive(BorshSerialize)]
+struct VerifyProofBatchData {
+    proof_system_id: u8,
+    vk: Vec<u8>,
+    proofs: Vec<Vec<u8>>,
+    public_inputs: Vec<Vec<u8>>,
 }
 
 fn workspace_root() -> PathBuf {
@@ -227,6 +244,74 @@ async fn bench_groth16_mul_circuit(target: &SystemTarget) -> Result<MeasurementR
     run_bpf_verify(target, 0x01, &vk, &proof, &public_inputs, 300_000).await
 }
 
+async fn bench_groth16_batch_n5(target: &SystemTarget) -> Result<MeasurementReport> {
+    const N: usize = 5;
+    let vk = fixture_bytes("groth16", "vk.bin")?;
+    let proof = fixture_bytes("groth16", "proof.bin")?;
+    let public_inputs = fixture_bytes("groth16", "public_inputs.bin")?;
+
+    // Host preflight: batch-verify N copies of the same proof. Σ r_i
+    // cancels cryptographically so the pairing check still holds when
+    // all A/L/C are identical. Syscall CU is identical to the
+    // distinct-proof case because the r_i scalar mul is per-proof
+    // regardless.
+    use mosaic_core::proof_system::ProofSystem;
+    use mosaic_groth16::Groth16Verifier;
+    let backend = HostBackend::new();
+    let verifier = Groth16Verifier::<_, false>::new(&backend);
+    let proof_refs: Vec<&[u8]> = (0..N).map(|_| proof.as_slice()).collect();
+    let pi_refs: Vec<&[u8]> = (0..N).map(|_| public_inputs.as_slice()).collect();
+    ProofSystem::batch_verify(&verifier, &vk, &proof_refs, &pi_refs)
+        .map_err(|e| anyhow!("host batch preflight failed: {e}"))?;
+
+    sbf_artifact_exists()?;
+    require_sbf_env()?;
+    let (banks, payer, blockhash) = setup_banks().await;
+
+    // Build VerifyProofBatch instruction.
+    let payload = VerifyProofBatchData {
+        proof_system_id: 0x01, // Groth16Bn254
+        vk: vk.clone(),
+        proofs: (0..N).map(|_| proof.clone()).collect(),
+        public_inputs: (0..N).map(|_| public_inputs.clone()).collect(),
+    };
+    let mut data = Vec::with_capacity(2 + N * (proof.len() + public_inputs.len()) + 128);
+    data.push(0x02); // VerifyProofBatch tag
+    borsh::to_writer(&mut data, &payload).expect("borsh VerifyProofBatchData");
+    let verify_ix = Instruction {
+        program_id: PROGRAM_ID,
+        accounts: Vec::<AccountMeta>::new(),
+        data,
+    };
+
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(600_000);
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let meta = banks
+        .process_transaction_with_metadata(tx)
+        .await
+        .context("submit batch VerifyProof tx")?;
+    if let Err(e) = meta.result {
+        let logs = meta
+            .metadata
+            .as_ref()
+            .map(|m| m.log_messages.join("\n"))
+            .unwrap_or_default();
+        anyhow::bail!("batch verify tx failed: {e:?}\nlogs:\n{logs}");
+    }
+    let logs = meta
+        .metadata
+        .ok_or_else(|| anyhow!("no tx metadata"))?
+        .log_messages;
+    let cu = extract_cu(&logs)
+        .ok_or_else(|| anyhow!("no CU line in logs:\n{}", logs.join("\n")))?;
+    Ok(MeasurementReport::from_target(target, cu))
+}
+
 async fn bench_plonk_mul_circuit(target: &SystemTarget) -> Result<MeasurementReport> {
     use mosaic_plonk::PlonkKzgBn254;
     let vk = fixture_bytes("plonk", "vk.bin")?;
@@ -352,6 +437,7 @@ async fn main() -> ExitCode {
     for target in TARGETS {
         let outcome = match target.name {
             "groth16_bn254_mul_circuit_1pi" => bench_groth16_mul_circuit(target).await,
+            "groth16_batch_n5_mul_circuit_1pi" => bench_groth16_batch_n5(target).await,
             "plonk_bn254_mul_circuit_1pi" => bench_plonk_mul_circuit(target).await,
             other => {
                 eprintln!("unknown bench target: {other}");
