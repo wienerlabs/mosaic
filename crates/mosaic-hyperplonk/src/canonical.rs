@@ -1,4 +1,11 @@
-//! HyperPlonk canonical byte layout — **placeholder shape**.
+//! HyperPlonk canonical byte layout — **session-3d revision**.
+//!
+//! Expanded from the session-3 scaffold placeholder to a PLONK-style
+//! gate + permutation layout, which is what Espresso's HyperPlonk
+//! reference impl actually uses. The exact byte ordering still needs
+//! to be pinned against an upstream fixture in session 3e; this
+//! revision locks the *shape* so the verifier body can reference
+//! stable field names.
 //!
 //! ## Reference impl survey
 //!
@@ -11,13 +18,12 @@
 //! | `arkworks-rs/poly-commit` MLE path | ~2 KB | Pairing-free; WIP |
 //! | Privacy-Scaling-Explorations variant | ~4 KB | Includes lookup argument |
 //!
-//! Until Phase 3 picks one format to be byte-compatible with, this
-//! module defines a **conservative placeholder** sized for the Espresso
-//! layout: 4 G1 commitments + `log₂ n` Fr tuples (sumcheck round
-//! polynomials) + O(log n) Fr evaluations. Real layout will be pinned
-//! in an ADR amendment when the Phase 3 impl lands.
+//! This revision targets the Espresso-style layout: 4 witness
+//! commitments + permutation grand-product + sumcheck round polys +
+//! 12 final evaluations (4 wires + 5 selectors + 3 permutation σ) +
+//! KZG opening.
 //!
-//! ## Layout
+//! ## Proof layout
 //!
 //! | Offset | Length | Field |
 //! |---|---|---|
@@ -27,13 +33,25 @@
 //! | 192 | 64   | `z`: G1 commitment to permutation grand-product MLE |
 //! | 256 | 4    | `sumcheck_rounds` (u32 LE) — = log₂(circuit size) |
 //! | 260 | 96 × N | `sumcheck_polys` — N round polynomials, each 3 × 32 B Fr coefficients (degree-2 per round for the zero-check sumcheck) |
-//! | …   | 32 × 4 | Final-round MLE evaluations (a, b, c, z at the sumcheck challenge point) |
-//! | …   | 64   | KZG opening proof at the random evaluation point |
+//! | …   | 32 × 12 | Final evaluations at the sumcheck challenge point: `a, b, c, z, q_m, q_l, q_r, q_o, q_c, σ_1, σ_2, σ_3` |
+//! | …   | 64   | KZG batched opening proof at the challenge point |
 //!
-//! Total size for `sumcheck_rounds = 10` (2^10 circuit): 4×64 + 4 + 10×96 + 4×32 + 64 = **1476 B**.
+//! Total size for `sumcheck_rounds = 10` (2^10 circuit):
+//! 4·64 + 4 + 10·96 + 12·32 + 64 = **1732 B**. Still fits a single
+//! Solana tx (1232 B limit → needs chunked upload for this size, but
+//! borderline — circuits up to 2^6 with simple gates fit inline).
 //!
-//! **TODO(mosaic-002)**: Pin the layout against the chosen upstream
-//! reference before any adapter in `mosaic-serde` can be written.
+//! ## Final-evals bundle convention
+//!
+//! The 12 × 32-byte evaluations appear in a fixed order matching
+//! [`FinalEvalsIndex`]. The verifier's gate + permutation check reads
+//! this bundle and feeds values into [`crate::gate::WireEvals`] +
+//! [`crate::gate::SelectorEvals`] + the permutation σ struct (session
+//! 3d-2).
+//!
+//! **TODO(mosaic-002-3e)**: Pin this layout against the chosen upstream
+//! reference (Espresso) before any adapter in `mosaic-serde` can be
+//! written.
 
 use alloc::vec::Vec;
 use mosaic_core::OnChainError;
@@ -48,11 +66,16 @@ pub mod sizes {
     pub const SUMCHECK_POLY_COEFFS: usize = 3;
     /// Bytes per sumcheck round polynomial.
     pub const SUMCHECK_POLY_LEN: usize = SUMCHECK_POLY_COEFFS * FR_LEN;
-    /// Number of Fr evaluations in the final round (a, b, c, z at challenge point).
-    pub const FINAL_EVALS: usize = 4;
+    /// Number of Fr evaluations in the final bundle.
+    ///
+    /// Layout (session 3d):
+    /// - 4 wire evaluations: `a, b, c, z` (indexes 0..4)
+    /// - 5 selector evaluations: `q_m, q_l, q_r, q_o, q_c` (indexes 4..9)
+    /// - 3 permutation σ evaluations: `σ_1, σ_2, σ_3` (indexes 9..12)
+    pub const FINAL_EVALS: usize = 12;
     /// Fixed header length (everything before `sumcheck_polys`): 4 × G1 + u32.
     pub const FIXED_HEADER_LEN: usize = 4 * G1_LEN + 4;
-    /// Fixed tail length (final evals + KZG opening): 4 × Fr + G1.
+    /// Fixed tail length (final evals + KZG opening): 12 × Fr + G1.
     pub const FIXED_TAIL_LEN: usize = FINAL_EVALS * FR_LEN + G1_LEN;
 
     /// Minimum proof size (0 sumcheck rounds, edge case).
@@ -133,13 +156,42 @@ impl<'a> HyperPlonkProof<'a> {
     }
 }
 
+/// Byte offsets into the proof's `final_evals` bundle (12 × 32 B).
+///
+/// The ordering is fixed and defines the canonical layout contract
+/// between provers and verifiers.
+pub mod final_evals_index {
+    /// Witness `a` evaluation at the sumcheck challenge point.
+    pub const A: usize = 0;
+    /// Witness `b` evaluation.
+    pub const B: usize = 1;
+    /// Witness `c` evaluation.
+    pub const C: usize = 2;
+    /// Permutation grand-product `z` evaluation.
+    pub const Z: usize = 3;
+    /// Multiplication-selector `q_M` evaluation.
+    pub const Q_M: usize = 4;
+    /// Left-wire selector `q_L` evaluation.
+    pub const Q_L: usize = 5;
+    /// Right-wire selector `q_R` evaluation.
+    pub const Q_R: usize = 6;
+    /// Output-wire selector `q_O` evaluation.
+    pub const Q_O: usize = 7;
+    /// Constant selector `q_C` evaluation.
+    pub const Q_C: usize = 8;
+    /// Permutation `σ_1` (left-wire) evaluation.
+    pub const SIGMA_1: usize = 9;
+    /// Permutation `σ_2` (right-wire) evaluation.
+    pub const SIGMA_2: usize = 10;
+    /// Permutation `σ_3` (output-wire) evaluation.
+    pub const SIGMA_3: usize = 11;
+}
+
 /// HyperPlonk verifying key.
 ///
-/// Smaller than PLONK's because there's no `Q_*` selector polynomial
-/// commitments (gates are checked via MLE sumcheck directly) nor
-/// permutation σ_i (handled by the grand-product MLE).
-///
-/// **Placeholder** — real VK fields TBD per Phase 3 reference impl.
+/// Session-3d revision expands the VK from a single `gate_g1`
+/// placeholder to the full PLONK-style preprocessing:
+/// 5 selector commitments + 3 permutation σ commitments.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HyperPlonkVerifyingKey {
     /// Number of public inputs.
@@ -148,29 +200,70 @@ pub struct HyperPlonkVerifyingKey {
     pub num_variables: u32,
     /// G2 SRS element for KZG pairing check.
     pub x2_g2: [u8; 128],
-    /// Preprocessing commitment for the gate constraint
-    /// (placeholder — real impl will have several of these).
-    pub gate_g1: [u8; sizes::G1_LEN],
+    /// Selector commitment `[Q_M]` — multiplication selector MLE.
+    pub q_m_g1: [u8; sizes::G1_LEN],
+    /// Selector commitment `[Q_L]` — left-wire linear selector.
+    pub q_l_g1: [u8; sizes::G1_LEN],
+    /// Selector commitment `[Q_R]` — right-wire linear selector.
+    pub q_r_g1: [u8; sizes::G1_LEN],
+    /// Selector commitment `[Q_O]` — output-wire linear selector.
+    pub q_o_g1: [u8; sizes::G1_LEN],
+    /// Selector commitment `[Q_C]` — constant selector.
+    pub q_c_g1: [u8; sizes::G1_LEN],
+    /// Permutation σ commitment `[σ_1]` — left-wire permutation MLE.
+    pub sigma_1_g1: [u8; sizes::G1_LEN],
+    /// Permutation σ commitment `[σ_2]` — right-wire permutation MLE.
+    pub sigma_2_g1: [u8; sizes::G1_LEN],
+    /// Permutation σ commitment `[σ_3]` — output-wire permutation MLE.
+    pub sigma_3_g1: [u8; sizes::G1_LEN],
 }
 
 impl HyperPlonkVerifyingKey {
-    /// Serialized VK length.
-    pub const SERIALIZED_LEN: usize = 4 + 4 + 128 + sizes::G1_LEN;
+    /// Number of preprocessed commitments (5 selectors + 3 σ).
+    pub const NUM_COMMITS: usize = 8;
+
+    /// Serialized VK length:
+    /// `n_public (4) + num_variables (4) + x2_g2 (128) + 8 × G1 (64)`.
+    pub const SERIALIZED_LEN: usize = 4 + 4 + 128 + Self::NUM_COMMITS * sizes::G1_LEN;
 
     /// Decode from canonical bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, OnChainError> {
         if bytes.len() != Self::SERIALIZED_LEN {
             return Err(OnChainError::VerifyingKeyLengthMismatch);
         }
-        let n_public =
-            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let num_variables =
-            u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        let n_public = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let num_variables = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         let mut x2_g2 = [0u8; 128];
         x2_g2.copy_from_slice(&bytes[8..136]);
-        let mut gate_g1 = [0u8; sizes::G1_LEN];
-        gate_g1.copy_from_slice(&bytes[136..136 + sizes::G1_LEN]);
-        Ok(Self { n_public, num_variables, x2_g2, gate_g1 })
+
+        let mut off = 136;
+        let mut take = || -> [u8; sizes::G1_LEN] {
+            let mut out = [0u8; sizes::G1_LEN];
+            out.copy_from_slice(&bytes[off..off + sizes::G1_LEN]);
+            off += sizes::G1_LEN;
+            out
+        };
+        let q_m_g1 = take();
+        let q_l_g1 = take();
+        let q_r_g1 = take();
+        let q_o_g1 = take();
+        let q_c_g1 = take();
+        let sigma_1_g1 = take();
+        let sigma_2_g1 = take();
+        let sigma_3_g1 = take();
+        Ok(Self {
+            n_public,
+            num_variables,
+            x2_g2,
+            q_m_g1,
+            q_l_g1,
+            q_r_g1,
+            q_o_g1,
+            q_c_g1,
+            sigma_1_g1,
+            sigma_2_g1,
+            sigma_3_g1,
+        })
     }
 
     /// Encode to canonical bytes.
@@ -180,8 +273,29 @@ impl HyperPlonkVerifyingKey {
         out.extend_from_slice(&self.n_public.to_le_bytes());
         out.extend_from_slice(&self.num_variables.to_le_bytes());
         out.extend_from_slice(&self.x2_g2);
-        out.extend_from_slice(&self.gate_g1);
+        out.extend_from_slice(&self.q_m_g1);
+        out.extend_from_slice(&self.q_l_g1);
+        out.extend_from_slice(&self.q_r_g1);
+        out.extend_from_slice(&self.q_o_g1);
+        out.extend_from_slice(&self.q_c_g1);
+        out.extend_from_slice(&self.sigma_1_g1);
+        out.extend_from_slice(&self.sigma_2_g1);
+        out.extend_from_slice(&self.sigma_3_g1);
         out
+    }
+
+    /// Iterate all 8 commitments in canonical order (matches the absorb
+    /// order used by the Fiat-Shamir transcript in session 3d-2).
+    pub fn commits_iter(&self) -> impl Iterator<Item = &[u8; sizes::G1_LEN]> {
+        use core::iter;
+        iter::once(&self.q_m_g1)
+            .chain(iter::once(&self.q_l_g1))
+            .chain(iter::once(&self.q_r_g1))
+            .chain(iter::once(&self.q_o_g1))
+            .chain(iter::once(&self.q_c_g1))
+            .chain(iter::once(&self.sigma_1_g1))
+            .chain(iter::once(&self.sigma_2_g1))
+            .chain(iter::once(&self.sigma_3_g1))
     }
 }
 
@@ -204,8 +318,9 @@ mod tests {
 
     #[test]
     fn proof_layout_constants_consistent() {
-        assert_eq!(MIN_PROOF_LEN, 4 * G1_LEN + 4 + 4 * FR_LEN + G1_LEN);
-        assert_eq!(MIN_PROOF_LEN, 452);
+        assert_eq!(MIN_PROOF_LEN, 4 * G1_LEN + 4 + FINAL_EVALS * FR_LEN + G1_LEN);
+        // 4·64 + 4 + 12·32 + 64 = 708.
+        assert_eq!(MIN_PROOF_LEN, 708);
     }
 
     #[test]
@@ -251,16 +366,29 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn vk_roundtrip() {
-        let vk = HyperPlonkVerifyingKey {
+    fn sample_vk() -> HyperPlonkVerifyingKey {
+        HyperPlonkVerifyingKey {
             n_public: 3,
             num_variables: 10,
             x2_g2: [0xCD; 128],
-            gate_g1: [0xEF; G1_LEN],
-        };
+            q_m_g1: [0x11; G1_LEN],
+            q_l_g1: [0x22; G1_LEN],
+            q_r_g1: [0x33; G1_LEN],
+            q_o_g1: [0x44; G1_LEN],
+            q_c_g1: [0x55; G1_LEN],
+            sigma_1_g1: [0x66; G1_LEN],
+            sigma_2_g1: [0x77; G1_LEN],
+            sigma_3_g1: [0x88; G1_LEN],
+        }
+    }
+
+    #[test]
+    fn vk_roundtrip() {
+        let vk = sample_vk();
         let bytes = vk.to_bytes();
         assert_eq!(bytes.len(), HyperPlonkVerifyingKey::SERIALIZED_LEN);
+        // Explicit size check: 4 + 4 + 128 + 8·64 = 648 B.
+        assert_eq!(bytes.len(), 648);
         let decoded = HyperPlonkVerifyingKey::from_bytes(&bytes).unwrap();
         assert_eq!(vk, decoded);
     }
@@ -272,5 +400,36 @@ mod tests {
             HyperPlonkVerifyingKey::from_bytes(&short),
             Err(OnChainError::VerifyingKeyLengthMismatch),
         ));
+    }
+
+    #[test]
+    fn vk_commits_iter_yields_all_eight() {
+        let vk = sample_vk();
+        let commits: alloc::vec::Vec<_> = vk.commits_iter().collect();
+        assert_eq!(commits.len(), HyperPlonkVerifyingKey::NUM_COMMITS);
+        // Order must match canonical: q_m, q_l, q_r, q_o, q_c, σ_1, σ_2, σ_3.
+        assert_eq!(commits[0], &vk.q_m_g1);
+        assert_eq!(commits[1], &vk.q_l_g1);
+        assert_eq!(commits[2], &vk.q_r_g1);
+        assert_eq!(commits[3], &vk.q_o_g1);
+        assert_eq!(commits[4], &vk.q_c_g1);
+        assert_eq!(commits[5], &vk.sigma_1_g1);
+        assert_eq!(commits[6], &vk.sigma_2_g1);
+        assert_eq!(commits[7], &vk.sigma_3_g1);
+    }
+
+    #[test]
+    fn final_evals_indices_distinct_and_complete() {
+        use final_evals_index::*;
+        let all = [A, B, C, Z, Q_M, Q_L, Q_R, Q_O, Q_C, SIGMA_1, SIGMA_2, SIGMA_3];
+        // All 12 slots filled.
+        assert_eq!(all.len(), FINAL_EVALS);
+        // All distinct (no index collision).
+        let mut seen = [false; 12];
+        for i in all {
+            assert!(i < 12, "index {i} out of range");
+            assert!(!seen[i], "duplicate index {i}");
+            seen[i] = true;
+        }
     }
 }

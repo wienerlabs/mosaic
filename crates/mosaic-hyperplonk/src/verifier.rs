@@ -52,12 +52,23 @@
 //! - `mosaic_plonk::g1_consts` — G1/G2 generator bytes for KZG opening
 //!   and final pairing check
 
-use crate::canonical::{HyperPlonkProof, HyperPlonkVerifyingKey};
+use crate::{
+    canonical::{
+        final_evals_index as idx,
+        sizes::{FR_LEN, SUMCHECK_POLY_LEN},
+        HyperPlonkProof, HyperPlonkVerifyingKey,
+    },
+    challenges::derive_challenges,
+    gate::{gate_expr, SelectorEvals, WireEvals},
+    sumcheck::verify_sumcheck,
+};
+use ark_bn254::Fr;
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
     OnChainError,
 };
+use mosaic_plonk::field::fr_from_canonical_bytes;
 
 /// HyperPlonk-KZG verifier over BN254. Phase-3 scaffold.
 pub struct HyperPlonkKzgBn254<'a, B: SyscallBackend + ?Sized> {
@@ -71,25 +82,138 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
         Self { backend }
     }
 
-    /// Phase-2 scaffolding: parse byte layout, return
-    /// `UnimplementedProofSystem`. Phase 3 wires the sumcheck + KZG
-    /// reduction per the module-level plan.
+    /// Verify a HyperPlonk-KZG proof.
+    ///
+    /// Session-3d implementation: wires through parse → challenge
+    /// derivation → sumcheck verification → gate-expr claim reduction.
+    /// Returns [`OnChainError::UnimplementedProofSystem`] at the final
+    /// KZG batched-opening step, which lands in session 3e.
+    ///
+    /// ## Errors
+    ///
+    /// - `ProofLengthMismatch` / `VerifyingKeyLengthMismatch` — wire.
+    /// - `VerifyingKeyProofMismatch` — VK/proof `num_variables` and
+    ///   `sumcheck_rounds` disagree.
+    /// - `PublicInputCountMismatch` / `PublicInputOutOfRange` — PI
+    ///   validation inside challenge derivation.
+    /// - `SumcheckFailed` — either a per-round identity fails, or the
+    ///   final sumcheck claim doesn't match the expected gate-expr
+    ///   evaluation at the challenge point.
+    /// - `UnimplementedProofSystem` — reached the KZG batched-opening
+    ///   step, which is not yet implemented.
     pub fn verify(
         &self,
         vk_bytes: &[u8],
         proof_bytes: &[u8],
-        _public_inputs_bytes: &[u8],
+        public_inputs_bytes: &[u8],
     ) -> Result<(), OnChainError> {
-        // Wire-format validation — catches byte-layout regressions in
-        // Phase 2 before any verifier logic lands.
-        let _vk = HyperPlonkVerifyingKey::from_bytes(vk_bytes)?;
-        let _proof = HyperPlonkProof::from_bytes(proof_bytes)?;
-        // The backend will be used in Phase 3 (transcript absorbs,
-        // KZG opening verification). Drop reference to silence warnings.
-        let _ = self.backend;
+        // 1. Parse + structural cross-check.
+        let vk = HyperPlonkVerifyingKey::from_bytes(vk_bytes)?;
+        let proof = HyperPlonkProof::from_bytes(proof_bytes)?;
+        if vk.num_variables != proof.sumcheck_rounds {
+            return Err(OnChainError::VerifyingKeyProofMismatch);
+        }
+
+        // 2. Pre-sumcheck challenge derivation (β, γ, α).
+        //    Leaves the transcript seeded with α for sumcheck rounds.
+        let (challenges, mut transcript) =
+            derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
+
+        // 3. Sumcheck verification.
+        //    The zero-check sumcheck has initial claim 0 on the
+        //    combined gate + permutation polynomial.
+        let sumcheck_out = verify_sumcheck(
+            &mut transcript,
+            &Fr::from(0u64),
+            proof.sumcheck_polys,
+            proof.sumcheck_rounds,
+        )?;
+
+        // 4. Claim reduction: compute the expected value of the
+        //    combined polynomial at the sumcheck challenge point from
+        //    the proof's final_evals bundle, and compare to the
+        //    sumcheck's final claim.
+        let expected_claim = compute_expected_final_claim(
+            proof.final_evals,
+            &challenges.alpha,
+        )?;
+        if expected_claim != sumcheck_out.final_claim {
+            return Err(OnChainError::SumcheckFailed);
+        }
+
+        // 5. KZG batched opening — session 3e.
+        //    The opening must attest that final_evals are the correct
+        //    evaluations of the committed MLEs at the sumcheck
+        //    challenge point. Until that's wired, the verifier stops
+        //    here with UnimplementedProofSystem so callers know the
+        //    proof hasn't been fully validated.
         Err(OnChainError::UnimplementedProofSystem)
     }
 }
+
+/// Compute the expected value of the combined zero-check polynomial
+/// at the sumcheck challenge point, from the proof's `final_evals`
+/// bundle.
+///
+/// **Session-3d scope:** gate expression only. The permutation term
+/// is a placeholder (returns zero) until session 3e lands the full
+/// grand-product reduction. Valid proofs will therefore satisfy this
+/// check only if their permutation contribution at the challenge
+/// point happens to be zero — which is not generally true and is why
+/// the verifier always stops at `UnimplementedProofSystem` before
+/// this function can produce a false-accept in production.
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] if `final_evals` is shorter
+///   than `12 × 32 = 384` bytes.
+/// - [`OnChainError::PublicInputOutOfRange`] if any Fr in the bundle
+///   is out of range.
+fn compute_expected_final_claim(
+    final_evals_bytes: &[u8],
+    alpha: &Fr,
+) -> Result<Fr, OnChainError> {
+    // Parse the 12 Fr evaluations at fixed offsets.
+    let eval_at = |i: usize| -> Result<Fr, OnChainError> {
+        let start = i * FR_LEN;
+        let end = start + FR_LEN;
+        if final_evals_bytes.len() < end {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        fr_from_canonical_bytes(&final_evals_bytes[start..end])
+    };
+
+    let wires = WireEvals {
+        a: eval_at(idx::A)?,
+        b: eval_at(idx::B)?,
+        c: eval_at(idx::C)?,
+    };
+    // z_eval is read but unused until session 3e adds permutation.
+    let _z_eval = eval_at(idx::Z)?;
+    let selectors = SelectorEvals {
+        q_m: eval_at(idx::Q_M)?,
+        q_l: eval_at(idx::Q_L)?,
+        q_r: eval_at(idx::Q_R)?,
+        q_o: eval_at(idx::Q_O)?,
+        q_c: eval_at(idx::Q_C)?,
+    };
+    // σ_i_evals read but unused until session 3e adds permutation.
+    let _sigma_1 = eval_at(idx::SIGMA_1)?;
+    let _sigma_2 = eval_at(idx::SIGMA_2)?;
+    let _sigma_3 = eval_at(idx::SIGMA_3)?;
+
+    // α · gate_expr + permutation_placeholder.
+    let gate_value = gate_expr(&wires, &selectors);
+    let perm_value = Fr::from(0u64); // session-3e placeholder.
+
+    Ok(*alpha * gate_value + perm_value)
+}
+
+/// Silence unused-helper warning when SUMCHECK_POLY_LEN is only used
+/// in conditional test code. Inlined here to keep the constant
+/// import alongside FR_LEN at the top of the file.
+#[allow(dead_code)]
+const _SUMCHECK_POLY_LEN: usize = SUMCHECK_POLY_LEN;
 
 impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem
     for HyperPlonkKzgBn254<'_, B>
@@ -118,10 +242,14 @@ impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canonical::sizes::{FINAL_EVALS, FIXED_HEADER_LEN, FR_LEN, G1_LEN, SUMCHECK_POLY_LEN};
+    use crate::canonical::sizes::{FINAL_EVALS, FIXED_HEADER_LEN, G1_LEN};
+    use mosaic_core::syscall::host::HostBackend;
 
-    struct MockBackend;
-    impl SyscallBackend for MockBackend {
+    /// Stub backend that fails on every syscall. Used in tests that
+    /// check wire-format rejection paths that should short-circuit
+    /// before any syscall runs.
+    struct NeverBackend;
+    impl SyscallBackend for NeverBackend {
         fn alt_bn128_group_op(
             &self,
             _op: mosaic_core::syscall::AltBn128Op,
@@ -158,7 +286,14 @@ mod tests {
             n_public: 1,
             num_variables: 10,
             x2_g2: [0; 128],
-            gate_g1: [0; G1_LEN],
+            q_m_g1: [0; G1_LEN],
+            q_l_g1: [0; G1_LEN],
+            q_r_g1: [0; G1_LEN],
+            q_o_g1: [0; G1_LEN],
+            q_c_g1: [0; G1_LEN],
+            sigma_1_g1: [0; G1_LEN],
+            sigma_2_g1: [0; G1_LEN],
+            sigma_3_g1: [0; G1_LEN],
         }
         .to_bytes()
     }
@@ -171,20 +306,29 @@ mod tests {
         buf
     }
 
+    /// With a real host keccak + all-zero VK/proof/PI, the verifier
+    /// progresses through parse → challenges → sumcheck (trivially
+    /// valid: zero polys with zero initial claim) → claim reduction
+    /// (trivial: α · 0 + 0 = 0) → KZG step, which returns
+    /// `UnimplementedProofSystem`. This is the "happy path for
+    /// session-3d integration" test.
     #[test]
-    fn parses_wire_before_returning_unimplemented() {
-        let backend = MockBackend;
+    fn full_pipeline_zero_proof_hits_kzg_unimplemented() {
+        let backend = HostBackend::new();
         let v = HyperPlonkKzgBn254::new(&backend);
         let vk = dummy_vk_bytes();
         let proof = dummy_proof_bytes_10_rounds();
         let pi = [0u8; FR_LEN];
         let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
-        assert!(matches!(r, Err(OnChainError::UnimplementedProofSystem)));
+        assert!(
+            matches!(r, Err(OnChainError::UnimplementedProofSystem)),
+            "expected UnimplementedProofSystem at KZG step, got {r:?}",
+        );
     }
 
     #[test]
     fn rejects_wrong_vk_length_before_unimplemented() {
-        let backend = MockBackend;
+        let backend = NeverBackend;
         let v = HyperPlonkKzgBn254::new(&backend);
         let bad_vk = alloc::vec![0u8; HyperPlonkVerifyingKey::SERIALIZED_LEN - 1];
         let proof = dummy_proof_bytes_10_rounds();
@@ -195,7 +339,7 @@ mod tests {
 
     #[test]
     fn rejects_wrong_proof_length_before_unimplemented() {
-        let backend = MockBackend;
+        let backend = NeverBackend;
         let v = HyperPlonkKzgBn254::new(&backend);
         let vk = dummy_vk_bytes();
         let bad_proof = alloc::vec![0u8; 32]; // way too short
@@ -204,9 +348,68 @@ mod tests {
         assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
     }
 
+    /// VK declares num_variables = 10 but proof claims sumcheck_rounds
+    /// = 8. Verifier should catch this structural mismatch before any
+    /// crypto runs.
+    #[test]
+    fn rejects_vk_proof_num_variables_mismatch() {
+        let backend = NeverBackend;
+        let v = HyperPlonkKzgBn254::new(&backend);
+        let vk = dummy_vk_bytes(); // declares num_variables = 10
+        // Build a proof claiming 8 rounds.
+        let polys_len = 8 * SUMCHECK_POLY_LEN;
+        let total = FIXED_HEADER_LEN + polys_len + FINAL_EVALS * FR_LEN + G1_LEN;
+        let mut proof = alloc::vec![0u8; total];
+        proof[256..260].copy_from_slice(&8u32.to_le_bytes());
+        let pi = [0u8; FR_LEN];
+        let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(matches!(r, Err(OnChainError::VerifyingKeyProofMismatch)));
+    }
+
+    /// Tamper with the first sumcheck round polynomial → sumcheck
+    /// identity fails at round 0.
+    #[test]
+    fn rejects_tampered_sumcheck_round() {
+        let backend = HostBackend::new();
+        let v = HyperPlonkKzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let mut proof = dummy_proof_bytes_10_rounds();
+        // First round polynomial lives at offset 260 (after 4·G1 + u32).
+        // Set its c_0 coefficient to 1 — now p(0) + p(1) = 2 ≠ 0 (claim).
+        proof[260 + 31] = 1; // last byte of first Fr (BE), == 1.
+        let pi = [0u8; FR_LEN];
+        let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "expected SumcheckFailed, got {r:?}",
+        );
+    }
+
+    /// Inject a non-zero gate evaluation into final_evals → claim
+    /// reduction detects `α · gate ≠ 0 = sumcheck_final_claim`.
+    #[test]
+    fn rejects_claim_reduction_mismatch() {
+        let backend = HostBackend::new();
+        let v = HyperPlonkKzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let mut proof = dummy_proof_bytes_10_rounds();
+        // Set q_c final_eval to 1. All other final_evals are 0. With
+        // a=b=c=0, q_m=q_l=q_r=q_o=0, gate = q_c = 1 ≠ 0.
+        // Offset: FIXED_HEADER + 10·SUMCHECK_POLY_LEN + Q_C * FR_LEN.
+        let q_c_offset =
+            FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::Q_C * FR_LEN;
+        proof[q_c_offset + 31] = 1; // last byte of BE Fr = 1 → Fr::one()
+        let pi = [0u8; FR_LEN];
+        let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "expected SumcheckFailed at claim reduction, got {r:?}",
+        );
+    }
+
     #[test]
     fn estimated_cu_returns_adr_target() {
-        let backend = MockBackend;
+        let backend = NeverBackend;
         let v = HyperPlonkKzgBn254::new(&backend);
         assert_eq!(
             ProofSystem::estimated_compute_units(&v, &[], &[]),
@@ -216,14 +419,14 @@ mod tests {
 
     #[test]
     fn proof_system_id_is_hyperplonk() {
-        let backend = MockBackend;
+        let backend = NeverBackend;
         let v = HyperPlonkKzgBn254::new(&backend);
         assert_eq!(v.proof_system_id(), ProofSystemId::HyperPlonkKzgBn254);
     }
 
     /// Object-safety smoke test: this must compile.
     #[allow(dead_code)]
-    fn boxed(v: HyperPlonkKzgBn254<'static, MockBackend>) -> alloc::boxed::Box<dyn ProofSystem> {
+    fn boxed(v: HyperPlonkKzgBn254<'static, NeverBackend>) -> alloc::boxed::Box<dyn ProofSystem> {
         alloc::boxed::Box::new(v)
     }
 }
