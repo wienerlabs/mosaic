@@ -15,6 +15,10 @@ categories.workspace = true
 [dependencies]
 mosaic-core = { workspace = true }
 
+[dev-dependencies]
+mosaic-core = { workspace = true, features = ["std", "host-backend"] }
+tiny-keccak = { workspace = true }
+
 [features]
 default = []
 std = ["mosaic-core/std"]

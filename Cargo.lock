@@ -3138,6 +3138,7 @@ name = "mosaic-plonk"
 version = "0.1.0"
 dependencies = [
  "mosaic-core",
+ "tiny-keccak",
 ]
 
 [[package]]
