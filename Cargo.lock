@@ -3129,6 +3129,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mosaic-hyperplonk"
+version = "0.2.0-phase2"
+dependencies = [
+ "ark-bn254 0.5.0",
+ "ark-ff 0.5.0",
+ "mosaic-core",
+ "mosaic-plonk",
+]
+
+[[package]]
 name = "mosaic-nova"
 version = "0.2.0-phase2"
 dependencies = [
@@ -3156,6 +3166,7 @@ dependencies = [
  "mosaic-chunked",
  "mosaic-core",
  "mosaic-groth16",
+ "mosaic-hyperplonk",
  "mosaic-plonk",
  "solana-program",
  "solana-program-test",

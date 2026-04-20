@@ -1,0 +1,42 @@
+[package]
+name = "mosaic-hyperplonk"
+description = "HyperPlonk-KZG verifier over BN254 (multilinear-extension PLONK variant, eprint 2022/1355). Phase-3 scaffold."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+mosaic-core = { workspace = true }
+# Shared ZK primitives (Fr byte ops, Fr arithmetic, MSM, transcript,
+# G1/G2 generator constants) from mosaic-plonk. Dependency direction:
+# a HyperPlonk verifier is structurally adjacent to PLONK but not a
+# subtype; we reuse the low-level modules rather than re-implementing.
+# Future refactor may extract these into `mosaic-zk-primitives`.
+mosaic-plonk = { workspace = true }
+ark-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+
+[dev-dependencies]
+mosaic-core = { workspace = true, features = ["std", "host-backend"] }
+mosaic-plonk = { workspace = true, features = ["std"] }
+ark-bn254 = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
+
+[features]
+default = []
+std = ["mosaic-core/std", "mosaic-plonk/std"]
+solana = ["mosaic-core/solana", "mosaic-plonk/solana"]
+host-backend = ["mosaic-core/host-backend", "mosaic-plonk/host-backend"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

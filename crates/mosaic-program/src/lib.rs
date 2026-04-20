@@ -42,6 +42,7 @@ use mosaic_core::{
     OnChainError,
 };
 use mosaic_groth16::Groth16Verifier;
+use mosaic_hyperplonk::HyperPlonkKzgBn254;
 use mosaic_plonk::PlonkKzgBn254;
 use solana_program::{
     account_info::AccountInfo,
@@ -166,8 +167,13 @@ pub(crate) fn dispatch_verify(
             let v = PlonkKzgBn254::new(&backend);
             PlonkKzgBn254::verify(&v, vk, proof, public_inputs)
         },
-        ProofSystemId::HyperPlonkKzgBn254
-        | ProofSystemId::Halo2KzgBn254
+        ProofSystemId::HyperPlonkKzgBn254 => {
+            // Phase-3 scaffold — currently returns UnimplementedProofSystem,
+            // but wire-format checks run so layout regressions surface.
+            let v = HyperPlonkKzgBn254::new(&backend);
+            HyperPlonkKzgBn254::verify(&v, vk, proof, public_inputs)
+        },
+        ProofSystemId::Halo2KzgBn254
         | ProofSystemId::FriStark
         | ProofSystemId::Risc0Stark
         | ProofSystemId::NovaFolding
