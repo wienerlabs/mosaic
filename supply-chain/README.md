@@ -3,37 +3,33 @@
 Mosaic uses [`cargo-vet`](https://mozilla.github.io/cargo-vet/) to maintain
 a peer-reviewed attestation chain for every crate in the dependency graph.
 
-## Status
+## Baseline (as of v0.1.0-phase1)
 
-**Phase 1 bootstrap.** Configuration files exist
-([`config.toml`](config.toml), [`audits.toml`](audits.toml)) and point at
-imports from Mozilla, Google, Bytecode Alliance, and Embark Studios, but
-the full import chain has not been run and CI gating is not yet enforced.
-Full setup tracked by
-[issue #59](https://github.com/wienerlabs/mosaic/issues/59).
+`cargo vet` against \`main\`:
 
-## Why this matters to auditors
+```
+Vetting Succeeded (74 fully audited, 2 partially audited, 689 exempted)
+```
 
-A working `cargo-vet` setup lets an auditor verify:
-
-- Every dependency in our transitive graph has been reviewed by *someone*
-  we trust (Mozilla, Google, BCA, Embark, or Wiener Labs).
-- Policy-level constraints (`safe-to-deploy` vs `safe-to-run`) are enforced
-  via `[policy.<crate>]` blocks in [`config.toml`](config.toml).
-- New dependencies cannot land without an explicit `audits.toml` entry or
-  an exemption with a written justification.
+- **74 fully audited**: covered by imported audit feeds (Mozilla + Embark
+  Studios + Bytecode Alliance).
+- **2 partially audited**: partial coverage from import chain.
+- **689 exempted**: phase-1 baseline. Every crate exempted here was in the
+  dependency graph at the time of `cargo vet init`. Exemptions shrink over
+  time as we import more audit feeds or perform our own audits — net-new
+  unaudited dependencies require an explicit PR review.
 
 ## Running locally
 
 ```bash
 cargo install cargo-vet --locked
-cargo vet check
+cargo vet          # check current state
+cargo vet suggest  # list crates that would benefit from audits
 ```
 
-First run may report unaudited crates — these will become explicit
-exemptions or receive audit entries as issue #59 progresses.
+CI runs `cargo vet check` on every PR (see `.github/workflows/audit.yml`).
 
-## Policy
+## Policy per crate
 
 | Crate | Criteria | Rationale |
 |---|---|---|
@@ -43,11 +39,33 @@ exemptions or receive audit entries as issue #59 progresses.
 ## Adding a new dependency
 
 1. Make the dep change in the relevant `Cargo.toml`.
-2. Run `cargo vet check`.
-3. For each new unaudited version, either:
-   - Import an existing audit (bump the relevant `[imports.<author>]`).
-   - Add a `[[audits.<crate>]]` entry in [`audits.toml`](audits.toml)
-     with your review notes.
-   - Add an `[[exemptions.<crate>]]` entry with a written justification
-     (rare; flagged in PR review).
+2. Run `cargo vet`.
+3. If the command reports unaudited crates, either:
+   - Run `cargo vet import <source> <url>` to add a new audit feed that
+     covers the crate.
+   - Add a `[[audits.<crate>]]` entry in [`audits.toml`](audits.toml) with
+     your review notes.
+   - Add a `[[exemptions.<crate>]]` entry with a written justification in
+     PR description (rare; flagged in PR review).
 4. Commit the updated attestation files in the same PR as the dep change.
+
+## Running your own audit
+
+```bash
+cargo vet certify <crate> <version>
+```
+
+follow the prompts. The resulting entry lands in [`audits.toml`](audits.toml)
+and is referenced by the `[policy.<crate>]` block in
+[`config.toml`](config.toml).
+
+## Audit feed imports
+
+Listed in [`config.toml § imports`](config.toml). Currently:
+
+- **mozilla** — Mozilla's Rust audit feed from mozilla-central.
+- **bytecode-alliance** — Wasmtime / BCA maintainers.
+- **embark-studios** — Embark Studios' ecosystem audits.
+
+Google's audit feed was considered but the URL format change (2024)
+requires a tracking cleanup; tracked as a follow-up.

@@ -37,3 +37,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
       - run: cargo audit
+
+  cargo-vet:
+    name: cargo-vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-vet --locked
+      # `cargo vet check` fails on any crate that is neither audited
+      # (via imports), self-audited, nor explicitly exempted. New
+      # dependencies must land alongside a supply-chain/config.toml
+      # update in the same PR.
+      - run: cargo vet check
