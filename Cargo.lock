@@ -3192,6 +3192,7 @@ dependencies = [
  "hex",
  "mosaic-core",
  "mosaic-groth16",
+ "mosaic-plonk",
  "num-bigint 0.4.6",
  "serde",
  "serde_json",
