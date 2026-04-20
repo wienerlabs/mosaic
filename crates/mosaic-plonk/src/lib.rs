@@ -49,6 +49,8 @@ pub mod canonical;
 pub mod challenges;
 pub mod field;
 pub mod fr;
+pub mod g1_consts;
+pub mod linearization;
 pub mod msm;
 pub mod transcript;
 pub mod verifier;

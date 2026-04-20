@@ -3047,6 +3047,7 @@ dependencies = [
  "criterion",
  "mosaic-core",
  "mosaic-groth16",
+ "mosaic-plonk",
  "mosaic-serde",
  "solana-program-test",
  "solana-sdk",
@@ -3100,6 +3101,7 @@ dependencies = [
  "ark-std 0.5.0",
  "mosaic-core",
  "mosaic-groth16",
+ "mosaic-plonk",
  "mosaic-serde",
  "proptest",
 ]
@@ -3154,6 +3156,7 @@ dependencies = [
  "mosaic-chunked",
  "mosaic-core",
  "mosaic-groth16",
+ "mosaic-plonk",
  "solana-program",
  "solana-program-test",
  "solana-sdk",

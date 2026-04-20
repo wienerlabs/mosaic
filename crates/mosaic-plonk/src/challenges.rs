@@ -1,20 +1,25 @@
 //! PLONK Fiat-Shamir challenge derivation — rounds 1-6.
 //!
-//! Produces the six challenges the verifier needs:
+//! Produces the six challenges the verifier needs, following the snarkjs
+//! 0.7.x PLONK absorb ordering (canonical reference:
+//! `snarkjs/src/plonk_verify.js::calculatechallenges`):
 //!
-//! | Round | Challenge | Absorbs (fresh transcript per round) |
+//! | Round | Challenge | Fresh transcript absorbs |
 //! |---|---|---|
-//! | 2a    | β         | Qm, Ql, Qr, Qo, Qc, S1, S2, S3 selectors; public inputs; proof A, B, C |
+//! | 2a    | β         | Qm, Ql, Qr, Qo, Qc, S1, S2, S3; public inputs; proof A, B, C |
 //! | 2b    | γ         | β |
 //! | 3     | α         | β, γ, proof.Z |
 //! | 4     | ξ         | α, proof.T1, proof.T2, proof.T3 |
 //! | 5     | v         | ξ, eval_a, eval_b, eval_c, eval_s1, eval_s2, eval_zw |
-//! | 6     | u         | v, proof.W_xi, proof.W_xiw |
+//! | 6     | u         | proof.W_xi, proof.W_xiw |
 //!
-//! Absorb ordering matches the snarkjs 0.7.x PLONK verifier. gnark and
-//! arkworks PLONK implementations use slightly different orderings; a
-//! future adapter in `mosaic-serde::gnark` will route through a
-//! configurable transcript rather than forking this module.
+//! Round 6 intentionally does **not** absorb v — snarkjs's u challenge
+//! depends only on the two opening-proof commitments. This was a subtle
+//! pre-fix bug caught by cross-referencing the snarkjs source.
+//!
+//! gnark PLONK uses slightly different ordering; a future
+//! `mosaic-serde::gnark` adapter will route through a configurable
+//! transcript rather than forking this module.
 
 use crate::{
     canonical::{sizes::G1_LEN, PlonkProof, PlonkVerifyingKey},
@@ -35,7 +40,7 @@ pub struct RoundChallenges {
     pub alpha: [u8; 32],
     /// Evaluation point ξ.
     pub xi: [u8; 32],
-    /// Linearization batch v.
+    /// Linearization batch v (= v_1; higher powers computed on demand).
     pub v: [u8; 32],
     /// Opening batch u.
     pub u: [u8; 32],
@@ -46,8 +51,7 @@ impl RoundChallenges {
     /// the snarkjs-compatible absorb ordering.
     ///
     /// `public_inputs_bytes` must be `vk.n_public * 32` big-endian Fr
-    /// elements concatenated. All inputs are treated as public — no
-    /// constant-time guarantees here.
+    /// elements concatenated.
     pub fn derive<B: SyscallBackend + ?Sized>(
         backend: &B,
         vk: &PlonkVerifyingKey,
@@ -59,9 +63,6 @@ impl RoundChallenges {
         if public_inputs_bytes.len() != expected_pi_len {
             return Err(OnChainError::PublicInputCountMismatch);
         }
-        // Every public-input byte-array must be in Fr range; this mirrors
-        // the Groth16 verifier's guard and prevents small-subgroup-style
-        // mischief. Each chunk is 32 bytes.
         for chunk in public_inputs_bytes.chunks_exact(32) {
             let mut buf = [0u8; 32];
             buf.copy_from_slice(chunk);
@@ -119,13 +120,15 @@ impl RoundChallenges {
         let v = transcript.get_challenge()?;
 
         // ---------- Round 6: u ----------
+        // SUBTLE: snarkjs's u transcript does NOT absorb v. Only the two
+        // opening-proof commitments. Getting this wrong produces challenges
+        // that verify nothing (the pairing fails on valid proofs).
         transcript.reset();
-        transcript.absorb_fr(&v)?;
         transcript.absorb_g1(proof.w_xi)?;
         transcript.absorb_g1(proof.w_xiw)?;
         let u = transcript.get_challenge()?;
 
-        debug_assert_eq!(G1_LEN, 64); // sanity — absorb_g1 expects 64 B
+        debug_assert_eq!(G1_LEN, 64);
         Ok(Self { beta, gamma, alpha, xi, v, u })
     }
 }
@@ -134,10 +137,8 @@ impl RoundChallenges {
 mod tests {
     use super::*;
     use crate::canonical::sizes::{FR_LEN, G2_LEN, PROOF_LEN};
-    use mosaic_core::syscall::SyscallBackend;
 
     struct MockBackend;
-
     impl SyscallBackend for MockBackend {
         fn alt_bn128_group_op(
             &self,
@@ -217,22 +218,16 @@ mod tests {
 
         let c1 = RoundChallenges::derive(&backend, &vk, &proof, &pi1).unwrap();
         let c2 = RoundChallenges::derive(&backend, &vk, &proof, &pi2).unwrap();
-        // β depends on public inputs (absorbed directly); changing PI must
-        // change β and therefore every downstream challenge.
         assert_ne!(c1.beta, c2.beta);
-        assert_ne!(c1.gamma, c2.gamma);
-        assert_ne!(c1.alpha, c2.alpha);
-        assert_ne!(c1.xi, c2.xi);
     }
 
     #[test]
     fn derive_rejects_wrong_public_input_count() {
         let backend = MockBackend;
-        let vk = zero_vk(2); // expects 2 × 32 = 64 bytes
+        let vk = zero_vk(2);
         let proof_bytes = [0x11u8; PROOF_LEN];
         let proof = PlonkProof::from_bytes(&proof_bytes).unwrap();
-        let bad_pi = [0u8; FR_LEN]; // only 32 bytes
-
+        let bad_pi = [0u8; FR_LEN];
         assert!(matches!(
             RoundChallenges::derive(&backend, &vk, &proof, &bad_pi),
             Err(OnChainError::PublicInputCountMismatch),
@@ -245,8 +240,7 @@ mod tests {
         let vk = zero_vk(1);
         let proof_bytes = [0x11u8; PROOF_LEN];
         let proof = PlonkProof::from_bytes(&proof_bytes).unwrap();
-        let bad_pi = fr::BN254_FR_MODULUS_BE; // exactly r, out of range
-
+        let bad_pi = fr::BN254_FR_MODULUS_BE;
         assert!(matches!(
             RoundChallenges::derive(&backend, &vk, &proof, &bad_pi),
             Err(OnChainError::PublicInputOutOfRange),

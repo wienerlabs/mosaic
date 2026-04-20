@@ -18,6 +18,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 mosaic-core = { workspace = true, features = ["solana"] }
 mosaic-groth16 = { workspace = true, features = ["solana"] }
+mosaic-plonk = { workspace = true, features = ["solana"] }
 mosaic-chunked = { workspace = true, features = ["solana"] }
 solana-program = { workspace = true }
 borsh = { workspace = true }

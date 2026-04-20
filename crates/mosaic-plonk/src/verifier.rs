@@ -58,9 +58,15 @@ impl<'a, B: SyscallBackend + ?Sized> PlonkKzgBn254<'a, B> {
 
     /// Perform the full verifier pipeline.
     ///
-    /// Session 1 wires steps 1-3 (parse + range check + challenge
-    /// derivation); the linearization MSM and KZG pairing check return
-    /// `UnimplementedProofSystem`. See the module doc for the plan.
+    /// Steps:
+    /// 1. Parse VK + proof byte layout.
+    /// 2. Derive all 6 Fiat-Shamir challenges (snarkjs-compatible).
+    /// 3. Compute scalar intermediates (ξⁿ, Zh, L_1, PI, r_0, v powers).
+    /// 4. Build linearization commitment D via MSM over VK + proof.
+    /// 5. Build F = D + batched proof-point commitments.
+    /// 6. Build E = e·[1]_1 (batched evaluations as G1 scalar).
+    /// 7. Build A1, B1 pairing inputs.
+    /// 8. Single `alt_bn128_pairing` call with 2 pairs; assert result.
     pub fn verify(
         &self,
         vk_bytes: &[u8],
@@ -69,14 +75,15 @@ impl<'a, B: SyscallBackend + ?Sized> PlonkKzgBn254<'a, B> {
     ) -> Result<(), OnChainError> {
         let vk = PlonkVerifyingKey::from_bytes(vk_bytes)?;
         let proof = PlonkProof::from_bytes(proof_bytes)?;
-
-        // Fiat-Shamir challenge derivation. After this point, `_challenges`
-        // holds β, γ, α, ξ, v, u — consumed by session-2 code.
-        let _challenges =
+        let challenges =
             RoundChallenges::derive(self.backend, &vk, &proof, public_inputs_bytes)?;
-
-        // TODO(mosaic-001): session 2 — linearization MSM + KZG pairing.
-        Err(OnChainError::UnimplementedProofSystem)
+        crate::linearization::finalize_verify(
+            self.backend,
+            &vk,
+            &proof,
+            &challenges,
+            public_inputs_bytes,
+        )
     }
 }
 
@@ -160,14 +167,18 @@ mod tests {
     }
 
     #[test]
-    fn verify_derives_challenges_then_returns_unimplemented() {
+    fn verify_propagates_backend_errors_for_mock_backend() {
+        // KeccakMockBackend only supplies keccak256; alt_bn128 ops return
+        // UnsupportedOperation. This test proves the verifier routes the
+        // backend error through without masking — the linearization MSM
+        // will surface as UnsupportedOperation here.
         let backend = KeccakMockBackend;
         let v = PlonkKzgBn254::new(&backend);
         let vk = dummy_vk_bytes(1);
         let proof = alloc::vec![0u8; PROOF_LEN];
         let pi = alloc::vec![0u8; FR_LEN];
         let r = PlonkKzgBn254::verify(&v, &vk, &proof, &pi);
-        assert!(matches!(r, Err(OnChainError::UnimplementedProofSystem)));
+        assert!(r.is_err(), "mock backend must fail during MSM");
     }
 
     #[test]

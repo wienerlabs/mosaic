@@ -43,19 +43,34 @@ estimate; actual on-chain CU is higher because of Borsh deserialization
 of the `VerifyProofData` payload, instruction dispatch, `msg!` logging,
 and the `solana-bn254` syscall wrapper allocations.
 
-### Phase 1 measured baseline (2026-04-20)
+### Phase 1 measured baselines (2026-04-20)
 
-| Fixture | Measured | Cap | Headroom |
-|---|---|---|---|
-| `mul-circuit` (1 public input) | **80,296 CU** | 180,000 | 55.4% unused |
+| System | Fixture | Measured | Cap | Headroom |
+|---|---|---|---|---|
+| Groth16 BN254 | `mul-circuit` (1 PI) | **80,296 CU** | 180,000 | 55.4% |
+| KZG-PLONK BN254 | `mul-circuit` (1 PI) | **747,666 CU** | 800,000 | 6.5% |
 
-Source: `mosaic-bench/src/bin/bpf_bench.rs` against the canonical
-fixture at `tests/fixtures/groth16/mul-circuit/canonical/`. Measurement
-is pinned in `bpf_bench.rs::TARGETS[0].baseline_cu`; the bench warns
-(`WARN` status) when a measurement deviates from this by more than 5%.
-Issues [#37](https://github.com/wienerlabs/mosaic/issues/37) and
-[#38](https://github.com/wienerlabs/mosaic/issues/38) track CU reductions
-for the Groth16 hot path; both would drop this number further.
+Sources: `mosaic-bench/src/bin/bpf_bench.rs` against canonical fixtures.
+Baselines pinned in `TARGETS[i].baseline_cu`; bench warns on >5% drift.
+
+**PLONK algorithmic vs measured gap.** The ADR-0005 600K target was an
+algorithmic estimate; actual measured is ~25% higher because:
+
+- Arkworks `Fr` arithmetic on SBF costs ~2 000 CU per `*` (Montgomery
+  limb-by-limb + reduce). PLONK does ~30 Fr multiplications.
+- Each `alt_bn128_group_op` syscall has ~400 CU fixed overhead on top
+  of the operation; PLONK makes ~20 calls vs Groth16's ~6.
+- `scalar_mul_g1` allocates `Vec<u8>` per call (~200 CU/call).
+
+The 600K target remains on the roadmap as optimization goal; 800K is
+current enforceable cap. Path to 600K:
+
+- Issue [#37](https://github.com/wienerlabs/mosaic/issues/37) —
+  Pippenger MSM for the linearization 5-term MSM (saves ~50K).
+- Issue [#38](https://github.com/wienerlabs/mosaic/issues/38) — Fr
+  in-place mutation to reduce Montgomery round-trip (saves ~80K).
+- Future: cache evaluation decodes across `compute_d*` helpers to avoid
+  re-decoding proof evaluations 3× (saves ~20K).
 
 ## Client transaction overhead
 

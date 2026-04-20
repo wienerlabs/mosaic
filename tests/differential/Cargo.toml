@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 mosaic-core = { workspace = true, features = ["std", "host-backend"] }
 mosaic-groth16 = { workspace = true, features = ["std", "host-backend"] }
+mosaic-plonk = { workspace = true, features = ["std"] }
 mosaic-serde = { workspace = true, features = ["std", "host-backend"] }
 
 ark-bn254 = { workspace = true, features = ["std"] }

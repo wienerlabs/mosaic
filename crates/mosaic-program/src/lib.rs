@@ -42,6 +42,7 @@ use mosaic_core::{
     OnChainError,
 };
 use mosaic_groth16::Groth16Verifier;
+use mosaic_plonk::PlonkKzgBn254;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -127,8 +128,11 @@ pub(crate) fn dispatch_verify(
             let v = Groth16Verifier::<_, false>::new(&backend);
             ProofSystem::verify(&v, vk, proof, public_inputs)
         },
-        ProofSystemId::PlonkKzgBn254
-        | ProofSystemId::HyperPlonkKzgBn254
+        ProofSystemId::PlonkKzgBn254 => {
+            let v = PlonkKzgBn254::new(&backend);
+            PlonkKzgBn254::verify(&v, vk, proof, public_inputs)
+        },
+        ProofSystemId::HyperPlonkKzgBn254
         | ProofSystemId::Halo2KzgBn254
         | ProofSystemId::FriStark
         | ProofSystemId::Risc0Stark

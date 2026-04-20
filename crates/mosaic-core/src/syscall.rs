@@ -236,9 +236,19 @@ pub mod host {
     }
 
     /// Decode a 64-byte G1 affine encoding (x || y, big-endian by default).
+    ///
+    /// Solana's `alt_bn128` syscall treats `(0, 0)` as the G1 identity.
+    /// We match that convention: all-zero bytes decode to the identity
+    /// rather than failing the on-curve check (0, 0) would otherwise
+    /// trigger. This is essential for PLONK fixtures where zero-polynomial
+    /// selector commitments (e.g. `Qr` for a circuit with no right-operand
+    /// gates) serialize as the identity.
     fn decode_g1(bytes: &[u8], endianness: InputEndianness) -> Result<G1Affine, OnChainError> {
         if bytes.len() != 64 {
             return Err(OnChainError::InvalidPointEncoding);
+        }
+        if bytes.iter().all(|b| *b == 0) {
+            return Ok(G1Affine::identity());
         }
         let (x_bytes, y_bytes) = bytes.split_at(32);
         let x = decode_fq(x_bytes, endianness)?;
@@ -292,6 +302,11 @@ pub mod host {
     }
 
     fn encode_g1(point: &G1Affine, endianness: InputEndianness) -> Vec<u8> {
+        // Identity encodes as 64 zero bytes (alt_bn128 convention),
+        // matching what `decode_g1` accepts on the input side.
+        if point.is_zero() {
+            return alloc::vec![0u8; 64];
+        }
         let mut out = Vec::with_capacity(64);
         let (x, y) = point.xy().unwrap_or((Fq::default(), Fq::default()));
         let mut x_bytes = x.into_bigint().to_bytes_le();

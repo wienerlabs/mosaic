@@ -75,6 +75,20 @@ const TARGETS: &[SystemTarget] = &[
         // If this changes by >5%, investigate and update with PR reference.
         baseline_cu: 80_296,
     },
+    SystemTarget {
+        name: "plonk_bn254_mul_circuit_1pi",
+        // ADR-0005 originally targeted 600K based on algorithmic
+        // estimate (15K transcript + 200K linearization MSM + 24K
+        // pairing + sundry). Actual measured consumption with arkworks
+        // Fr arithmetic + full byte-for-byte snarkjs compat:
+        //   747 666 CU (~25% over algorithmic estimate)
+        // Cap raised to 800 000 to give 7% regression headroom over
+        // the current baseline. Optimization path to approach the
+        // 600K target tracked by issues #37 (MSM tightening) and a
+        // follow-up "Fr arithmetic in-place mutation" issue.
+        hard_cap_cu: 800_000,
+        baseline_cu: 747_666,
+    },
 ];
 
 #[derive(BorshSerialize)]
@@ -94,11 +108,11 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn fixture_bytes(name: &str) -> Result<Vec<u8>> {
+fn fixture_bytes(system: &str, name: &str) -> Result<Vec<u8>> {
     let path = workspace_root()
         .join("tests")
         .join("fixtures")
-        .join("groth16")
+        .join(system)
         .join("mul-circuit")
         .join("canonical")
         .join(name);
@@ -139,18 +153,6 @@ fn require_sbf_env() -> Result<()> {
     Ok(())
 }
 
-fn build_verify_ix(vk: &[u8], proof: &[u8], public_inputs: &[u8]) -> Instruction {
-    let payload = VerifyProofData {
-        proof_system_id: 0x01, // Groth16Bn254
-        vk: vk.to_vec(),
-        proof: proof.to_vec(),
-        public_inputs: public_inputs.to_vec(),
-    };
-    let mut data = Vec::with_capacity(1 + 1 + vk.len() + proof.len() + public_inputs.len() + 16);
-    data.push(0x01); // InstructionTag::VerifyProof
-    borsh::to_writer(&mut data, &payload).expect("borsh VerifyProofData");
-    Instruction { program_id: PROGRAM_ID, accounts: Vec::<AccountMeta>::new(), data }
-}
 
 /// Parse `Program <id> consumed <N> of <M> compute units` from program logs.
 ///
@@ -213,23 +215,49 @@ impl MeasurementReport {
 }
 
 async fn bench_groth16_mul_circuit(target: &SystemTarget) -> Result<MeasurementReport> {
-    let vk = fixture_bytes("vk.bin")?;
-    let proof = fixture_bytes("proof.bin")?;
-    let public_inputs = fixture_bytes("public_inputs.bin")?;
+    let vk = fixture_bytes("groth16", "vk.bin")?;
+    let proof = fixture_bytes("groth16", "proof.bin")?;
+    let public_inputs = fixture_bytes("groth16", "public_inputs.bin")?;
 
-    // Host-backend preflight: fail fast if the fixture itself is broken,
-    // before we spin up the banks server.
     let backend = HostBackend::new();
     let verifier = Groth16Verifier::<_, false>::new(&backend);
     ProofSystem::verify(&verifier, &vk, &proof, &public_inputs)
         .map_err(|e| anyhow!("host preflight failed: {e}"))?;
 
+    run_bpf_verify(target, 0x01, &vk, &proof, &public_inputs, 300_000).await
+}
+
+async fn bench_plonk_mul_circuit(target: &SystemTarget) -> Result<MeasurementReport> {
+    use mosaic_plonk::PlonkKzgBn254;
+    let vk = fixture_bytes("plonk", "vk.bin")?;
+    let proof = fixture_bytes("plonk", "proof.bin")?;
+    let public_inputs = fixture_bytes("plonk", "public_inputs.bin")?;
+
+    let backend = HostBackend::new();
+    let verifier = PlonkKzgBn254::new(&backend);
+    PlonkKzgBn254::verify(&verifier, &vk, &proof, &public_inputs)
+        .map_err(|e| anyhow!("host PLONK preflight failed: {e}"))?;
+
+    // Request the full 14M CU so we can measure the actual consumption
+    // even if initial run lands high. Hard cap is checked against
+    // target.hard_cap_cu, not against set_compute_unit_limit.
+    run_bpf_verify(target, 0x02, &vk, &proof, &public_inputs, 1_400_000).await
+}
+
+async fn run_bpf_verify(
+    target: &SystemTarget,
+    proof_system_id: u8,
+    vk: &[u8],
+    proof: &[u8],
+    public_inputs: &[u8],
+    cu_limit: u32,
+) -> Result<MeasurementReport> {
     sbf_artifact_exists()?;
     require_sbf_env()?;
     let (banks, payer, blockhash) = setup_banks().await;
 
-    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(300_000);
-    let verify_ix = build_verify_ix(&vk, &proof, &public_inputs);
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(cu_limit);
+    let verify_ix = build_verify_ix_for_system(proof_system_id, vk, proof, public_inputs);
     let tx = Transaction::new_signed_with_payer(
         &[cu_ix, verify_ix],
         Some(&payer.pubkey()),
@@ -263,6 +291,24 @@ async fn bench_groth16_mul_circuit(target: &SystemTarget) -> Result<MeasurementR
     })?;
 
     Ok(MeasurementReport::from_target(target, cu))
+}
+
+fn build_verify_ix_for_system(
+    proof_system_id: u8,
+    vk: &[u8],
+    proof: &[u8],
+    public_inputs: &[u8],
+) -> Instruction {
+    let payload = VerifyProofData {
+        proof_system_id,
+        vk: vk.to_vec(),
+        proof: proof.to_vec(),
+        public_inputs: public_inputs.to_vec(),
+    };
+    let mut data = Vec::with_capacity(1 + 1 + vk.len() + proof.len() + public_inputs.len() + 16);
+    data.push(0x01); // InstructionTag::VerifyProof
+    borsh::to_writer(&mut data, &payload).expect("borsh VerifyProofData");
+    Instruction { program_id: PROGRAM_ID, accounts: Vec::<AccountMeta>::new(), data }
 }
 
 fn print_report(reports: &[MeasurementReport]) {
@@ -304,18 +350,23 @@ async fn main() -> ExitCode {
     let mut any_hard_fail = false;
 
     for target in TARGETS {
-        match target.name {
-            "groth16_bn254_mul_circuit_1pi" => match bench_groth16_mul_circuit(target).await {
-                Ok(r) => {
-                    any_hard_fail |= r.exceeds_hard_cap;
-                    reports.push(r);
-                },
-                Err(e) => {
-                    eprintln!("error benching {}: {e}", target.name);
-                    return ExitCode::from(2);
-                },
+        let outcome = match target.name {
+            "groth16_bn254_mul_circuit_1pi" => bench_groth16_mul_circuit(target).await,
+            "plonk_bn254_mul_circuit_1pi" => bench_plonk_mul_circuit(target).await,
+            other => {
+                eprintln!("unknown bench target: {other}");
+                continue;
             },
-            other => eprintln!("unknown bench target: {other}"),
+        };
+        match outcome {
+            Ok(r) => {
+                any_hard_fail |= r.exceeds_hard_cap;
+                reports.push(r);
+            },
+            Err(e) => {
+                eprintln!("error benching {}: {e}", target.name);
+                return ExitCode::from(2);
+            },
         }
     }
 
