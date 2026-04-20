@@ -44,6 +44,12 @@ pub enum OnChainError {
     PointNotOnCurve = 0x0006,
     /// A field element byte serialization is malformed.
     InvalidFieldEncoding = 0x0007,
+    /// VK and proof headers disagree on a structural parameter (field id,
+    /// trace shape, column count, ...). Caller shipped inconsistent
+    /// configuration; a real verifier would produce garbage challenges
+    /// and fail cryptographically, but surfacing the mismatch up-front
+    /// yields a clearer error.
+    VerifyingKeyProofMismatch = 0x0008,
 
     // 0x0010..0x001F — proof system selection
     /// Unknown `ProofSystemId` discriminant.
@@ -124,6 +130,7 @@ impl OnChainError {
             Self::InvalidPointEncoding => "invalid_point_encoding",
             Self::PointNotOnCurve => "point_not_on_curve",
             Self::InvalidFieldEncoding => "invalid_field_encoding",
+            Self::VerifyingKeyProofMismatch => "vk_proof_mismatch",
             Self::UnknownProofSystem => "unknown_proof_system",
             Self::UnimplementedProofSystem => "unimplemented_proof_system",
             Self::UnsupportedOperation => "unsupported_operation",
@@ -244,6 +251,7 @@ mod tests {
     fn discriminant_stability() {
         // ABI lock — these specific discriminants must never change.
         assert_eq!(OnChainError::ProofLengthMismatch.code(), 0x0001);
+        assert_eq!(OnChainError::VerifyingKeyProofMismatch.code(), 0x0008);
         assert_eq!(OnChainError::PairingCheckFailed.code(), 0x0020);
         assert_eq!(OnChainError::ChunkCommitmentMismatch.code(), 0x0031);
         assert_eq!(OnChainError::SessionAlreadyInitialized.code(), 0x0035);

@@ -45,6 +45,7 @@ use mosaic_groth16::Groth16Verifier;
 use mosaic_halo2::Halo2KzgBn254;
 use mosaic_hyperplonk::HyperPlonkKzgBn254;
 use mosaic_plonk::PlonkKzgBn254;
+use mosaic_stark::FriStark;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
@@ -181,8 +182,15 @@ pub(crate) fn dispatch_verify(
             let v = Halo2KzgBn254::new(&backend);
             Halo2KzgBn254::verify(&v, vk, proof, public_inputs)
         },
-        ProofSystemId::FriStark
-        | ProofSystemId::Risc0Stark
+        ProofSystemId::FriStark => {
+            // Phase-3 scaffold — wire-format + VK/proof cross-check runs;
+            // real hash-based verifier body lands with #3. Large proofs
+            // must arrive via the chunked-upload protocol before reaching
+            // this dispatcher.
+            let v = FriStark::new(&backend);
+            FriStark::verify(&v, vk, proof, public_inputs)
+        },
+        ProofSystemId::Risc0Stark
         | ProofSystemId::NovaFolding
         | ProofSystemId::ProtoStarFolding => Err(OnChainError::UnimplementedProofSystem),
         // `ProofSystemId` is `#[non_exhaustive]`; new variants land via
