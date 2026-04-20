@@ -67,6 +67,8 @@ auditors can audit the audit trail itself:
 | [`docs/threat-model.md`](docs/threat-model.md) | Adversarial input vectors T-1..T-10. |
 | [`docs/lint-policy.md`](docs/lint-policy.md) | Every `#[allow(clippy::…)]` justified. |
 | [`docs/compute-unit-budget.md`](docs/compute-unit-budget.md) | Per-system CU caps + measured baselines. |
+| [`docs/audit/rfq.md`](docs/audit/rfq.md) | Pre-audit request-for-quote sent to candidate firms. |
+| [`docs/audit/outreach-email.md`](docs/audit/outreach-email.md) | Outreach + response templates. |
 | `supply-chain/` | `cargo-vet` attestation configuration. |
 
 ### Phase-1 self-review checklist
