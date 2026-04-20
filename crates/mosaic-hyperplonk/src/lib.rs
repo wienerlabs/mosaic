@@ -59,9 +59,11 @@
 extern crate alloc;
 
 pub mod canonical;
+pub mod mle;
 pub mod sumcheck;
 pub mod verifier;
 
 pub use canonical::{HyperPlonkProof, HyperPlonkVerifyingKey};
+pub use mle::{eq_poly_eval, mle_eval_from_cube};
 pub use sumcheck::{verify_sumcheck, RoundPolynomial, SumcheckOutput};
 pub use verifier::HyperPlonkKzgBn254;
