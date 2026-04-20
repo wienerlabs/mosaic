@@ -47,6 +47,7 @@ extern crate alloc;
 
 pub mod canonical;
 pub mod challenges;
+pub mod field;
 pub mod fr;
 pub mod transcript;
 pub mod verifier;

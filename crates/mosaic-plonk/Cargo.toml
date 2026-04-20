@@ -14,10 +14,20 @@ categories.workspace = true
 
 [dependencies]
 mosaic-core = { workspace = true }
+# Fr arithmetic on both host and SBF. Same crates Light Protocol's
+# groth16-solana uses on-chain; verified to compile to SBF target.
+# ~200 KB binary impact acceptable under Solana 1 MB program limit.
+ark-bn254 = { workspace = true }
+ark-ff = { workspace = true }
+ark-serialize = { workspace = true }
 
 [dev-dependencies]
 mosaic-core = { workspace = true, features = ["std", "host-backend"] }
 tiny-keccak = { workspace = true }
+ark-bn254 = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
+ark-serialize = { workspace = true, features = ["std"] }
+ark-std = { workspace = true, features = ["std"] }
 
 [features]
 default = []

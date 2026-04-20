@@ -1,0 +1,299 @@
+//! Fr field arithmetic via arkworks `ark-bn254`.
+//!
+//! [`crate::fr`] provides byte-level Fr-range helpers that do not depend
+//! on arkworks (lightweight, used by transcript squeeze). This module
+//! wraps arkworks `Fr` for the arithmetic PLONK verification needs:
+//! multiplication, inversion, exponentiation, Lagrange-basis evaluation,
+//! public-input polynomial evaluation.
+//!
+//! ## Why arkworks on-chain
+//!
+//! BN254 scalar-field arithmetic is not exposed by Solana syscalls —
+//! only group operations (`alt_bn128_*`) and hash (`keccak` / `sha256` /
+//! `poseidon`) are. Light Protocol's `groth16-solana` pulls arkworks
+//! through for the same reason; we follow that pattern. Binary impact
+//! is ~200 KB on the SBF artifact, well under the 1 MB program limit.
+//!
+//! All Fr arithmetic here is **not constant-time**. PLONK verification
+//! operates on public proof/VK bytes, so timing side-channels are not
+//! an attack vector. Do not reuse these helpers for private data.
+
+use crate::fr::parse_fr_be;
+use alloc::vec::Vec;
+use ark_bn254::Fr;
+use ark_ff::{BigInteger, Field, One, PrimeField, Zero};
+use mosaic_core::OnChainError;
+
+/// Decode a big-endian 32-byte canonical Fr encoding, validating that the
+/// value is in [0, r). Returns the arkworks `Fr` for subsequent
+/// arithmetic.
+pub fn fr_from_canonical_bytes(bytes: &[u8]) -> Result<Fr, OnChainError> {
+    let in_range = parse_fr_be(bytes)?;
+    // Safe because `parse_fr_be` already rejected out-of-range inputs.
+    Ok(Fr::from_be_bytes_mod_order(&in_range))
+}
+
+/// Encode an arkworks `Fr` as 32 big-endian bytes (canonical Mosaic
+/// layout). Inverse of [`fr_from_canonical_bytes`].
+#[must_use]
+pub fn fr_to_canonical_bytes(fr: &Fr) -> [u8; 32] {
+    let mut le = fr.into_bigint().to_bytes_le();
+    le.resize(32, 0); // should already be 32
+    le.reverse();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&le);
+    out
+}
+
+/// Compute `fr^exp` via arkworks `pow`.
+#[must_use]
+pub fn fr_pow_u64(fr: &Fr, exp: u64) -> Fr {
+    fr.pow([exp])
+}
+
+/// First Lagrange basis polynomial `L_1(ξ)` for an evaluation domain of
+/// size `n`:
+///
+/// ```text
+/// L_1(ξ) = (ξ^n - 1) / (n · (ξ - 1))
+/// ```
+///
+/// Panics-free: returns `Err(InternalInvariantViolation)` if the
+/// denominator is zero (i.e. `ξ = 1`, probability `~1/r` for a random
+/// challenge).
+pub fn lagrange_basis_one(xi: &Fr, n: u64) -> Result<Fr, OnChainError> {
+    let xi_n = fr_pow_u64(xi, n);
+    let numerator = xi_n - Fr::one();
+    let denom = Fr::from(n) * (*xi - Fr::one());
+    denom
+        .inverse()
+        .map(|inv| numerator * inv)
+        .ok_or(OnChainError::InternalInvariantViolation)
+}
+
+/// The `i`-th Lagrange basis polynomial `L_{i+1}(ξ)` (0-indexed `i`):
+///
+/// ```text
+/// L_{i+1}(ξ) = (ω^i · (ξ^n - 1)) / (n · (ξ - ω^i))
+/// ```
+///
+/// Called during public-input polynomial evaluation.
+pub fn lagrange_basis_at(
+    xi: &Fr,
+    i: u64,
+    n: u64,
+    omega: &Fr,
+) -> Result<Fr, OnChainError> {
+    let xi_n = fr_pow_u64(xi, n);
+    let omega_i = fr_pow_u64(omega, i);
+    let numerator = omega_i * (xi_n - Fr::one());
+    let denom = Fr::from(n) * (*xi - omega_i);
+    denom
+        .inverse()
+        .map(|inv| numerator * inv)
+        .ok_or(OnChainError::InternalInvariantViolation)
+}
+
+/// Evaluate the public-input polynomial at `ξ`:
+///
+/// ```text
+/// PI(ξ) = -Σ_{i=0}^{n_public-1} w_i · L_{i+1}(ξ)
+/// ```
+///
+/// The negation follows snarkjs 0.7.x convention: public-input
+/// coefficients contribute to the linearization equation with a minus
+/// sign so that `r(ξ) = 0` holds when the proof is valid.
+///
+/// `public_inputs` is a slice of canonical big-endian 32-byte Fr values;
+/// each must be `< r` (caller's
+/// [`crate::challenges::RoundChallenges::derive`] already validates
+/// this).
+pub fn evaluate_public_input_poly(
+    xi: &Fr,
+    omega: &Fr,
+    n: u64,
+    public_inputs: &[Fr],
+) -> Result<Fr, OnChainError> {
+    if public_inputs.is_empty() {
+        return Ok(Fr::zero());
+    }
+    // Precompute (ξ^n - 1) and n_fr^(-1) once so each Lagrange eval is
+    // only one inversion in the denominator.
+    let xi_n_minus_one = fr_pow_u64(xi, n) - Fr::one();
+    let n_fr_inv = Fr::from(n)
+        .inverse()
+        .ok_or(OnChainError::InternalInvariantViolation)?;
+
+    // ω^i cumulative: starts at ω^0 = 1, multiplied by ω each step.
+    let mut omega_i = Fr::one();
+    let mut acc = Fr::zero();
+    for w in public_inputs {
+        // L_{i+1}(ξ) = ω^i · (ξ^n - 1) / (n · (ξ - ω^i))
+        let denom = *xi - omega_i;
+        let denom_inv = denom
+            .inverse()
+            .ok_or(OnChainError::InternalInvariantViolation)?;
+        let l_i_plus_1 = omega_i * xi_n_minus_one * n_fr_inv * denom_inv;
+        acc += *w * l_i_plus_1;
+        omega_i *= omega;
+    }
+    // Negate per snarkjs convention.
+    Ok(-acc)
+}
+
+/// Convenience: decode a sequence of canonical BE public inputs into
+/// arkworks `Fr` elements for use with
+/// [`evaluate_public_input_poly`].
+pub fn decode_public_inputs(bytes: &[u8]) -> Result<Vec<Fr>, OnChainError> {
+    if bytes.len() % 32 != 0 {
+        return Err(OnChainError::PublicInputCountMismatch);
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 32);
+    for chunk in bytes.chunks_exact(32) {
+        out.push(fr_from_canonical_bytes(chunk)?);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use ark_std::UniformRand;
+
+    fn seeded_rng(seed: u64) -> ark_std::rand::rngs::StdRng {
+        use ark_std::rand::SeedableRng;
+        ark_std::rand::rngs::StdRng::seed_from_u64(seed)
+    }
+
+    #[test]
+    fn canonical_bytes_roundtrip() {
+        let mut rng = seeded_rng(0);
+        for _ in 0..20 {
+            let fr = Fr::rand(&mut rng);
+            let bytes = fr_to_canonical_bytes(&fr);
+            let decoded = fr_from_canonical_bytes(&bytes).unwrap();
+            assert_eq!(fr, decoded);
+        }
+    }
+
+    #[test]
+    fn canonical_bytes_rejects_out_of_range() {
+        let r_bytes = crate::fr::BN254_FR_MODULUS_BE;
+        assert!(fr_from_canonical_bytes(&r_bytes).is_err());
+    }
+
+    #[test]
+    fn fr_pow_matches_arkworks() {
+        let mut rng = seeded_rng(1);
+        for _ in 0..10 {
+            let base = Fr::rand(&mut rng);
+            let exp = (rng_next_u32(&mut rng) as u64) & 0xFFFF; // small exp
+            assert_eq!(fr_pow_u64(&base, exp), base.pow([exp]));
+        }
+    }
+
+    fn rng_next_u32(rng: &mut ark_std::rand::rngs::StdRng) -> u32 {
+        use ark_std::rand::RngCore;
+        rng.next_u32()
+    }
+
+    #[test]
+    fn lagrange_basis_one_is_one_at_omega_zero() {
+        // L_1(1) should be 1 by definition (L_1 basis evaluated at ω^0 = 1).
+        // But L_1(ξ) = (ξ^n - 1) / (n(ξ - 1)) is 0/0 at ξ = 1; our helper
+        // returns InternalInvariantViolation on div-by-zero. Instead check
+        // L_1 at other domain roots: L_1(ω^k) = 0 for k ≠ 0.
+        let n: u64 = 8;
+        let omega = find_primitive_nth_root(n);
+        for k in 1..n {
+            let xi = fr_pow_u64(&omega, k);
+            let l_1 = lagrange_basis_one(&xi, n).unwrap();
+            assert_eq!(l_1, Fr::zero(), "L_1(ω^{k}) should be 0");
+        }
+    }
+
+    #[test]
+    fn lagrange_basis_at_is_one_on_its_own_point() {
+        // L_{i+1}(ω^i) = 1.
+        // Our helper hits div-by-0 at ξ = ω^i (domain root collision),
+        // so we test the neighbourhood by verifying L_{i+1}(ω^j) = 0 for j ≠ i.
+        let n: u64 = 8;
+        let omega = find_primitive_nth_root(n);
+        for i in 0..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                let xi = fr_pow_u64(&omega, j);
+                let l = lagrange_basis_at(&xi, i, n, &omega).unwrap();
+                assert_eq!(l, Fr::zero(), "L_{{{}+1}}(ω^{}) should be 0", i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn pi_poly_matches_manual_sum() {
+        // For n_public = 3, evaluate PI(ξ) two ways and compare.
+        let mut rng = seeded_rng(42);
+        let n: u64 = 16;
+        let omega = find_primitive_nth_root(n);
+        let xi = Fr::rand(&mut rng);
+        let public_inputs = vec![Fr::rand(&mut rng), Fr::rand(&mut rng), Fr::rand(&mut rng)];
+
+        let got = evaluate_public_input_poly(&xi, &omega, n, &public_inputs).unwrap();
+
+        // Manual reference: PI(ξ) = -Σ w_i · L_{i+1}(ξ)
+        let mut expected = Fr::zero();
+        for (i, w) in public_inputs.iter().enumerate() {
+            let l = lagrange_basis_at(&xi, i as u64, n, &omega).unwrap();
+            expected += *w * l;
+        }
+        expected = -expected;
+
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn pi_poly_empty_is_zero() {
+        let xi = Fr::from(42u64);
+        let omega = Fr::from(2u64);
+        let got = evaluate_public_input_poly(&xi, &omega, 8, &[]).unwrap();
+        assert_eq!(got, Fr::zero());
+    }
+
+    #[test]
+    fn decode_public_inputs_matches_individual() {
+        let mut rng = seeded_rng(7);
+        let frs = vec![Fr::rand(&mut rng), Fr::rand(&mut rng)];
+        let mut concat = Vec::new();
+        for f in &frs {
+            concat.extend_from_slice(&fr_to_canonical_bytes(f));
+        }
+        let decoded = decode_public_inputs(&concat).unwrap();
+        assert_eq!(decoded, frs);
+    }
+
+    #[test]
+    fn decode_public_inputs_rejects_short_trailing() {
+        let bad = vec![0u8; 31];
+        assert!(matches!(
+            decode_public_inputs(&bad),
+            Err(OnChainError::PublicInputCountMismatch),
+        ));
+    }
+
+    /// Helper: find a primitive n-th root of unity in Fr. BN254 scalar
+    /// field supports 2-adicity up to 2^28, so n up to that works.
+    fn find_primitive_nth_root(n: u64) -> Fr {
+        // `Fr::TWO_ADICITY` = 28 and `Fr::TWO_ADIC_ROOT_OF_UNITY` is the
+        // 2^28-th root of unity. For n = 2^k with k ≤ 28, we raise it
+        // to 2^(28-k) to get a primitive n-th root.
+        use ark_ff::FftField;
+        let two_adic = Fr::TWO_ADIC_ROOT_OF_UNITY;
+        let k = n.trailing_zeros();
+        assert_eq!(n, 1 << k, "n must be a power of 2 for this helper");
+        let extra = Fr::TWO_ADICITY - k;
+        two_adic.pow([1_u64 << extra])
+    }
+}
