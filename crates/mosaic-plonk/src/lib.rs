@@ -49,6 +49,7 @@ pub mod canonical;
 pub mod challenges;
 pub mod field;
 pub mod fr;
+pub mod msm;
 pub mod transcript;
 pub mod verifier;
 
