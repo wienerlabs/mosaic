@@ -171,8 +171,12 @@ pub(crate) fn dispatch_verify(
             PlonkKzgBn254::verify(&v, vk, proof, public_inputs)
         },
         ProofSystemId::HyperPlonkKzgBn254 => {
-            // Phase-3 scaffold — currently returns UnimplementedProofSystem,
-            // but wire-format checks run so layout regressions surface.
+            // Phase-3 body (session 3e): full verifier pipeline is wired
+            // end-to-end (parse → challenges → sumcheck → claim
+            // reduction → KZG pairing). The claim reduction's permutation
+            // term and the KZG opening's multi-point reduction are
+            // still scaffold approximations — see crate rustdoc for the
+            // session 3f caveat.
             let v = HyperPlonkKzgBn254::new(&backend);
             HyperPlonkKzgBn254::verify(&v, vk, proof, public_inputs)
         },
