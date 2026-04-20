@@ -59,7 +59,9 @@
 extern crate alloc;
 
 pub mod canonical;
+pub mod sumcheck;
 pub mod verifier;
 
 pub use canonical::{HyperPlonkProof, HyperPlonkVerifyingKey};
+pub use sumcheck::{verify_sumcheck, RoundPolynomial, SumcheckOutput};
 pub use verifier::HyperPlonkKzgBn254;
