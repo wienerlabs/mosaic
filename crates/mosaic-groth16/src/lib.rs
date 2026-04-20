@@ -36,7 +36,9 @@
 
 extern crate alloc;
 
+pub mod batch;
 pub mod canonical;
+pub mod fr_arith;
 pub mod verifier;
 
 pub use canonical::{Groth16Proof, Groth16VerifyingKey};
