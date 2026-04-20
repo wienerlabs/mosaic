@@ -25,6 +25,7 @@ arrayvec = { workspace = true }
 solana-program = { workspace = true, optional = true }
 solana-bn254 = { workspace = true, optional = true }
 solana-keccak-hasher = { workspace = true, optional = true }
+solana-poseidon = { workspace = true, optional = true }
 
 # Arkworks — host-side oracle backend; not pulled in for SBF builds.
 ark-bn254 = { workspace = true, optional = true }
@@ -44,7 +45,12 @@ tracing = { workspace = true, optional = true }
 [features]
 default = []
 std = ["thiserror", "borsh/std", "arrayvec/std", "zeroize/std", "subtle/std"]
-solana = ["dep:solana-program", "dep:solana-bn254", "dep:solana-keccak-hasher"]
+solana = [
+    "dep:solana-program",
+    "dep:solana-bn254",
+    "dep:solana-keccak-hasher",
+    "dep:solana-poseidon",
+]
 host-backend = [
     "std",
     "dep:ark-bn254",
@@ -61,6 +67,10 @@ host-backend = [
     "sha2/std",
     "dep:tiny-keccak",
     "dep:light-poseidon",
+    # Share the solana-poseidon crate on host too; its cfg(not(target_os =
+    # "solana")) path computes Poseidon inline via light-poseidon and is
+    # byte-identical to the SBF syscall output by construction.
+    "dep:solana-poseidon",
 ]
 diagnostics = ["std", "dep:tracing"]
 formal-verify = []

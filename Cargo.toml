@@ -50,9 +50,10 @@ mosaic-sdk = { version = "0.1.0", path = "crates/mosaic-sdk" }
 # Solana — pinned to 2.x; Solana 3.0 CLI is backward-compatible with 2.x program SDK.
 # We deliberately avoid the unstable 3.x API surface during phase 1 to keep MSRV stable.
 solana-program = { version = "2.1.0", default-features = false }
-# alt_bn128 + keccak got split out of solana-program in 2.x — depend explicitly.
+# alt_bn128 + keccak + poseidon got split out of solana-program in 2.x — depend explicitly.
 solana-bn254 = { version = "2.2", default-features = false }
 solana-keccak-hasher = { version = "2.2", default-features = false }
+solana-poseidon = { version = "2.3", default-features = false }
 
 # Arkworks — host-side cryptographic correctness oracle and reference impl.
 ark-bn254 = { version = "0.5.0", default-features = false, features = ["curve"] }

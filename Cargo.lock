@@ -3077,6 +3077,7 @@ dependencies = [
  "sha2 0.10.9",
  "solana-bn254",
  "solana-keccak-hasher",
+ "solana-poseidon",
  "solana-program",
  "subtle",
  "thiserror 1.0.69",
