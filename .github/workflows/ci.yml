@@ -52,11 +52,37 @@ jobs:
   test-host:
     name: tests (host)
     runs-on: ubuntu-latest
+    env:
+      # Needed by crates/mosaic-program/tests/verify_proof_sbf.rs; when
+      # the SBF artifact is missing the test self-skips, so this env var
+      # is only load-bearing in the test-sbf job below.
+      BPF_OUT_DIR: ${{ github.workspace }}/target/deploy
+      SBF_OUT_DIR: ${{ github.workspace }}/target/deploy
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
+
+  test-sbf:
+    name: tests (SBF integration)
+    runs-on: ubuntu-latest
+    needs: build-sbf
+    env:
+      BPF_OUT_DIR: ${{ github.workspace }}/target/deploy
+      SBF_OUT_DIR: ${{ github.workspace }}/target/deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.15/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Build SBF program
+        run: cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
+      - name: Run SBF integration tests
+        run: cargo test -p mosaic-program --test verify_proof_sbf
 
   build-sbf:
     name: build-sbf
