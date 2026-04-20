@@ -73,14 +73,14 @@ and residual risk.
 | T-9 | Memory unsafety | [§ T-9](docs/threat-model.md#t-9-memory-unsafety) |
 | T-10 | Arithmetic overflow | [§ T-10](docs/threat-model.md#t-10-arithmetic-overflow) |
 
-Axes tracked for Phase-2 expansion (issue
-[#63](https://github.com/wienerlabs/mosaic/issues/63)):
+Scope-boundary axes documented in [`docs/threat-model.md`](docs/threat-model.md#scope-boundaries-and-application-responsibilities):
 
-- Under-constrained circuit attacks — *scope boundary: out-of-scope; we
-  verify proofs, not circuits.*
-- Malleable proof vectors — *application responsibility; documented
-  patterns.*
-- Replay safety — *application responsibility; documented patterns.*
+| # | Axis | Where Mosaic draws the line |
+|---|---|---|
+| Axis 1 | Under-constrained circuit attacks | *Out-of-scope by design*; tooling references (Picus, Ecne, ZK-NavigatOR) provided. |
+| Axis 2 | Malleable proof vectors | Application responsibility via nullifier / nonce set; chunked-upload's `session_id` is a worked example. |
+| Axis 3 | Validator determinism | Extends T-5; covers arithmetic, iteration order, allocator. |
+| Axis 4 | Replay safety + instruction binding | Application responsibility; guidance patterns documented. |
 
 ## Known unaudited components
 

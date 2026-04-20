@@ -170,6 +170,175 @@ and offset calculations use `checked_add` / `try_from`. `dev` profile has
 `overflow-checks = true`; `release` has it off but the patterns are
 checked-arithmetic regardless.
 
+## Scope boundaries and application responsibilities
+
+The T-N threats above cover adversarial inputs to Mosaic's byte-level
+interface. Four further axes describe the boundary between what Mosaic
+owns and what consuming applications own. Auditors typically probe these
+within the first hour of an engagement; the sections below pre-answer
+the standard questions.
+
+### Axis 1 — Under-constrained circuit attacks
+
+**What is Mosaic's scope?** Mosaic verifies that *a* proof is
+well-formed and that the stated public inputs satisfy the verification
+equation. It does **not** verify that the underlying circuit correctly
+captures the application's intent. A Circom / arkworks / gnark author
+who forgets a constraint produces a circuit that accepts invalid
+witnesses; Mosaic then correctly verifies proofs of those invalid
+witnesses — the flaw is upstream of our code.
+
+**Concrete failure mode.** The 0xPARC under-constrained Circom audit
+catalogue (<https://github.com/0xPARC/zk-bug-tracker>) documents dozens
+of real-world cases: range checks elided, selector bits unconstrained,
+lookup tables with permutation gaps. A Groth16 proof against a circuit
+with any of these flaws will verify successfully in Mosaic *and on
+Light Protocol's reference verifier* — the algebra is still satisfied.
+
+**Where to look instead.** Circuit-level correctness tooling:
+
+- [Picus](https://github.com/Veridise/Picus) — automated soundness
+  checking for arithmetic circuits.
+- [Ecne](https://github.com/franklynwang/EcneProject) — constraint-gap
+  finder for Circom.
+- [ZK-NavigatOR](https://eprint.iacr.org/2023/1278) — taint-tracking
+  analysis framework.
+- Manual review by a cryptographer familiar with the target system.
+
+**Mosaic's commitment.** The adapter documentation and SECURITY.md
+state this scope boundary explicitly. If a user reports "my proof
+verified but the underlying claim was false", we help them trace it to
+the circuit flaw but do not treat it as a Mosaic vulnerability.
+
+**What an auditor can still check on our side.** That the verifier does
+not *introduce* new soundness flaws on top of a correctly-constrained
+circuit — i.e. that every T-1..T-10 attack vector is mitigated.
+
+### Axis 2 — Malleable proof vectors
+
+**What the SNARK algebra guarantees.** Groth16 proofs are
+non-malleable in the cryptographic sense: an adversary who observes a
+valid `(A, B, C)` for public input `x` cannot produce a distinct
+`(A', B', C')` for the *same* `x` without knowing the witness. This is
+a consequence of the knowledge-of-exponent assumption underlying
+Groth16.
+
+**What that guarantee does not cover.** Two proofs `(A, B, C)` and
+`(A', B', C')` may both be valid for the *same* public inputs and the
+same statement — because the prover is allowed to inject fresh
+randomness. Application replay protection cannot rely on
+"the second proof must equal the first". It must bind each proof to an
+external anti-replay nonce.
+
+**The correct application pattern.**
+
+1. Include a **nonce** or **commitment hash** in the circuit's public
+   inputs.
+2. Maintain on-chain a set of spent nonces (hash set PDA, or a
+   compressed sparse merkle tree for scale).
+3. `verify_proof` reaches success only if the nonce is fresh; then
+   insert it into the spent set atomically.
+
+Mosaic's chunked-upload protocol is a worked example: the
+`session_id` is a 32-byte client-chosen nonce that binds every
+`AppendChunk` and the final `CommitAndVerify` to that specific
+session (design doc § 3.3).
+
+**What Mosaic does not do.** There is no global "spent proof" set
+inside `mosaic-program`. Applications maintain their own.
+
+### Axis 3 — Validator determinism (extends T-5)
+
+T-5 covers error-code divergence. Three additional determinism
+surfaces auditors should probe:
+
+**Arithmetic determinism.** No floating-point operations anywhere in
+library code. All integer arithmetic uses `checked_add` / `try_from`
+on paths reachable from hostile input; the `dev` profile has
+`overflow-checks = true` to catch silent wrapping in tests. Release
+profile disables overflow checks by policy (CU cost) but every reachable
+arithmetic site has been manually audited for overflow-free operation
+within the input domain.
+
+**Iteration order determinism.** No `HashMap` or `HashSet` in hot
+paths (they iterate in random order by default in Rust). Where
+associative lookup is needed, we use `BTreeMap` (deterministic order) or
+`ArrayVec` + linear scan (deterministic by construction).
+
+**Allocator determinism.** SBF uses a bump allocator whose layout is
+fixed per `requested_heap_frame`. `forbid(unsafe_code)` rules out any
+allocator behavior that could vary across validator implementations.
+Post-issue-#58 migration to `deny(unsafe_code)` + `unsafe-arena`
+feature requires Miri CI as the lockstep gate specifically to rule
+out allocator non-determinism in that future path.
+
+**Reference incident.** [SIMD-0129][simd-0129] documents the consensus
+failure incident that motivated this axis. We treat every new error
+code, every new allocator use, and every new iteration as a
+divergence candidate during code review.
+
+[simd-0129]: https://github.com/solana-foundation/solana-improvement-documents/pull/129
+
+**What an auditor can check.** That no addition of future code paths
+can violate the above. The Miri CI job on the unsafe-arena feature is
+the mechanical backstop; the review discipline in CONTRIBUTING.md is
+the human layer.
+
+### Axis 4 — Replay safety and instruction binding
+
+**What Mosaic does.** The verifier returns `Ok(())` for any valid
+proof matching a VK. It does not track which proofs have been seen
+before. Submitting the same proof + VK + public inputs twice in two
+transactions produces two `Ok(())` returns.
+
+**Why this is correct.** Replay protection is inherently application-
+specific: "the same proof for the same claim" is legitimate in one
+protocol (e.g. optimistic rollup proofs where multiple provers may
+submit the same valid state transition) and illegitimate in another
+(single-use attestation, one-time access token).
+
+**The correct application pattern.**
+
+```rust
+// Pseudocode for an attestation-minting program:
+pub fn mint_if_proof_valid(ctx: Context<MintIfValid>, proof: Proof) -> Result<()> {
+    // 1. Derive the nullifier from the proof's public inputs.
+    let nullifier = derive_nullifier(&proof.public_inputs);
+
+    // 2. Check and insert into the spent set atomically.
+    if ctx.accounts.spent_nullifiers.contains(&nullifier) {
+        return Err(Error::ProofAlreadyUsed);
+    }
+    ctx.accounts.spent_nullifiers.insert(nullifier);
+
+    // 3. NOW call Mosaic's verifier.
+    mosaic_sdk::invoke_verify(&ctx.accounts.mosaic, &proof, &ctx.accounts.vk)?;
+
+    // 4. Issue the token.
+    mint_attestation_token(&ctx.accounts)
+}
+```
+
+**Instruction binding.** Each `VerifyProof` call is a single
+transaction; chunked-upload sessions are bound to a payer pubkey via
+PDA seeds (design doc § 3.2) so an adversary cannot redirect someone
+else's upload to attest to a claim they did not intend. The chunked
+protocol also binds `proof_system_id` into the rolling-hash seed `h_0`,
+so bytes destined for a Groth16 verify cannot be redirected to a
+hypothetical future Plonk verify.
+
+**What Mosaic does not do.** There is no `verify_once` variant that
+records the proof digest on-chain. Adding one would either (a) require
+a global "seen proofs" PDA (large state) or (b) require the application
+to supply a commit account (which pushes the problem back to the
+application anyway). We deliberately do neither; applications that
+want single-use semantics implement them at the nullifier layer.
+
+**Reference incidents.** Classical replay bug in early ZK-rollup
+systems where a valid proof for state `S` could be re-submitted to
+finalize the same transition twice. Our guidance explicitly avoids
+that class of bug at the application/protocol layer.
+
 ## Audit history
 
-See `AUDIT.md`.
+See [`AUDIT.md`](../AUDIT.md).

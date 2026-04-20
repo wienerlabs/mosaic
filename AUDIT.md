@@ -84,6 +84,7 @@ auditor is invited to challenge are marked ⚠.
 - [x] `bpf-bench` measures actual on-chain CU against ADR-0005 caps.
 - [x] `#![forbid(unsafe_code)]` workspace-wide (migration to `deny` tracked [#58](https://github.com/wienerlabs/mosaic/issues/58)).
 - [x] `cargo-deny`, `cargo-audit` in CI.
+- [x] Scope-boundary axes documented (under-constrained circuits, malleable proofs, validator determinism, replay safety) — [`docs/threat-model.md`](docs/threat-model.md#scope-boundaries-and-application-responsibilities).
 - [ ] ⚠ `cargo-vet` bootstrap landed; full import chain pending #59.
 - [ ] ⚠ Poseidon on-chain syscall path not wired for Solana 2.x (#8).
 - [ ] ⚠ Fixtures are programmatic (arkworks-synthesized JSON),
