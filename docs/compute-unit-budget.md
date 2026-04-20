@@ -30,16 +30,32 @@ For a VK with `n` public inputs:
 
 Concrete examples:
 
-| `n` (public inputs) | Total CU |
-|---|---|
-| 1 | 44,300 |
-| 5 | 57,500 |
-| 10 | 74,000 |
-| 25 | 123,500 |
-| 42 | 179,600 (right at the cap) |
+| `n` (public inputs) | Algorithmic CU | Measured CU (actual) |
+|---|---|---|
+| 1 | 44,300 | **80,296** (see below) |
+| 5 | 57,500 | — |
+| 10 | 74,000 | — |
+| 25 | 123,500 | — |
+| 42 | 179,600 (right at the cap) | — |
 
-`Groth16Verifier::estimated_compute_units` returns this estimate
-algorithmically.
+`Groth16Verifier::estimated_compute_units` returns the *algorithmic*
+estimate; actual on-chain CU is higher because of Borsh deserialization
+of the `VerifyProofData` payload, instruction dispatch, `msg!` logging,
+and the `solana-bn254` syscall wrapper allocations.
+
+### Phase 1 measured baseline (2026-04-20)
+
+| Fixture | Measured | Cap | Headroom |
+|---|---|---|---|
+| `mul-circuit` (1 public input) | **80,296 CU** | 180,000 | 55.4% unused |
+
+Source: `mosaic-bench/src/bin/bpf_bench.rs` against the canonical
+fixture at `tests/fixtures/groth16/mul-circuit/canonical/`. Measurement
+is pinned in `bpf_bench.rs::TARGETS[0].baseline_cu`; the bench warns
+(`WARN` status) when a measurement deviates from this by more than 5%.
+Issues [#37](https://github.com/wienerlabs/mosaic/issues/37) and
+[#38](https://github.com/wienerlabs/mosaic/issues/38) track CU reductions
+for the Groth16 hot path; both would drop this number further.
 
 ## Client transaction overhead
 

@@ -1,13 +1,329 @@
-//! `bpf-bench` — drive the on-chain reference program through
-//! `solana-program-test` and report the CU consumption.
+//! `bpf-bench` — drives `mosaic_program.so` through `solana-program-test`
+//! and parses CU consumption from program logs.
 //!
-//! TODO(mosaic-014): wire the program loading + CU reporting once the
-//! reference program lands its first real fixtures. Phase 1 ships the
-//! skeleton so CI integration can be staged.
+//! Fails (exit 1) when any system exceeds its ADR-0005 hard cap. Warns
+//! (exit 0) when a system exceeds its last-measured baseline by more than
+//! [`BASELINE_TOLERANCE_PCT`] — useful signal without blocking unrelated PRs.
+//!
+//! Run locally:
+//!
+//! ```text
+//! cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
+//! cargo run --release -p mosaic-bench --bin bpf-bench
+//! ```
+//!
+//! ## CU baseline source
+//!
+//! Baselines are literal constants in this file. When a measured value
+//! deviates from baseline by more than [`BASELINE_TOLERANCE_PCT`], the
+//! bench prints a warning pointing to the PR that should update the
+//! baseline. The hard cap (ADR-0005 target) is a different threshold —
+//! that one blocks CI unconditionally.
 
-use anyhow::Result;
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::print_stderr
+)]
 
-fn main() -> Result<()> {
-    eprintln!("mosaic bpf-bench: phase 1 stub — see TODO(mosaic-014)");
+use anyhow::{anyhow, Context, Result};
+use borsh::BorshSerialize;
+use mosaic_bench::prelude::*; // re-exports HostBackend, Groth16Verifier, etc.
+use solana_program_test::{BanksClient, ProgramTest};
+use solana_sdk::{
+    compute_budget::ComputeBudgetInstruction,
+    instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
+    signature::Keypair,
+    signer::Signer,
+    transaction::Transaction,
+};
+use std::{fs, path::PathBuf, process::ExitCode};
+
+// The reference program's declared id. Hardcoded because mosaic-bench does
+// not depend on mosaic-program (avoids pulling solana-program as a direct
+// dep into the bench crate's compile graph).
+const PROGRAM_ID: Pubkey =
+    solana_sdk::pubkey!("MosA1cVer1f1er11111111111111111111111111111");
+
+/// Tolerance around the last-measured baseline. A deviation beyond this
+/// triggers a WARN but not a hard failure.
+const BASELINE_TOLERANCE_PCT: f64 = 5.0;
+
+/// Per-system hard caps from ADR-0005. Exceeding one of these blocks CI.
+#[derive(Debug)]
+struct SystemTarget {
+    name: &'static str,
+    hard_cap_cu: u64,
+    /// Established baseline at implementation time.
+    /// When changing the verifier, update with the new measurement + PR
+    /// reference in the commit message.
+    baseline_cu: u64,
+}
+
+const TARGETS: &[SystemTarget] = &[
+    SystemTarget {
+        name: "groth16_bn254_mul_circuit_1pi",
+        hard_cap_cu: 180_000,
+        // Established 2026-04-20 on the tests/fixtures/groth16/mul-circuit
+        // canonical fixtures (a=7, b=6, c=42, single public input).
+        // Decomposition per ADR-0005 § 2:
+        //   5K (deserialize) + 3.3K (G1Mul) + 0.1K (G1Add) + 36K (Pairing)
+        //   ≈ 45K algorithmic + ~35K Borsh/dispatch/syscall overhead
+        //   = 80 296 measured.
+        // If this changes by >5%, investigate and update with PR reference.
+        baseline_cu: 80_296,
+    },
+];
+
+#[derive(BorshSerialize)]
+struct VerifyProofData {
+    proof_system_id: u8,
+    vk: Vec<u8>,
+    proof: Vec<u8>,
+    public_inputs: Vec<u8>,
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+fn fixture_bytes(name: &str) -> Result<Vec<u8>> {
+    let path = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("groth16")
+        .join("mul-circuit")
+        .join("canonical")
+        .join(name);
+    fs::read(&path).with_context(|| format!("failed to read fixture {path:?}"))
+}
+
+fn sbf_artifact_exists() -> Result<()> {
+    let path = workspace_root().join("target").join("deploy").join("mosaic_program.so");
+    if !path.exists() {
+        anyhow::bail!(
+            "SBF artifact missing at {path:?}; run `cargo build-sbf --tools-version v1.52 \
+             --manifest-path crates/mosaic-program/Cargo.toml` first"
+        );
+    }
     Ok(())
+}
+
+async fn setup_banks() -> (BanksClient, Keypair, solana_sdk::hash::Hash) {
+    let mut pt = ProgramTest::default();
+    pt.add_program("mosaic_program", PROGRAM_ID, None);
+    pt.start().await
+}
+
+/// `ProgramTest::add_program` with `None` looks in `$BPF_OUT_DIR` /
+/// `$SBF_OUT_DIR`. We don't set these at runtime (Rust 2024 makes
+/// `std::env::set_var` unsafe) — instead, fail fast with a clear message.
+///
+/// CI sets them via the workflow `env:` block; local developers export
+/// from their shell.
+fn require_sbf_env() -> Result<()> {
+    let deploy_dir = workspace_root().join("target").join("deploy");
+    if std::env::var_os("BPF_OUT_DIR").is_none() && std::env::var_os("SBF_OUT_DIR").is_none() {
+        anyhow::bail!(
+            "neither BPF_OUT_DIR nor SBF_OUT_DIR is set; export one of them to \
+             {deploy_dir:?} (or wherever cargo-build-sbf deposits mosaic_program.so)",
+        );
+    }
+    Ok(())
+}
+
+fn build_verify_ix(vk: &[u8], proof: &[u8], public_inputs: &[u8]) -> Instruction {
+    let payload = VerifyProofData {
+        proof_system_id: 0x01, // Groth16Bn254
+        vk: vk.to_vec(),
+        proof: proof.to_vec(),
+        public_inputs: public_inputs.to_vec(),
+    };
+    let mut data = Vec::with_capacity(1 + 1 + vk.len() + proof.len() + public_inputs.len() + 16);
+    data.push(0x01); // InstructionTag::VerifyProof
+    borsh::to_writer(&mut data, &payload).expect("borsh VerifyProofData");
+    Instruction { program_id: PROGRAM_ID, accounts: Vec::<AccountMeta>::new(), data }
+}
+
+/// Parse `Program <id> consumed <N> of <M> compute units` from program logs.
+///
+/// Returns the first `N` for a log line emitted by our program.
+fn extract_cu(logs: &[String]) -> Option<u64> {
+    let needle = format!("Program {PROGRAM_ID} consumed ");
+    for line in logs {
+        let Some(rest) = line.strip_prefix(&needle) else { continue };
+        let n_str = rest.split_whitespace().next()?;
+        if let Ok(n) = n_str.parse::<u64>() {
+            return Some(n);
+        }
+    }
+    None
+}
+
+#[derive(Debug)]
+struct MeasurementReport {
+    name: &'static str,
+    measured_cu: u64,
+    hard_cap_cu: u64,
+    baseline_cu: u64,
+    /// `Some(pct)` when measured_cu differs from baseline by more than tolerance.
+    baseline_drift_pct: Option<f64>,
+    exceeds_hard_cap: bool,
+}
+
+impl MeasurementReport {
+    fn from_target(target: &SystemTarget, measured_cu: u64) -> Self {
+        let baseline_drift_pct = if target.baseline_cu == 0 {
+            None
+        } else {
+            let pct = ((measured_cu as f64 - target.baseline_cu as f64).abs() * 100.0)
+                / target.baseline_cu as f64;
+            if pct > BASELINE_TOLERANCE_PCT {
+                Some(pct)
+            } else {
+                None
+            }
+        };
+        Self {
+            name: target.name,
+            measured_cu,
+            hard_cap_cu: target.hard_cap_cu,
+            baseline_cu: target.baseline_cu,
+            baseline_drift_pct,
+            exceeds_hard_cap: measured_cu > target.hard_cap_cu,
+        }
+    }
+
+    fn status(&self) -> &'static str {
+        if self.exceeds_hard_cap {
+            "FAIL"
+        } else if self.baseline_drift_pct.is_some() {
+            "WARN"
+        } else {
+            "OK"
+        }
+    }
+}
+
+async fn bench_groth16_mul_circuit(target: &SystemTarget) -> Result<MeasurementReport> {
+    let vk = fixture_bytes("vk.bin")?;
+    let proof = fixture_bytes("proof.bin")?;
+    let public_inputs = fixture_bytes("public_inputs.bin")?;
+
+    // Host-backend preflight: fail fast if the fixture itself is broken,
+    // before we spin up the banks server.
+    let backend = HostBackend::new();
+    let verifier = Groth16Verifier::<_, false>::new(&backend);
+    ProofSystem::verify(&verifier, &vk, &proof, &public_inputs)
+        .map_err(|e| anyhow!("host preflight failed: {e}"))?;
+
+    sbf_artifact_exists()?;
+    require_sbf_env()?;
+    let (banks, payer, blockhash) = setup_banks().await;
+
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(300_000);
+    let verify_ix = build_verify_ix(&vk, &proof, &public_inputs);
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+
+    let meta = banks
+        .process_transaction_with_metadata(tx)
+        .await
+        .context("submit VerifyProof tx")?;
+
+    if let Err(e) = meta.result {
+        let logs = meta
+            .metadata
+            .as_ref()
+            .map(|m| m.log_messages.join("\n"))
+            .unwrap_or_default();
+        anyhow::bail!("verify tx failed: {e:?}\nlogs:\n{logs}");
+    }
+
+    let logs = meta
+        .metadata
+        .ok_or_else(|| anyhow!("no transaction metadata returned"))?
+        .log_messages;
+    let cu = extract_cu(&logs).ok_or_else(|| {
+        anyhow!(
+            "could not find CU consumption line in logs:\n{}",
+            logs.join("\n")
+        )
+    })?;
+
+    Ok(MeasurementReport::from_target(target, cu))
+}
+
+fn print_report(reports: &[MeasurementReport]) {
+    println!("\nmosaic bpf-bench — CU regression report");
+    println!("────────────────────────────────────────────────────────────");
+    println!(
+        "{:<40} {:>10} {:>10} {:>10} {:>6}",
+        "SYSTEM", "MEASURED", "CAP", "BASELINE", "STATUS"
+    );
+    for r in reports {
+        let baseline_display = if r.baseline_cu == 0 {
+            "none".to_string()
+        } else {
+            r.baseline_cu.to_string()
+        };
+        println!(
+            "{:<40} {:>10} {:>10} {:>10} {:>6}",
+            r.name, r.measured_cu, r.hard_cap_cu, baseline_display, r.status(),
+        );
+        if let Some(pct) = r.baseline_drift_pct {
+            println!(
+                "    ↳ baseline drift {:+.2}% (tolerance ±{:.1}%)",
+                pct, BASELINE_TOLERANCE_PCT,
+            );
+        }
+        if r.exceeds_hard_cap {
+            println!(
+                "    ↳ HARD CAP EXCEEDED by {} CU — see docs/compute-unit-budget.md",
+                r.measured_cu.saturating_sub(r.hard_cap_cu),
+            );
+        }
+    }
+    println!();
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    let mut reports = Vec::new();
+    let mut any_hard_fail = false;
+
+    for target in TARGETS {
+        match target.name {
+            "groth16_bn254_mul_circuit_1pi" => match bench_groth16_mul_circuit(target).await {
+                Ok(r) => {
+                    any_hard_fail |= r.exceeds_hard_cap;
+                    reports.push(r);
+                },
+                Err(e) => {
+                    eprintln!("error benching {}: {e}", target.name);
+                    return ExitCode::from(2);
+                },
+            },
+            other => eprintln!("unknown bench target: {other}"),
+        }
+    }
+
+    print_report(&reports);
+    if any_hard_fail {
+        eprintln!("one or more systems exceeded their ADR-0005 hard cap");
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
