@@ -32,12 +32,20 @@ which works.
 ### Code style
 
 - `cargo fmt --all` before every commit (CI enforces).
-- `cargo clippy --workspace --all-features --all-targets -- -D warnings`
-  must pass. We run `pedantic` + `nursery` lints; allows are documented in
-  workspace `Cargo.toml`.
+- `cargo clippy ... -D clippy::correctness -D clippy::suspicious -D clippy::todo -D clippy::unimplemented`
+  must pass (workspace-wide, all-targets, all-features). Pedantic / nursery
+  / cargo groups are warn-level and visible in the log but do not fail CI.
 - Every public item has a `///` rustdoc.
 - Every crate has a crate-level `//!` block.
 - `#![forbid(unsafe_code)]` is mandatory in library crates.
+
+#### Lint suppressions
+
+Every `#[allow(clippy::…)]` annotation must have a matching entry in
+[`docs/lint-policy.md`](docs/lint-policy.md) explaining why it's
+warranted. New suppressions require a PR that updates the policy
+document in the same change. Audit firms read this document as part of
+the audit scope.
 
 ### Commit messages
 

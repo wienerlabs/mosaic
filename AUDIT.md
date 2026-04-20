@@ -5,23 +5,87 @@ appended in reverse chronological order.
 
 ---
 
-## 2026-04-19 — Phase 1 bootstrap (no audit)
+## 2026-04-20 — Phase 1 scope frozen; **ready for external review**
 
 | Field | Value |
 |---|---|
-| Auditor | None |
-| Scope | All crates |
-| Commit | `89e98fe` (initial bootstrap) |
-| Findings | N/A — codebase is too young to audit |
-| Status | **Not audited.** Do not use in production. |
+| Tag | [`v0.1.0-phase1`](https://github.com/wienerlabs/mosaic/releases/tag/v0.1.0-phase1) |
+| Auditor | **None yet** — outreach in progress (issue [#61](https://github.com/wienerlabs/mosaic/issues/61)) |
+| Scope | See § Phase-1 audit scope below |
+| Commit | Tag head — SHA depends on final pre-audit-readiness commits |
+| Findings | N/A — pre-audit |
+| Status | **Phase 1 scope ready for review.** Do not use in production pending audit. |
 
-The Phase 1 release ships a working Groth16 verifier mirroring the
-algorithm of Light Protocol's `groth16-solana` but as a cleanroom
-implementation. No external audit has been commissioned.
+### Phase-1 audit scope (locked at `v0.1.0-phase1`)
 
-We plan to commission an audit when Phase 1 freezes (target Q3 2026) and
-the snarkjs / arkworks adapter pipeline is exercised against production
-fixtures.
+#### In scope
+- [`crates/mosaic-core/`](crates/mosaic-core) — trait hierarchy, error
+  taxonomy, syscall abstraction.
+- [`crates/mosaic-groth16/`](crates/mosaic-groth16) — BN254 Groth16 verifier
+  (host + SBF backends).
+- [`crates/mosaic-serde/`](crates/mosaic-serde) — **snarkjs + arkworks
+  adapters only**; `gnark`, `halo2`, `plonky3`, `risc0` modules are stubs
+  and out-of-scope.
+- [`crates/mosaic-chunked/`](crates/mosaic-chunked) — PDA layout, rolling
+  SHA-256 protocol, instruction data model.
+- [`crates/mosaic-program/`](crates/mosaic-program) — reference Solana
+  program dispatcher, including chunked-upload instruction handlers.
+- [`docs/adr/`](docs/adr) — five ADRs (trait hierarchy, error taxonomy,
+  serialization, chunked upload, CU budget).
+- [`docs/design/0001-chunked-upload-handlers.md`](docs/design/0001-chunked-upload-handlers.md)
+  — chunked-upload implementation contract.
+- [`docs/threat-model.md`](docs/threat-model.md) — T-1..T-10 adversarial
+  input vectors.
+
+#### Out of scope
+- `crates/mosaic-plonk/` — Phase 2 stub, `UnimplementedProofSystem` return only.
+- `crates/mosaic-stark/` — Phase 3 stub.
+- `crates/mosaic-nova/` — Phase 3 stub.
+- `crates/mosaic-serde/src/{gnark,halo2,plonky3,risc0}.rs` — stubs.
+- `crates/mosaic-sdk/` — host-only client SDK. Out of audit scope because
+  on-chain security does not depend on SDK correctness.
+- `crates/mosaic-bench/` — measurement tooling.
+- `crates/mosaic-fuzz/` — fuzz harnesses (audited *via* their findings, not
+  as code under review).
+- `tests/` — test harness, not production code.
+- Upstream dependencies — audited by their own projects.
+
+### Known unaudited components
+
+See [SECURITY.md § Known unaudited components](SECURITY.md#known-unaudited-components).
+
+### Review artifacts prepared for auditors
+
+The following artifacts are intentionally maintained in the repository so
+auditors can audit the audit trail itself:
+
+| Artifact | Purpose |
+|---|---|
+| [`CHANGELOG.md`](CHANGELOG.md) | Phase-1 scope locked at `v0.1.0-phase1`. |
+| [`docs/adr/*.md`](docs/adr) | Every architectural decision with context + consequences. |
+| [`docs/design/*.md`](docs/design) | Implementation contracts for non-trivial protocols. |
+| [`docs/threat-model.md`](docs/threat-model.md) | Adversarial input vectors T-1..T-10. |
+| [`docs/lint-policy.md`](docs/lint-policy.md) | Every `#[allow(clippy::…)]` justified. |
+| [`docs/compute-unit-budget.md`](docs/compute-unit-budget.md) | Per-system CU caps + measured baselines. |
+| `supply-chain/` | `cargo-vet` attestation configuration. |
+
+### Phase-1 self-review checklist
+
+Completed internally before opening for external review. Items the
+auditor is invited to challenge are marked ⚠.
+
+- [x] Zero `unimplemented!()` / `todo!()` / `panic!()` in library code paths.
+- [x] Every `OnChainError` discriminant pinned by `discriminant_stability` test.
+- [x] Differential test harness passes (arkworks reference vs Mosaic host).
+- [x] Round-trip byte equality: snarkjs / arkworks / canonical.
+- [x] Chunked-upload integration tests cover happy path + 6 security gates.
+- [x] `bpf-bench` measures actual on-chain CU against ADR-0005 caps.
+- [x] `#![forbid(unsafe_code)]` workspace-wide (migration to `deny` tracked [#58](https://github.com/wienerlabs/mosaic/issues/58)).
+- [x] `cargo-deny`, `cargo-audit` in CI.
+- [ ] ⚠ `cargo-vet` bootstrap landed; full import chain pending #59.
+- [ ] ⚠ Poseidon on-chain syscall path not wired for Solana 2.x (#8).
+- [ ] ⚠ Fixtures are programmatic (arkworks-synthesized JSON),
+      not Circom-compiled (#24).
 
 ---
 
@@ -29,23 +93,23 @@ fixtures.
 
 | Milestone | Target | Status |
 |---|---|---|
-| Internal review of `mosaic-core` trait surface | Phase 1 freeze | Pending |
+| Internal review of `mosaic-core` trait surface | Phase 1 freeze | **Done** ([`v0.1.0-phase1`](https://github.com/wienerlabs/mosaic/releases/tag/v0.1.0-phase1)) |
+| Pre-audit outreach (4 firms) | 2026-Q2 start | In progress (issue [#61](https://github.com/wienerlabs/mosaic/issues/61)) |
+| External audit firm selection | 2026-Q2 end | Pending quotes |
 | External audit of `mosaic-groth16` + reference program | Phase 2 release | Pending |
 | External audit of `mosaic-plonk` | Phase 2 freeze | Pending |
-| External audit of `mosaic-stark` + chunked-upload | Phase 3 release | Pending |
+| External audit of `mosaic-stark` + chunked-upload verifier path | Phase 3 release | Pending |
 | Recurring audit (annual) | Post-1.0.0 | Pending |
 
 ---
 
 ## Reporting issues
 
-Vulnerability reports should follow the [SECURITY.md](SECURITY.md) policy.
-Audit findings — once we have audits — will be tracked in this file with
-a fix commit reference.
+Vulnerability reports follow the [SECURITY.md](SECURITY.md) policy.
+Audit findings — once we have audits — are tracked in this file with
+fix commit references.
 
----
-
-## Format
+## Entry template
 
 Each audit entry follows this template:
 
@@ -61,6 +125,5 @@ Each audit entry follows this template:
 | Status | <Closed / Mitigated / Open> |
 ```
 
-Findings that are *fixed* in a follow-up commit must reference the fix
-commit SHA. Findings that are *accepted-as-risk* must include a written
-justification.
+Findings that are *fixed* in a follow-up commit reference the fix commit
+SHA. Findings that are *accepted-as-risk* include a written justification.

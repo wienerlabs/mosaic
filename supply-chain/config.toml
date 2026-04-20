@@ -1,0 +1,70 @@
+# cargo-vet configuration for Mosaic
+#
+# See https://mozilla.github.io/cargo-vet/ for the full specification.
+#
+# Phase 1 bootstrap — this file seeds the attestation chain. Full import
+# chain + CI enforcement is tracked by
+# https://github.com/wienerlabs/mosaic/issues/59.
+
+[cargo-vet]
+version = "0.10"
+
+# Criteria we audit against. We use the standard `safe-to-deploy` and
+# `safe-to-run` criteria as defined by cargo-vet; custom criteria can
+# be added later if we identify Mosaic-specific audit axes.
+
+[imports.bytecode-alliance]
+url = "https://raw.githubusercontent.com/bytecodealliance/wasmtime/main/supply-chain/audits.toml"
+
+[imports.google]
+url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
+
+[imports.mozilla]
+url = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
+
+[imports.embark-studios]
+url = "https://raw.githubusercontent.com/EmbarkStudios/rust-ecosystem/main/audits.toml"
+
+# Individual audits live in audits.toml. exemptions.toml records
+# crates we rely on but haven't audited yet — this list shrinks over
+# time as we import or perform audits.
+
+[policy.mosaic-core]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-groth16]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-plonk]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-stark]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-nova]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-serde]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-chunked]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-program]
+criteria = "safe-to-deploy"
+
+[policy.mosaic-sdk]
+criteria = "safe-to-run"
+
+[policy.mosaic-bench]
+criteria = "safe-to-run"
+
+[policy.mosaic-fuzz]
+criteria = "safe-to-run"
+
+# Crates whose audit depth must be `safe-to-deploy` because they run
+# on-chain via the SBF entry point (transitively included from mosaic-program):
+#   solana-program, solana-bn254, solana-keccak-hasher, ark-bn254,
+#   light-poseidon (host only — safe-to-run), sha2 (host only), etc.
+# These are enforced via the [policy.<crate>] blocks above and the
+# criteria annotations that cargo-vet propagates across the dep graph.

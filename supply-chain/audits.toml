@@ -1,0 +1,26 @@
+# Wiener Labs internal audits, accessible to external cargo-vet users.
+#
+# Format documented at
+# https://mozilla.github.io/cargo-vet/writing-audits.html.
+#
+# Phase 1 — empty. Our audit workflow is:
+#
+# 1. Review a new dependency or a version bump.
+# 2. Add an entry here with the reviewer (Wiener Labs handle) and the
+#    reviewed version range.
+# 3. If external contributors consume our attestations via their own
+#    cargo-vet config, they see our reviews under the
+#    `imports.wienerlabs` heading pointing at this file.
+#
+# Tracking issue for the full bootstrap:
+# https://github.com/wienerlabs/mosaic/issues/59
+
+# criteria = "safe-to-deploy" | "safe-to-run" | custom
+
+# Example entry (keep commented until we have a real audit):
+#
+# [[audits.example-crate]]
+# version = "1.2.3"
+# criteria = "safe-to-deploy"
+# who = "0raclus <0raclus@wienerlabs.com>"
+# notes = "Reviewed for introduction via #PR-123."

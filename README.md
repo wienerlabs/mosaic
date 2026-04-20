@@ -3,10 +3,11 @@
 > **Proof-system-agnostic on-chain verification for Solana.**
 > One API. Multiple proving systems. No Groth16 wrapping required.
 
-[![CI](https://img.shields.io/badge/ci-pending-lightgrey)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Status: Phase 1](https://img.shields.io/badge/status-phase%201%20bootstrap-yellow.svg)](#status)
+[![Release: v0.1.0-phase1](https://img.shields.io/badge/release-v0.1.0--phase1-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.1.0-phase1)
+[![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
 (Light Protocol's `groth16-solana`). Every other proof system — PLONK,
@@ -168,9 +169,17 @@ same locally.
 
 ## Security
 
-- **Vulnerability reports:** see [SECURITY.md](SECURITY.md).
+- **Phase-1 scope freeze:** [`v0.1.0-phase1`](https://github.com/wienerlabs/mosaic/releases/tag/v0.1.0-phase1).
+  External audit-ready (pending firm engagement per issue [#19](https://github.com/wienerlabs/mosaic/issues/19) / [#61](https://github.com/wienerlabs/mosaic/issues/61)).
+- **Vulnerability reports:** see [SECURITY.md](SECURITY.md) and the
+  [disclosure-timeline SLA](docs/responsible-disclosure-timeline.md).
 - **Audit history:** see [AUDIT.md](AUDIT.md).
 - **Threat model:** see [docs/threat-model.md](docs/threat-model.md).
+- **Supply chain:** `cargo-deny` + `cargo-audit` run in CI; `cargo-vet`
+  attestation bootstrap at [`supply-chain/`](supply-chain/README.md).
+- **Lint policy:** [`docs/lint-policy.md`](docs/lint-policy.md) is the
+  audit-facing registry of every clippy suppression.
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
