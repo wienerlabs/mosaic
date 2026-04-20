@@ -22,6 +22,7 @@ mosaic-plonk = { workspace = true, features = ["solana"] }
 mosaic-hyperplonk = { workspace = true, features = ["solana"] }
 mosaic-halo2 = { workspace = true, features = ["solana"] }
 mosaic-stark = { workspace = true, features = ["solana"] }
+mosaic-nova = { workspace = true, features = ["solana"] }
 mosaic-chunked = { workspace = true, features = ["solana"] }
 solana-program = { workspace = true }
 borsh = { workspace = true }

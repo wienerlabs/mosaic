@@ -44,6 +44,7 @@ use mosaic_core::{
 use mosaic_groth16::Groth16Verifier;
 use mosaic_halo2::Halo2KzgBn254;
 use mosaic_hyperplonk::HyperPlonkKzgBn254;
+use mosaic_nova::NovaFolding;
 use mosaic_plonk::PlonkKzgBn254;
 use mosaic_stark::FriStark;
 use solana_program::{
@@ -190,9 +191,17 @@ pub(crate) fn dispatch_verify(
             let v = FriStark::new(&backend);
             FriStark::verify(&v, vk, proof, public_inputs)
         },
-        ProofSystemId::Risc0Stark
-        | ProofSystemId::NovaFolding
-        | ProofSystemId::ProtoStarFolding => Err(OnChainError::UnimplementedProofSystem),
+        ProofSystemId::NovaFolding | ProofSystemId::ProtoStarFolding => {
+            // Phase-3 scaffold. Nova / HyperNova / ProtoStar share the
+            // same canonical layout; the proof's variant tag byte
+            // disambiguates inside `NovaFolding::verify`. The Halo2/
+            // PLONK dispatcher discriminant is coarser than the folding
+            // variant tag — ProtoStarFolding routes here too, with the
+            // proof's own tag byte claiming ProtoStar (variant = 2).
+            let v = NovaFolding::new(&backend);
+            NovaFolding::verify(&v, vk, proof, public_inputs)
+        },
+        ProofSystemId::Risc0Stark => Err(OnChainError::UnimplementedProofSystem),
         // `ProofSystemId` is `#[non_exhaustive]`; new variants land via
         // ADR-0001 amendment and add their dispatch arms above.
         _ => Err(OnChainError::UnknownProofSystem),

@@ -3152,7 +3152,10 @@ dependencies = [
 name = "mosaic-nova"
 version = "0.3.0-phase3-scaffolds"
 dependencies = [
+ "ark-bn254 0.5.0",
+ "ark-ff 0.5.0",
  "mosaic-core",
+ "mosaic-plonk",
 ]
 
 [[package]]
@@ -3178,6 +3181,7 @@ dependencies = [
  "mosaic-groth16",
  "mosaic-halo2",
  "mosaic-hyperplonk",
+ "mosaic-nova",
  "mosaic-plonk",
  "mosaic-stark",
  "solana-program",
