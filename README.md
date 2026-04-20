@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.1.0-phase1](https://img.shields.io/badge/release-v0.1.0--phase1-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.1.0-phase1)
+[![Release: v0.2.0-phase2](https://img.shields.io/badge/release-v0.2.0--phase2-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.2.0-phase2)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -32,22 +32,25 @@ verifier.verify(&vk_bytes, &proof_bytes, &public_inputs_bytes)?;
 
 ## Status
 
-**Phase 1 (this release)**: workspace bootstrap.
+**Phase 2 (this release)**: production PLONK verifier + Groth16 batch
+verification shipping alongside Phase-1 Groth16 single-proof path.
 
-| Component | Status |
-|---|---|
-| `mosaic-core` (traits, errors, syscall abstraction) | ✅ Implemented |
-| `mosaic-groth16` (BN254 verifier) | ✅ Implemented (host + SBF backends) |
-| `mosaic-serde` snarkjs adapter | ✅ Implemented |
-| `mosaic-serde` arkworks adapter | ✅ Implemented |
-| `mosaic-serde` gnark / halo2 / plonky3 / risc0 | 🚧 Stub (Phase 2/3) |
-| `mosaic-plonk` / `mosaic-stark` / `mosaic-nova` | 🚧 Stub (Phase 2/3) |
-| `mosaic-chunked` data model | ✅ Implemented |
-| `mosaic-chunked` instruction handlers | 🚧 TODO(mosaic-006) |
-| Reference Solana program | ✅ Compiles to SBF |
-| Differential test harness | ✅ Scaffolded |
-| Fuzz harnesses (3) | ✅ Scaffolded |
-| Audit | 🔴 Not yet performed |
+| Component | Status | On-chain CU |
+|---|---|---|
+| `mosaic-core` (traits, errors, syscall abstraction) | ✅ Production | — |
+| `mosaic-groth16` single verify | ✅ Production | 80,296 |
+| `mosaic-groth16` batch verify (N=5, Bowe-Gabizon) | ✅ Production | 230,626 (46K/proof, **-42%**) |
+| `mosaic-plonk` KZG-PLONK BN254 verifier | ✅ Production | 747,666 |
+| `mosaic-serde` snarkjs adapter (Groth16 + PLONK) | ✅ Production | — |
+| `mosaic-serde` arkworks adapter | ✅ Production | — |
+| `mosaic-serde` gnark / halo2 / plonky3 / risc0 | 🚧 Stub (Phase 3) | — |
+| `mosaic-stark` / `mosaic-nova` / HyperPlonk | 🚧 Stub (Phase 3) | — |
+| `mosaic-chunked` data model | ✅ Implemented | — |
+| `mosaic-chunked` instruction handlers | ✅ Production | — |
+| Reference Solana program | ✅ 557 KB SBF ELF | — |
+| Differential test harness (arkworks + snarkjs fixture) | ✅ Production | — |
+| Fuzz harnesses (3) | ✅ Scaffolded | — |
+| External audit | 🔴 Not yet commissioned | — |
 
 See [`AUDIT.md`](AUDIT.md) for audit history and [`SECURITY.md`](SECURITY.md)
 for the responsible-disclosure policy.

@@ -7,13 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for v0.1.0
+### Planned for v0.3.0 / Phase 3
 
+- **HyperPlonk-KZG** verifier (issue [#2](https://github.com/wienerlabs/mosaic/issues/2)).
+- **Halo2-KZG** verifier + adapter (issue [#11](https://github.com/wienerlabs/mosaic/issues/11)).
+- **gnark** format adapter for Groth16 + PLONK (issue [#10](https://github.com/wienerlabs/mosaic/issues/10)).
+- **FRI-STARK** verifier via chunked-upload (issue [#3](https://github.com/wienerlabs/mosaic/issues/3)).
+- **Nova / HyperNova / ProtoStar** folding-scheme verifiers (issue [#4](https://github.com/wienerlabs/mosaic/issues/4)).
+- CU optimization: Pippenger MSM (issue [#37](https://github.com/wienerlabs/mosaic/issues/37)) + Fr in-place (issue [#38](https://github.com/wienerlabs/mosaic/issues/38)) → PLONK ~600K target.
 - Real Circom-sourced Groth16 fixtures (issue [#24](https://github.com/wienerlabs/mosaic/issues/24)).
 - External security audit (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
-- Devnet integration test with deployed program (issue [#33](https://github.com/wienerlabs/mosaic/issues/33)).
-- Expanded threat model sections (issue [#63](https://github.com/wienerlabs/mosaic/issues/63)).
-- `cargo-vet` supply chain attestation (issue [#59](https://github.com/wienerlabs/mosaic/issues/59)).
+
+## [0.2.0-phase2] — 2026-04-20
+
+**Phase 2 technical scope is frozen at this tag.** Production PLONK
+verifier, Groth16 batch verification, snarkjs PLONK adapter, and
+Poseidon syscall wiring all shipping with measured on-chain CU.
+
+Audit firms, grant reviewers, and ecosystem collaborators should cite
+this tag as the reference point for Phase-2 scope. Subsequent commits
+start Phase 3 (HyperPlonk, Halo2-KZG, FRI-STARK).
+
+### Added — verifiers
+
+- **`mosaic-plonk` full KZG-PLONK BN254 verifier** (issue
+  [#1](https://github.com/wienerlabs/mosaic/issues/1)). Byte-for-byte
+  compatible with snarkjs 0.7.x. Ships as five modules:
+  - `canonical` — 768-byte proof + 744-byte VK layout (ADR-0003).
+  - `fr` — byte-level range ops; `field` — full arkworks Fr arithmetic.
+  - `transcript` — Keccak-256 Fiat-Shamir with snarkjs absorb order.
+  - `challenges` — six-round challenge derivation (β γ α ξ v u).
+  - `linearization` — d1/d2/d3/d4 MSMs + F/E commitment build + KZG
+    batched opening pairing.
+  - `msm` + `g1_consts` — shared scalar mul + G1/G2 generator bytes.
+- **`mosaic-groth16::batch` — Bowe-Gabizon batched verification**
+  (issue [#5](https://github.com/wienerlabs/mosaic/issues/5)). One
+  `alt_bn128_pairing` syscall collapses N proofs sharing a VK.
+  Independent SHA-256 challenges (no Fr multiplication on-chain);
+  break-even at N=2, 42.6% savings at N=5.
+- **`VerifyProofBatch` instruction** (tag `0x02`) exposes batch
+  verification to on-chain callers and CPI.
+
+### Added — infrastructure
+
+- **Poseidon syscall wired** via `solana-poseidon 2.3`
+  (issue [#8](https://github.com/wienerlabs/mosaic/issues/8)) — unblocks
+  Circom-compatible transcripts for future KZG-based systems.
+- **Real snarkjs 0.7.6 PLONK fixtures** committed under
+  `tests/fixtures/plonk/mul-circuit/{snarkjs,canonical}/`. Pipeline
+  documented for reproduction.
+- **`SnarkjsPlonkCodec`** — full JSON → canonical bytes decoder for
+  proofs + VKs + public inputs, including snarkjs projective-identity
+  handling.
+- **bpf-bench target `groth16_batch_n5_mul_circuit_1pi`** — measured
+  230 626 CU baseline + 300K hard cap.
+- **bpf-bench target `plonk_bn254_mul_circuit_1pi`** — measured
+  747 666 CU baseline + 800K hard cap.
+
+### Added — documentation
+
+- `docs/audit/rfq.md` + `docs/audit/outreach-email.md` — pre-audit
+  outreach package for Zellic / Veridise / OtterSec / Asymmetric
+  Research.
+- `supply-chain/` directory with real `cargo-vet` attestation chain
+  (issue [#59](https://github.com/wienerlabs/mosaic/issues/59)).
+  74 audited, 2 partial, 689 exempted baseline.
+- `docs/lint-policy.md` — audit-facing registry of every clippy
+  suppression.
+- `docs/responsible-disclosure-timeline.md` — 5-stage SLA spec
+  referenced from SECURITY.md.
+- `docs/threat-model.md` expanded with 4 scope-boundary axes:
+  under-constrained circuits, malleable proofs, validator determinism,
+  replay safety (issue
+  [#63](https://github.com/wienerlabs/mosaic/issues/63)).
+- `AUDIT.md` Phase-1 scope frozen and marked "ready for external
+  review".
+
+### Changed
+
+- **On-chain CU measurements (2026-04-20 baselines):**
+  | System | Measured | Cap | Headroom |
+  |---|---|---|---|
+  | Groth16 BN254 single | 80 296 CU | 180 000 | 55.4% |
+  | Groth16 BN254 batch N=5 | 230 626 CU (46 125/proof) | 300 000 | 23% |
+  | KZG-PLONK BN254 | 747 666 CU | 800 000 | 6.5% |
+- **SBF binary size**: 112 KB → **557 KB** (arkworks Fr arithmetic,
+  PLONK linearization, batch path). Well under Solana 1 MB limit.
+- **Test count**: 36 → **119** passing, 0 failed.
+- **Host backend `SyscallBackend::poseidon`** replaced the
+  `UnimplementedProofSystem` stub with a `solana-poseidon::hashv` call
+  that routes through `light-poseidon` on host targets and the
+  `sol_poseidon` syscall under SBF — byte-identical by construction.
+- **Host G1 decode accepts `(0, 0)` as identity** rather than
+  rejecting as off-curve — matches Solana `alt_bn128` convention and
+  handles snarkjs zero-polynomial selector commitments.
+- `mosaic-program` dispatcher: `0x02` arm routes to
+  `Groth16Verifier::batch_verify` (Bowe-Gabizon). Unsupported
+  proof-system batches return `UnsupportedOperation`, not silent loop.
+
+### Fixed
+
+- **PLONK u-challenge absorb order** was incorrectly including `v`.
+  snarkjs only absorbs `Wxi + Wxiω`. Silent pre-fix failure mode:
+  all valid PLONK proofs would have failed the pairing check.
+- **snarkjs projective-identity decode** (`[0, 1, 0]` → G1 identity)
+  handled in both `mosaic-serde::snarkjs` and
+  `mosaic-core::syscall::host`. Zero-polynomial selector commitments
+  (e.g. Qr for a circuit with no right-operand gates) now decode
+  correctly.
+- **SBF stack-frame overflow** in PLONK linearization resolved by
+  splitting monolithic `compute_d` and `ComputedScalars::derive` into
+  `#[inline(never)]` sub-helpers (compute_d1/d2/d3/d4, compute_e3,
+  compute_r0_scalar, compute_d2a, compute_d2_coeff, etc.). Each frame
+  now under 4 KB; was >10 KB at worst pre-split.
+
+### Issues closed
+
+- [#1](https://github.com/wienerlabs/mosaic/issues/1) KZG-PLONK BN254 verifier.
+- [#5](https://github.com/wienerlabs/mosaic/issues/5) Groth16 batch_verify with MSM amortization.
+- [#8](https://github.com/wienerlabs/mosaic/issues/8) Wire sol_poseidon syscall.
+- [#33](https://github.com/wienerlabs/mosaic/issues/33) Devnet integration test.
+- [#59](https://github.com/wienerlabs/mosaic/issues/59) `cargo-vet` supply chain attestation.
+- [#60](https://github.com/wienerlabs/mosaic/issues/60) Audit-readiness PR.
+- [#63](https://github.com/wienerlabs/mosaic/issues/63) Threat model expansion.
+
+### Compatibility
+
+- Host: Rust **1.85.0** stable (unchanged).
+- SBF: `cargo-build-sbf --tools-version v1.52` (unchanged).
+- Solana program SDK: `^2.1` (unchanged, tested against 2.3.0).
+- **Wire format**: all Phase-1 canonical byte layouts stable; PLONK
+  adds its own 768/744 B layout documented in ADR-0003.
+- **InstructionTag ABI**: Phase-1 `0x01` VerifyProof unchanged; new
+  `0x02` VerifyProofBatch is additive.
+- **`OnChainError` discriminants**: all Phase-1 values unchanged;
+  no new variants in this release.
 
 ## [0.1.0-phase1] — 2026-04-20
 
@@ -143,5 +271,6 @@ artifacts — none of which change the runtime surface.
   Default v1.51 (rustc 1.84.1) fails on `edition2024` transitive deps.
 - Solana program SDK: `solana-program ^2.1` (tested against 2.3.0).
 
-[Unreleased]: https://github.com/wienerlabs/mosaic/compare/v0.1.0-phase1...HEAD
+[Unreleased]: https://github.com/wienerlabs/mosaic/compare/v0.2.0-phase2...HEAD
+[0.2.0-phase2]: https://github.com/wienerlabs/mosaic/releases/tag/v0.2.0-phase2
 [0.1.0-phase1]: https://github.com/wienerlabs/mosaic/releases/tag/v0.1.0-phase1
