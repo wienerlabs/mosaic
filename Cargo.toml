@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/mosaic-core",
     "crates/mosaic-groth16",
+    "crates/mosaic-halo2",
     "crates/mosaic-hyperplonk",
     "crates/mosaic-plonk",
     "crates/mosaic-stark",
@@ -42,6 +43,7 @@ mosaic-core = { version = "0.2.0-phase2", path = "crates/mosaic-core", default-f
 mosaic-groth16 = { version = "0.2.0-phase2", path = "crates/mosaic-groth16", default-features = false }
 mosaic-plonk = { version = "0.2.0-phase2", path = "crates/mosaic-plonk", default-features = false }
 mosaic-hyperplonk = { version = "0.2.0-phase2", path = "crates/mosaic-hyperplonk", default-features = false }
+mosaic-halo2 = { version = "0.2.0-phase2", path = "crates/mosaic-halo2", default-features = false }
 mosaic-stark = { version = "0.2.0-phase2", path = "crates/mosaic-stark", default-features = false }
 mosaic-nova = { version = "0.2.0-phase2", path = "crates/mosaic-nova", default-features = false }
 mosaic-serde = { version = "0.2.0-phase2", path = "crates/mosaic-serde", default-features = false }

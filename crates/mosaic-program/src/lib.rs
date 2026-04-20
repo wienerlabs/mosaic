@@ -42,6 +42,7 @@ use mosaic_core::{
     OnChainError,
 };
 use mosaic_groth16::Groth16Verifier;
+use mosaic_halo2::Halo2KzgBn254;
 use mosaic_hyperplonk::HyperPlonkKzgBn254;
 use mosaic_plonk::PlonkKzgBn254;
 use solana_program::{
@@ -173,8 +174,14 @@ pub(crate) fn dispatch_verify(
             let v = HyperPlonkKzgBn254::new(&backend);
             HyperPlonkKzgBn254::verify(&v, vk, proof, public_inputs)
         },
-        ProofSystemId::Halo2KzgBn254
-        | ProofSystemId::FriStark
+        ProofSystemId::Halo2KzgBn254 => {
+            // Phase-3 scaffold — same shape as HyperPlonk above: wire-format
+            // checks run so layout regressions surface before the real
+            // verifier body lands.
+            let v = Halo2KzgBn254::new(&backend);
+            Halo2KzgBn254::verify(&v, vk, proof, public_inputs)
+        },
+        ProofSystemId::FriStark
         | ProofSystemId::Risc0Stark
         | ProofSystemId::NovaFolding
         | ProofSystemId::ProtoStarFolding => Err(OnChainError::UnimplementedProofSystem),
