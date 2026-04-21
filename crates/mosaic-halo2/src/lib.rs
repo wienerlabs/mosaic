@@ -72,10 +72,15 @@ extern crate alloc;
 
 pub mod canonical;
 pub mod challenges;
+pub mod circuit;
 pub mod vanishing;
 pub mod verifier;
 
 pub use canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
 pub use challenges::{derive_challenges, Halo2Challenges};
+pub use circuit::{
+    combined_expr, gate_expr, lookup_expr, permutation_expr, LookupEvals, PermutationEvals,
+    SelectorEvals, WireEvals,
+};
 pub use vanishing::{compute_t_from_chunks, compute_z_h, vanishing_identity_holds};
 pub use verifier::Halo2KzgBn254;
