@@ -71,7 +71,9 @@
 extern crate alloc;
 
 pub mod canonical;
+pub mod challenges;
 pub mod verifier;
 
 pub use canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
+pub use challenges::{derive_challenges, Halo2Challenges};
 pub use verifier::Halo2KzgBn254;
