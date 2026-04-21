@@ -181,9 +181,11 @@ pub(crate) fn dispatch_verify(
             HyperPlonkKzgBn254::verify(&v, vk, proof, public_inputs)
         },
         ProofSystemId::Halo2KzgBn254 => {
-            // Phase-3 scaffold — same shape as HyperPlonk above: wire-format
-            // checks run so layout regressions surface before the real
-            // verifier body lands.
+            // Phase-3 body (session 4d): full verifier pipeline wired —
+            // parse → challenges (θ, β, γ, y, ξ) → KZG scaffold opening.
+            // Circuit evaluators (gate/perm/lookup) + full two-point
+            // batched multipoint opening land in session 4e against
+            // Espresso/PSE reference fixtures.
             let v = Halo2KzgBn254::new(&backend);
             Halo2KzgBn254::verify(&v, vk, proof, public_inputs)
         },
