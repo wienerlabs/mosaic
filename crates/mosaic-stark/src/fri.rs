@@ -93,6 +93,83 @@ pub fn fold_relation_holds(
     Ok(f_next == expected)
 }
 
+/// Walk an entire per-query FRI fold chain, applying the fold relation
+/// layer by layer.
+///
+/// The verifier uses this primitive per query: starting from the
+/// query's evaluations at layer 0, it validates that every
+/// intermediate fold matches the claimed next-layer opening, and
+/// returns the final layer's claimed scalar.
+///
+/// ## Parameters
+///
+/// - `layer_evals[i]` = `(f_i(x_i), f_i(−x_i))` — the query's two
+///   openings at FRI layer `i`. The sibling opening `f_i(−x_i)` comes
+///   from the "folded sibling" Merkle leaf in the same layer.
+/// - `betas[i]` — fold challenge squeezed from the transcript after
+///   absorbing layer `i`'s Merkle root.
+/// - `initial_x` — the query's x-value at layer 0 (domain-generator
+///   power indexed by the query). Each subsequent layer uses `x²`
+///   from the prior layer.
+///
+/// `layer_evals.len()` must equal `betas.len()`; both equal
+/// `num_fri_layers`. A chain with zero layers returns immediately —
+/// no fold is expected — which is why the return type is `Option`:
+/// the caller discriminates "no fold done" from "chain is one
+/// element long".
+///
+/// Returns the final-layer scalar `f_{n}(initial_x^(2^n))` alongside
+/// the `x` value at that depth. The outer verifier compares the
+/// scalar to the claim carried by `fri_final_poly` (or recomputes
+/// from the committed final polynomial — Phase-3 scaffold just
+/// checks structural consistency).
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] if `layer_evals.len() !=
+///   betas.len()`.
+/// - [`OnChainError::InternalInvariantViolation`] for any arithmetic
+///   failure inside a layer (e.g., `x` doubles to zero — which can't
+///   happen in Goldilocks for a starting `x` in a valid subgroup but
+///   is guarded explicitly).
+pub fn verify_fold_chain(
+    layer_evals: &[(Goldilocks, Goldilocks)],
+    betas: &[Goldilocks],
+    initial_x: Goldilocks,
+) -> Result<(Goldilocks, Goldilocks), OnChainError> {
+    if layer_evals.len() != betas.len() {
+        return Err(OnChainError::ProofLengthMismatch);
+    }
+    let mut x = initial_x;
+    // `prev_value` holds the layer's own `f_x` reading; after folding,
+    // it becomes the claimed next-layer `f_next`. For the first layer
+    // we don't yet have "prev" — we seed the loop with the opening
+    // from layer 0 directly.
+    let mut prev_value = if let Some((f_x, _)) = layer_evals.first() {
+        *f_x
+    } else {
+        // Zero-layer chain: no fold done, the "final" is whatever
+        // the caller provides as x and value — in practice this is
+        // a no-op path. Return the initial x and zero.
+        return Ok((x, Goldilocks::zero()));
+    };
+
+    for (i, (&(f_x, f_neg_x), &beta)) in layer_evals.iter().zip(betas.iter()).enumerate() {
+        // Sanity: f_x at layer i must match prev_value from layer i-1's
+        // fold (for i > 0) or the seed (for i == 0). This cross-check
+        // catches mis-assembly of the proof — the prover must commit
+        // consistent `f_x` values across layers.
+        if i > 0 && prev_value != f_x {
+            return Err(OnChainError::VerificationFailed);
+        }
+        // Compute the fold: this becomes the claimed next-layer f_x.
+        prev_value = compute_next_layer_value(f_x, f_neg_x, beta, x)?;
+        // Next layer operates at x². The domain halves each step.
+        x = x.mul(x);
+    }
+    Ok((x, prev_value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +371,136 @@ mod tests {
         // Swapped:
         let swap_check = fold_relation_holds(f_neg_x, f_x, f_next, beta, x).unwrap();
         assert_eq!(swap_check, false, "swapping f(x)/f(-x) should fail the relation");
+    }
+
+    // ---- verify_fold_chain ----
+
+    #[test]
+    fn chain_zero_layers_returns_initial_x() {
+        let x = Goldilocks::new(42);
+        let (final_x, final_v) = verify_fold_chain(&[], &[], x).unwrap();
+        assert_eq!(final_x, x);
+        assert_eq!(final_v, Goldilocks::zero());
+    }
+
+    #[test]
+    fn chain_one_layer_matches_single_fold() {
+        // 1-layer chain reduces to compute_next_layer_value.
+        let x = Goldilocks::new(13);
+        let beta = Goldilocks::new(7);
+        let f_x = Goldilocks::new(100);
+        let f_neg_x = Goldilocks::new(50);
+
+        let (final_x, final_v) =
+            verify_fold_chain(&[(f_x, f_neg_x)], &[beta], x).unwrap();
+        let expected_v = compute_next_layer_value(f_x, f_neg_x, beta, x).unwrap();
+        assert_eq!(final_v, expected_v);
+        // final_x = x² after one fold step.
+        assert_eq!(final_x, x.mul(x));
+    }
+
+    #[test]
+    fn chain_two_layers_honest_walk() {
+        // Construct a quadratic polynomial, compute its layer-0 and
+        // layer-1 evaluations, then walk the chain.
+        //
+        // p(t) = 7 + 2t + 5t² + 3t³.
+        // Layer 0 domain contains x and -x.
+        // Layer 1 domain contains x².
+        // f_1(t) = p_e(t) + β_0 · p_o(t) where p_e, p_o split p.
+        //   p_e(X²) = 7 + 5·X², p_o(X²) = 2 + 3·X².
+        //   f_1(t) = (7 + 5t) + β_0·(2 + 3t)  (substitute X²→t).
+        // Fold again at (x², -x²) via β_1 gives f_2.
+        let coeffs = [
+            Goldilocks::new(7),
+            Goldilocks::new(2),
+            Goldilocks::new(5),
+            Goldilocks::new(3),
+        ];
+        let beta_0 = Goldilocks::new(11);
+        let beta_1 = Goldilocks::new(17);
+        let x = Goldilocks::new(6);
+
+        // Layer-0 openings from direct evaluation of p at x and -x.
+        let f0_x = eval_poly(&coeffs, x);
+        let f0_neg_x = eval_poly(&coeffs, x.neg());
+
+        // Layer-1 values computed from the fold relation.
+        let f1_x = compute_next_layer_value(f0_x, f0_neg_x, beta_0, x).unwrap();
+        // For the second fold we need f_1(x²) at both +(x²) and -(x²).
+        // Use symbolic f_1(t) = (7 + 5t) + β_0·(2 + 3t) = (7 + 2β_0) + (5 + 3β_0)t.
+        let f1_c0 = Goldilocks::new(7).add(beta_0.mul(Goldilocks::new(2)));
+        let f1_c1 = Goldilocks::new(5).add(beta_0.mul(Goldilocks::new(3)));
+        let x_sq = x.mul(x);
+        let f1_at_x_sq = f1_c0.add(f1_c1.mul(x_sq));
+        assert_eq!(f1_x, f1_at_x_sq, "layer-1 fold should match symbolic f_1(x²)");
+        let f1_neg_x_sq = f1_c0.add(f1_c1.mul(x_sq.neg()));
+
+        let layer_evals = [(f0_x, f0_neg_x), (f1_x, f1_neg_x_sq)];
+        let betas = [beta_0, beta_1];
+        let (final_x, final_v) =
+            verify_fold_chain(&layer_evals, &betas, x).unwrap();
+
+        // Expected final value: f_2(x⁴) = f_1_e(x⁴) + β_1 · f_1_o(x⁴).
+        // f_1_e(X²) = 7 + 2β_0 (constant),  f_1_o(X²) = 5 + 3β_0 (constant).
+        let expected_final = f1_c0.add(beta_1.mul(f1_c1));
+        assert_eq!(final_v, expected_final);
+        // final_x doubles twice: x → x² → x⁴.
+        assert_eq!(final_x, x_sq.mul(x_sq));
+    }
+
+    #[test]
+    fn chain_rejects_mismatched_betas_length() {
+        let x = Goldilocks::new(13);
+        let layer_evals = [(Goldilocks::one(), Goldilocks::one())];
+        let betas = []; // 0 vs 1 layer.
+        assert!(matches!(
+            verify_fold_chain(&layer_evals, &betas, x),
+            Err(OnChainError::ProofLengthMismatch),
+        ));
+    }
+
+    #[test]
+    fn chain_rejects_inconsistent_f_x_between_layers() {
+        // Layer-1's f_x should equal the computed fold from layer 0.
+        // Tamper by sending a different value for layer-1 f_x.
+        let x = Goldilocks::new(13);
+        let beta_0 = Goldilocks::new(7);
+        let beta_1 = Goldilocks::new(11);
+
+        let f0_x = Goldilocks::new(100);
+        let f0_neg_x = Goldilocks::new(50);
+        let real_f1_x = compute_next_layer_value(f0_x, f0_neg_x, beta_0, x).unwrap();
+        let tampered_f1_x = real_f1_x.add(Goldilocks::one());
+
+        let layer_evals = [
+            (f0_x, f0_neg_x),
+            (tampered_f1_x, Goldilocks::new(99)),
+        ];
+        let betas = [beta_0, beta_1];
+        let r = verify_fold_chain(&layer_evals, &betas, x);
+        assert!(
+            matches!(r, Err(OnChainError::VerificationFailed)),
+            "inconsistent layer-1 f_x should fail, got {r:?}",
+        );
+    }
+
+    #[test]
+    fn chain_constant_polynomial_fold_is_invariant() {
+        // p(t) = c constant → all f_i(x) = c. Chain returns c with
+        // every layer's f_x agreeing.
+        let c = Goldilocks::new(42);
+        let x = Goldilocks::new(5);
+        let betas = [
+            Goldilocks::new(1),
+            Goldilocks::new(2),
+            Goldilocks::new(3),
+            Goldilocks::new(4),
+        ];
+        let layer_evals: alloc::vec::Vec<(Goldilocks, Goldilocks)> =
+            core::iter::repeat((c, c)).take(betas.len()).collect();
+        let (_, final_v) = verify_fold_chain(&layer_evals, &betas, x).unwrap();
+        assert_eq!(final_v, c, "constant poly should fold to itself through any β chain");
     }
 
     #[test]
