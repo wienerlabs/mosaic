@@ -3171,6 +3171,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "mosaic-core",
+ "mosaic-zk-primitives",
  "tiny-keccak",
 ]
 
@@ -3236,6 +3237,19 @@ name = "mosaic-stark"
 version = "0.4.0-phase3-bodies"
 dependencies = [
  "mosaic-core",
+]
+
+[[package]]
+name = "mosaic-zk-primitives"
+version = "0.4.0-phase3-bodies"
+dependencies = [
+ "ark-bn254 0.5.0",
+ "ark-ec 0.5.0",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "mosaic-core",
+ "tiny-keccak",
 ]
 
 [[package]]

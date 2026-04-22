@@ -47,13 +47,16 @@ extern crate alloc;
 
 pub mod canonical;
 pub mod challenges;
-pub mod field;
-pub mod fr;
-pub mod g1_consts;
 pub mod linearization;
-pub mod msm;
-pub mod transcript;
 pub mod verifier;
+
+// Shared BN254 primitives now live in `mosaic-zk-primitives` since
+// v0.5.0 (extracted in the Phase-3 body milestone). Re-exported from
+// here for backward compatibility so downstream code that imports
+// `mosaic_plonk::{fr, field, msm, transcript, g1_consts}` continues
+// to work. New consumers should depend on `mosaic-zk-primitives`
+// directly.
+pub use mosaic_zk_primitives::{field, fr, g1_consts, msm, transcript};
 
 pub use canonical::{PlonkProof, PlonkVerifyingKey};
 pub use verifier::PlonkKzgBn254;

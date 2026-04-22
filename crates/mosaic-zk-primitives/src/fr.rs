@@ -7,7 +7,8 @@
 //! reduce mod-r — that keyword Phase-2 session 1 transcript work needs
 //! without any field-arithmetic dependency.
 
-use crate::canonical::sizes::FR_LEN;
+/// Fr element byte length (BN254 scalar field, 32 bytes).
+pub const FR_LEN: usize = 32;
 
 /// BN254 scalar field order `r` in big-endian.
 ///
