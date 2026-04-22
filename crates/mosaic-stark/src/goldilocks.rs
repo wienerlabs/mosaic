@@ -175,6 +175,41 @@ impl Goldilocks {
     }
 }
 
+/// Evaluate a Goldilocks polynomial given as a coefficient byte slice
+/// at a point.
+///
+/// `coeffs_le` is a concatenated buffer of 8-byte LE Goldilocks
+/// coefficients `c_0 ‖ c_1 ‖ ... ‖ c_{n-1}` encoding
+/// `p(X) = c_0 + c_1·X + c_2·X² + ... + c_{n-1}·X^{n-1}`.
+///
+/// Uses Horner's rule (right-to-left):
+/// `((((c_{n-1} · x) + c_{n-2}) · x) + c_{n-3}) · x + ...`
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] if `coeffs_le.len()` is not
+///   a multiple of 8 bytes.
+/// - [`OnChainError::PublicInputOutOfRange`] if any coefficient decodes
+///   to a value `>= p`.
+pub fn eval_poly_le_bytes(coeffs_le: &[u8], x: Goldilocks) -> Result<Goldilocks, OnChainError> {
+    if !coeffs_le.len().is_multiple_of(8) {
+        return Err(OnChainError::ProofLengthMismatch);
+    }
+    let n = coeffs_le.len() / 8;
+    if n == 0 {
+        return Ok(Goldilocks::zero());
+    }
+    let mut acc = Goldilocks::zero();
+    for i in (0..n).rev() {
+        let start = i * 8;
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&coeffs_le[start..start + 8]);
+        let c = Goldilocks::from_bytes_le(&buf)?;
+        acc = acc.mul(x).add(c);
+    }
+    Ok(acc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +404,76 @@ mod tests {
             let via_inv = x.inverse().unwrap();
             assert_eq!(via_pow, via_inv, "v={v}");
         }
+    }
+
+    // ---- eval_poly_le_bytes ----
+
+    #[test]
+    fn eval_poly_empty_is_zero() {
+        let x = Goldilocks::new(42);
+        assert_eq!(eval_poly_le_bytes(&[], x).unwrap(), Goldilocks::zero());
+    }
+
+    #[test]
+    fn eval_poly_constant() {
+        // p(X) = 7. Evaluates to 7 for any x.
+        let coeffs = 7u64.to_le_bytes();
+        for v in [0u64, 1, 100, 999] {
+            let got = eval_poly_le_bytes(&coeffs, Goldilocks::new(v)).unwrap();
+            assert_eq!(got.as_u64(), 7);
+        }
+    }
+
+    #[test]
+    fn eval_poly_linear() {
+        // p(X) = 3 + 5X. At x=2: 3 + 10 = 13.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&3u64.to_le_bytes());
+        buf.extend_from_slice(&5u64.to_le_bytes());
+        let got = eval_poly_le_bytes(&buf, Goldilocks::new(2)).unwrap();
+        assert_eq!(got.as_u64(), 13);
+    }
+
+    #[test]
+    fn eval_poly_cubic_matches_manual() {
+        // p(X) = 1 + 2X + 3X² + 4X³. At x=3: 1 + 6 + 27 + 108 = 142.
+        let mut buf = Vec::new();
+        for c in [1u64, 2, 3, 4] {
+            buf.extend_from_slice(&c.to_le_bytes());
+        }
+        let got = eval_poly_le_bytes(&buf, Goldilocks::new(3)).unwrap();
+        assert_eq!(got.as_u64(), 142);
+    }
+
+    #[test]
+    fn eval_poly_rejects_partial_coefficient() {
+        // 7 bytes is not a multiple of 8.
+        let buf = [0u8; 7];
+        assert!(matches!(
+            eval_poly_le_bytes(&buf, Goldilocks::new(1)),
+            Err(OnChainError::ProofLengthMismatch),
+        ));
+    }
+
+    #[test]
+    fn eval_poly_rejects_out_of_range_coefficient() {
+        // Coefficient = 0xFFFF_FFFF_FFFF_FFFF > p.
+        let buf = [0xFFu8; 8];
+        assert!(matches!(
+            eval_poly_le_bytes(&buf, Goldilocks::one()),
+            Err(OnChainError::PublicInputOutOfRange),
+        ));
+    }
+
+    #[test]
+    fn eval_poly_at_zero_returns_constant_term() {
+        // At x=0: only c_0 contributes.
+        let mut buf = Vec::new();
+        for c in [42u64, 99, 123] {
+            buf.extend_from_slice(&c.to_le_bytes());
+        }
+        let got = eval_poly_le_bytes(&buf, Goldilocks::zero()).unwrap();
+        assert_eq!(got.as_u64(), 42);
     }
 
     #[test]

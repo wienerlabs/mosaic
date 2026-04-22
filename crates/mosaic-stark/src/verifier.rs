@@ -79,7 +79,7 @@ use crate::{
     canonical::{FriStarkProof, FriStarkVerifyingKey},
     challenges::{derive_challenges, derive_layer_betas, derive_query_indices, verify_pow},
     fri::verify_fold_chain,
-    goldilocks::Goldilocks,
+    goldilocks::{eval_poly_le_bytes, Goldilocks},
     merkle::verify_path,
 };
 use alloc::vec::Vec;
@@ -205,33 +205,28 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             proof.pow_bits,
         )?;
 
-        // FRI fold-chain verification (session 13b). For each query,
-        // walk the layer openings, ensure the fold relation holds at
-        // every step, and check the final scalar matches the
-        // claimed final_layer_value. Skipped when num_fri_layers = 0
-        // (edge case — no fold-chain to verify).
+        // FRI fold-chain verification (session 13b + 14a). For each
+        // query, walk the layer openings, ensure the fold relation
+        // holds at every step, and check the computed final value
+        // matches the evaluation of `fri_final_poly` at that query's
+        // final_x. Multi-coefficient final polynomial support
+        // (session 14a) replaces the single-scalar scaffold from 13b.
+        // Skipped when num_fri_layers = 0.
         if proof.num_fri_layers > 0 {
             // 1. Derive per-layer β challenges from the transcript.
-            //    Reuses the already-absorbed fri_layer_commits plus
-            //    the query_seed as the seed material.
             let beta_u64s = derive_layer_betas(
                 self.backend,
                 &challenges.query_seed,
                 proof.fri_layer_commits,
                 proof.num_fri_layers,
             )?;
-            // Convert raw u64 betas → Goldilocks (already reduced).
             let betas: Vec<Goldilocks> =
                 beta_u64s.iter().map(|&b| Goldilocks::new(b)).collect();
 
-            // 2. Parse VK's domain generator ω and the claimed final
-            //    value.
+            // 2. Parse VK's domain generator ω.
             let omega = Goldilocks::from_bytes_le(&vk.omega_g)?;
-            let claimed_final = Goldilocks::from_bytes_le(&proof.final_layer_value)?;
 
-            // 3. Parse per-query per-layer opening bundle. Iterator
-            //    yields 2 × 8-byte slices (f(x), f(-x)) in row-major
-            //    order across (query, layer).
+            // 3. Parse per-query per-layer opening bundle.
             let opening_iter = proof
                 .fri_layer_opening_iter()
                 .ok_or(OnChainError::ProofLengthMismatch)?;
@@ -245,17 +240,28 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
                 })
                 .collect::<Result<_, _>>()?;
 
-            // 4. For each query, walk its fold chain and compare the
-            //    final scalar to the claimed final.
+            // 4. For each query:
+            //    a. Walk the fold chain → (final_x, computed_final).
+            //    b. Evaluate `fri_final_poly` at final_x →
+            //       expected_final.
+            //    c. Compare; mismatch → VerificationFailed.
+            //
+            //    Session 14a upgrade: instead of one shared
+            //    `final_layer_value` scalar, each query can have a
+            //    distinct expected value because the final polynomial
+            //    has non-zero degree. This matches Plonky3/Winterfell
+            //    semantics.
             let n_layers = proof.num_fri_layers as usize;
             for (q_idx, &global_idx) in indices.iter().enumerate() {
                 let x_0 = omega.pow(global_idx);
                 let start = q_idx * n_layers;
                 let end = start + n_layers;
                 let layer_evals = &openings[start..end];
-                let (_final_x, computed_final) =
+                let (final_x, computed_final) =
                     verify_fold_chain(layer_evals, &betas, x_0)?;
-                if computed_final != claimed_final {
+                let expected_final =
+                    eval_poly_le_bytes(proof.fri_final_poly, final_x)?;
+                if computed_final != expected_final {
                     return Err(OnChainError::VerificationFailed);
                 }
             }
@@ -513,10 +519,12 @@ mod tests {
         assert!(r.is_ok(), "FRI fold chain with zero openings should pass, got {r:?}");
     }
 
-    /// Session-13b tampered final-layer scalar: fold produces 0 but
-    /// proof claims 1 → chain mismatch → `VerificationFailed`.
+    /// Session-14a: tampered `fri_final_poly` coefficient. Poly
+    /// evaluates to 1 at any final_x; fold chain produces 0 → mismatch
+    /// → `VerificationFailed`. Demonstrates the multi-coefficient
+    /// path rejects tampered final-polynomial evaluations.
     #[test]
-    fn rejects_tampered_final_layer_value() {
+    fn rejects_tampered_fri_final_poly() {
         let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = FriStark::new(&backend);
         let mut vk_bytes = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
@@ -532,15 +540,22 @@ mod tests {
             *byte = 0xAB;
         }
 
-        // Tamper with final_layer_value: set to 1. Its byte layout is
-        // `proof.len() - POW_NONCE_LEN - 8..proof.len() - POW_NONCE_LEN`.
-        let final_off = proof.len() - sizes::POW_NONCE_LEN - 8;
-        proof[final_off] = 1; // LE first byte = 1 → Goldilocks::new(1)
+        // Tamper with fri_final_poly's constant coefficient (c_0 = 1).
+        // Layout order: FIXED_HEADER + 2·DIGEST + num_fri·DIGEST +
+        //   len_prefix_4 + ood_bytes_(10·8=80) + len_prefix_4 + c_0 (first byte).
+        let fri_layer_off = sizes::FIXED_HEADER_LEN + 2 * sizes::DIGEST_LEN
+            + 1 * sizes::DIGEST_LEN; // num_fri = 1
+        let ood_prefix_off = fri_layer_off;
+        let ood_len = 10 * StarkFieldId::Goldilocks.field_elem_bytes(); // 80
+        let final_prefix_off = ood_prefix_off + 4 + ood_len;
+        let final_poly_off = final_prefix_off + 4;
+        // c_0 = 1 (LE first byte).
+        proof[final_poly_off] = 1;
 
         let r = FriStark::verify(&v, &vk_bytes, &proof, &[]);
         assert!(
             matches!(r, Err(OnChainError::VerificationFailed)),
-            "tampered final_layer_value should fail fold chain, got {r:?}",
+            "tampered fri_final_poly coefficient should fail, got {r:?}",
         );
     }
 
