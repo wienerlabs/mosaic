@@ -120,6 +120,61 @@ pub fn derive_challenges<B: SyscallBackend + ?Sized>(
     })
 }
 
+/// Verify a proof-of-work grinding: `sha256(query_seed ‖ pow_nonce)`
+/// must have at least `pow_bits` leading zero bits.
+///
+/// PoW grinding raises the bar for a malicious prover to brute-force
+/// a favorable `query_seed` — instead of searching over transcripts
+/// until the query indices happen to line up with a lucky tampered
+/// bundle, they also have to find a nonce whose hash clears the
+/// grinding target. Each extra bit doubles the expected work.
+///
+/// ## Errors
+///
+/// - [`OnChainError::Sha256SyscallFailed`] on hash failure.
+/// - [`OnChainError::VerificationFailed`] if the hash doesn't clear
+///   `pow_bits` leading zeros.
+pub fn verify_pow<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    query_seed: &[u8; DIGEST_LEN],
+    pow_nonce: u64,
+    pow_bits: u8,
+) -> Result<(), OnChainError> {
+    // Hash the seed+nonce. `sha256(query_seed ‖ nonce_le)`.
+    let nonce_bytes = pow_nonce.to_le_bytes();
+    let hash = backend.sha256(&[query_seed, &nonce_bytes])?;
+    if !has_leading_zero_bits(&hash, pow_bits) {
+        return Err(OnChainError::VerificationFailed);
+    }
+    Ok(())
+}
+
+/// Test whether `digest` has at least `n_bits` leading zero bits
+/// (MSB-first).
+///
+/// Kept public for tests; the on-chain verifier calls it via
+/// `verify_pow`.
+#[must_use]
+pub fn has_leading_zero_bits(digest: &[u8; DIGEST_LEN], n_bits: u8) -> bool {
+    let full_bytes = (n_bits / 8) as usize;
+    let rem_bits = n_bits % 8;
+    if digest.len() < full_bytes {
+        return false;
+    }
+    for b in &digest[..full_bytes] {
+        if *b != 0 {
+            return false;
+        }
+    }
+    if rem_bits == 0 {
+        return true;
+    }
+    // Top `rem_bits` of the next byte must be zero.
+    let next = digest[full_bytes];
+    let mask: u8 = 0xFFu8 << (8 - rem_bits);
+    (next & mask) == 0
+}
+
 /// Derive `n_queries` pseudo-random indices in `[0, domain_size)` by
 /// hashing `(seed ‖ counter)` and reducing mod `domain_size`.
 ///
@@ -319,5 +374,75 @@ mod tests {
         let seed = [0u8; DIGEST_LEN];
         let r = derive_query_indices(&backend, &seed, 10, 0);
         assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+    }
+
+    // ---- verify_pow ----
+
+    #[test]
+    fn pow_zero_bits_accepts_any_nonce() {
+        // pow_bits = 0 means no grinding required; trivially accepts.
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        assert!(verify_pow(&backend, &seed, 0, 0).is_ok());
+        assert!(verify_pow(&backend, &seed, 12345, 0).is_ok());
+    }
+
+    #[test]
+    fn pow_rejects_random_nonce_at_nonzero_bits() {
+        // Random seed + nonce 0; expected hash is uniformly random, so
+        // with overwhelming probability it has fewer than 8 leading
+        // zero bits.
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        let r = verify_pow(&backend, &seed, 0, 8);
+        assert!(
+            matches!(r, Err(OnChainError::VerificationFailed)),
+            "random hash should rarely have 8 leading zero bits, got {r:?}",
+        );
+    }
+
+    #[test]
+    fn pow_accepts_after_search() {
+        // Brute-force a nonce whose hash has ≥4 leading zeros (1/16
+        // probability → expect a hit in ~16 attempts).
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        let mut found = None;
+        for nonce in 0..10_000u64 {
+            if verify_pow(&backend, &seed, nonce, 4).is_ok() {
+                found = Some(nonce);
+                break;
+            }
+        }
+        assert!(found.is_some(), "brute-forcing 4 leading zero bits should succeed within 10k nonces");
+    }
+
+    // ---- has_leading_zero_bits unit tests ----
+
+    #[test]
+    fn leading_zero_bits_all_zero_bytes() {
+        let zeros = [0u8; DIGEST_LEN];
+        for n in 0..=255u8 {
+            let expected = (n as usize) <= DIGEST_LEN * 8;
+            assert_eq!(has_leading_zero_bits(&zeros, n), expected, "n={n}");
+        }
+    }
+
+    #[test]
+    fn leading_zero_bits_partial_byte() {
+        // 0b0001_0000 → top 3 bits are zero.
+        let mut digest = [0u8; DIGEST_LEN];
+        digest[0] = 0b0001_0000;
+        assert!(has_leading_zero_bits(&digest, 3));
+        assert!(!has_leading_zero_bits(&digest, 4));
+    }
+
+    #[test]
+    fn leading_zero_bits_one_full_zero_byte() {
+        // First byte zero, second byte 0xFF → exactly 8 leading zeros.
+        let mut digest = [0xFFu8; DIGEST_LEN];
+        digest[0] = 0;
+        assert!(has_leading_zero_bits(&digest, 8));
+        assert!(!has_leading_zero_bits(&digest, 9));
     }
 }

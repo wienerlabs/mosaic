@@ -77,7 +77,7 @@
 
 use crate::{
     canonical::{FriStarkProof, FriStarkVerifyingKey},
-    challenges::{derive_challenges, derive_query_indices},
+    challenges::{derive_challenges, derive_query_indices, verify_pow},
     merkle::verify_path,
 };
 use mosaic_core::{
@@ -189,6 +189,18 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             // soundness gate closes the composition-polynomial side).
             verify_path(self.backend, c_leaf, c_path, idx, proof.constraint_commitment)?;
         }
+
+        // Proof-of-work grinding check (session 9). Rejects proofs
+        // whose pow_nonce doesn't clear `pow_bits` leading zeros on
+        // `sha256(query_seed ‖ nonce)` — forces a malicious prover
+        // to exponentially increase brute-force work before they can
+        // search for a favorable query_seed.
+        verify_pow(
+            self.backend,
+            &challenges.query_seed,
+            proof.pow_nonce,
+            proof.pow_bits,
+        )?;
 
         Ok(())
     }
