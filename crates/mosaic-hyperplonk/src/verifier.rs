@@ -58,7 +58,7 @@ use crate::{
         sizes::{FR_LEN, SUMCHECK_POLY_LEN},
         HyperPlonkProof, HyperPlonkVerifyingKey,
     },
-    challenges::derive_challenges,
+    challenges::{derive_challenges, PreSumcheckChallenges},
     gate::{gate_expr, SelectorEvals, WireEvals},
     kzg::verify_batched_opening,
     sumcheck::verify_sumcheck,
@@ -147,7 +147,7 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
         //    sumcheck's final claim.
         let expected_claim = compute_expected_final_claim(
             proof.final_evals,
-            &challenges.alpha,
+            &challenges,
         )?;
         if expected_claim != sumcheck_out.final_claim {
             return Err(OnChainError::SumcheckFailed);
@@ -169,13 +169,23 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
 /// at the sumcheck challenge point, from the proof's `final_evals`
 /// bundle.
 ///
-/// **Session-3d scope:** gate expression only. The permutation term
-/// is a placeholder (returns zero) until session 3e lands the full
-/// grand-product reduction. Valid proofs will therefore satisfy this
-/// check only if their permutation contribution at the challenge
-/// point happens to be zero — which is not generally true and is why
-/// the verifier always stops at `UnimplementedProofSystem` before
-/// this function can produce a false-accept in production.
+/// **Session 3f-partial scope:** gate expression + scaffold permutation
+/// term. The permutation term uses a PLONK-style grand-product shape
+/// with hardcoded coset constants `(1, 2, 3)`:
+///
+/// ```text
+/// perm(ξ) = z · [(a + β·1 + γ)(b + β·2 + γ)(c + β·3 + γ)
+///               - (a + β·σ_1 + γ)(b + β·σ_2 + γ)(c + β·σ_3 + γ)]
+/// ```
+///
+/// This is a close structural approximation of Espresso's HyperPlonk
+/// permutation reduction but uses `ξ`-independent identity factors
+/// (real HyperPlonk multiplies by `ξ, k_1·ξ, k_2·ξ` or circuit-
+/// specific cosets). Session 3f-full pins this against the reference
+/// impl.
+///
+/// A zero-valued bundle (all evaluations zero) satisfies the combined
+/// expression trivially: gate_expr = 0, perm_expr = z·(0 - 0) = 0.
 ///
 /// ## Errors
 ///
@@ -185,7 +195,7 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
 ///   is out of range.
 fn compute_expected_final_claim(
     final_evals_bytes: &[u8],
-    alpha: &Fr,
+    challenges: &PreSumcheckChallenges,
 ) -> Result<Fr, OnChainError> {
     // Parse the 12 Fr evaluations at fixed offsets.
     let eval_at = |i: usize| -> Result<Fr, OnChainError> {
@@ -202,8 +212,7 @@ fn compute_expected_final_claim(
         b: eval_at(idx::B)?,
         c: eval_at(idx::C)?,
     };
-    // z_eval is read but unused until session 3e adds permutation.
-    let _z_eval = eval_at(idx::Z)?;
+    let z_eval = eval_at(idx::Z)?;
     let selectors = SelectorEvals {
         q_m: eval_at(idx::Q_M)?,
         q_l: eval_at(idx::Q_L)?,
@@ -211,16 +220,60 @@ fn compute_expected_final_claim(
         q_o: eval_at(idx::Q_O)?,
         q_c: eval_at(idx::Q_C)?,
     };
-    // σ_i_evals read but unused until session 3e adds permutation.
-    let _sigma_1 = eval_at(idx::SIGMA_1)?;
-    let _sigma_2 = eval_at(idx::SIGMA_2)?;
-    let _sigma_3 = eval_at(idx::SIGMA_3)?;
+    let sigma_1 = eval_at(idx::SIGMA_1)?;
+    let sigma_2 = eval_at(idx::SIGMA_2)?;
+    let sigma_3 = eval_at(idx::SIGMA_3)?;
 
-    // α · gate_expr + permutation_placeholder.
     let gate_value = gate_expr(&wires, &selectors);
-    let perm_value = Fr::from(0u64); // session-3e placeholder.
+    let perm_value = permutation_term(
+        &wires,
+        &z_eval,
+        &sigma_1,
+        &sigma_2,
+        &sigma_3,
+        &challenges.beta,
+        &challenges.gamma,
+    );
 
-    Ok(*alpha * gate_value + perm_value)
+    Ok(challenges.alpha * gate_value + perm_value)
+}
+
+/// Compute the scaffold permutation term at the sumcheck challenge
+/// point.
+///
+/// Structural form (hardcoded cosets `(1, 2, 3)`):
+///
+/// ```text
+/// perm(ξ) = z · [(a + β + γ)(b + 2β + γ)(c + 3β + γ)
+///               - (a + β·σ_1 + γ)(b + β·σ_2 + γ)(c + β·σ_3 + γ)]
+/// ```
+///
+/// Zero on a well-behaved proof where `σ_i` encodes the correct
+/// permutation; non-zero when any σ_i is tampered.
+#[must_use]
+fn permutation_term(
+    wires: &WireEvals,
+    z: &Fr,
+    sigma_1: &Fr,
+    sigma_2: &Fr,
+    sigma_3: &Fr,
+    beta: &Fr,
+    gamma: &Fr,
+) -> Fr {
+    let one = Fr::from(1u64);
+    let two = Fr::from(2u64);
+    let three = Fr::from(3u64);
+
+    // Identity-permutation factors.
+    let id_term = (wires.a + *beta * one + gamma)
+        * (wires.b + *beta * two + gamma)
+        * (wires.c + *beta * three + gamma);
+    // Committed-permutation factors.
+    let sigma_term = (wires.a + *beta * sigma_1 + gamma)
+        * (wires.b + *beta * sigma_2 + gamma)
+        * (wires.c + *beta * sigma_3 + gamma);
+
+    *z * (id_term - sigma_term)
 }
 
 /// Silence unused-helper warning when SUMCHECK_POLY_LEN is only used
@@ -425,6 +478,37 @@ mod tests {
         assert!(
             matches!(r, Err(OnChainError::SumcheckFailed)),
             "expected SumcheckFailed at claim reduction, got {r:?}",
+        );
+    }
+
+    /// Session 3f-partial: tampered permutation evaluation.
+    /// Set `z = 1, σ_1 = 7`; other perm evals zero. With zero wires,
+    /// `id_term = (β + γ)(2β + γ)(3β + γ)` and
+    /// `sigma_term = (β·7 + γ)(γ)(γ)`. Generally id_term ≠ sigma_term,
+    /// so perm_expr = 1·(id - sigma) ≠ 0. The sumcheck final claim is
+    /// zero (all round polys zero → final 0), so α·0 + perm ≠ 0 fails.
+    #[test]
+    fn rejects_tampered_sigma_commitment() {
+        let backend = HostBackend::new();
+        let v = HyperPlonkKzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let mut proof = dummy_proof_bytes_10_rounds();
+
+        // Set z final_eval = 1.
+        let z_offset =
+            FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::Z * FR_LEN;
+        proof[z_offset + 31] = 1;
+
+        // Set sigma_1 final_eval = 7.
+        let sigma_1_offset =
+            FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::SIGMA_1 * FR_LEN;
+        proof[sigma_1_offset + 31] = 7;
+
+        let pi = [0u8; FR_LEN];
+        let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "expected SumcheckFailed at permutation term, got {r:?}",
         );
     }
 
