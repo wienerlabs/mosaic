@@ -134,6 +134,25 @@ impl Goldilocks {
         Self(reduced as u64)
     }
 
+    /// Modular exponentiation `self^exponent` via square-and-multiply.
+    /// Used both by [`Self::inverse`] (with `p − 2` as exponent) and
+    /// by FRI-layer x-value computation (ω^query_index for query
+    /// indices in the evaluation domain).
+    #[must_use]
+    pub fn pow(self, exponent: u64) -> Self {
+        let mut result = Self::one();
+        let mut base = self;
+        let mut exp = exponent;
+        while exp > 0 {
+            if exp & 1 == 1 {
+                result = result.mul(base);
+            }
+            base = base.mul(base);
+            exp >>= 1;
+        }
+        result
+    }
+
     /// Modular inverse via Fermat's little theorem: `x^(p − 2)`.
     ///
     /// Returns `None` if `self == 0` (zero has no multiplicative
@@ -152,19 +171,7 @@ impl Goldilocks {
         if self.0 == 0 {
             return None;
         }
-        // Exponent = p − 2. Compute via right-to-left square-and-multiply.
-        let exponent = P - 2;
-        let mut result = Self::one();
-        let mut base = self;
-        let mut exp = exponent;
-        while exp > 0 {
-            if exp & 1 == 1 {
-                result = result.mul(base);
-            }
-            base = base.mul(base);
-            exp >>= 1;
-        }
-        Some(result)
+        Some(self.pow(P - 2))
     }
 }
 
@@ -326,6 +333,41 @@ mod tests {
             let inv = x.inverse().unwrap();
             let product = x.mul(inv);
             assert_eq!(product, Goldilocks::one(), "v={v}");
+        }
+    }
+
+    // ---- pow ----
+
+    #[test]
+    fn pow_zero_is_one() {
+        assert_eq!(Goldilocks::new(42).pow(0), Goldilocks::one());
+        assert_eq!(Goldilocks::zero().pow(0), Goldilocks::one());
+    }
+
+    #[test]
+    fn pow_one_is_self() {
+        let a = Goldilocks::new(1234);
+        assert_eq!(a.pow(1), a);
+    }
+
+    #[test]
+    fn pow_matches_repeated_multiplication() {
+        let base = Goldilocks::new(3);
+        let mut expected = Goldilocks::one();
+        for e in 0..16u64 {
+            assert_eq!(base.pow(e), expected, "e={e}");
+            expected = expected.mul(base);
+        }
+    }
+
+    #[test]
+    fn pow_matches_fermat_inverse() {
+        // x^(p-2) computed via pow should match `inverse`.
+        for v in [2u64, 7, 42, 1234] {
+            let x = Goldilocks::new(v);
+            let via_pow = x.pow(P - 2);
+            let via_inv = x.inverse().unwrap();
+            assert_eq!(via_pow, via_inv, "v={v}");
         }
     }
 

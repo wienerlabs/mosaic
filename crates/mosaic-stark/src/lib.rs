@@ -76,7 +76,9 @@ pub mod merkle;
 pub mod verifier;
 
 pub use canonical::{FriStarkProof, FriStarkVerifyingKey, StarkFieldId};
-pub use challenges::{derive_challenges, derive_query_indices, StarkChallenges};
+pub use challenges::{
+    derive_challenges, derive_layer_betas, derive_query_indices, StarkChallenges,
+};
 pub use fri::{compute_next_layer_value, fold_relation_holds, verify_fold_chain};
 pub use goldilocks::Goldilocks;
 pub use merkle::verify_path;

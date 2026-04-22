@@ -120,6 +120,66 @@ pub fn derive_challenges<B: SyscallBackend + ?Sized>(
     })
 }
 
+/// Derive per-FRI-layer fold challenges `β_0, β_1, ..., β_{n-1}`.
+///
+/// FRI's transcript model: after absorbing each layer's Merkle root,
+/// the verifier squeezes a fresh challenge for that layer. This
+/// helper precomputes all `n_fri_layers` challenges given the
+/// `query_seed` from [`derive_challenges`] and the concatenated
+/// layer-commits buffer.
+///
+/// ## Derivation
+///
+/// For each layer index `i` in `0..n_fri_layers`:
+///
+/// ```text
+/// β_i = sha256(query_seed ‖ i_le_u32 ‖ fri_layer_commits[i])[0..8] as u64 mod p_Goldilocks
+/// ```
+///
+/// Taking only the first 8 bytes of the 32-byte hash and reducing
+/// mod the Goldilocks prime gives a uniformly-distributed β in
+/// `[0, p_Goldilocks)`. Bias is negligible since
+/// `2^64 − p_Goldilocks = 2^32 − 1 << p`.
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] if `fri_layer_commits.len()`
+///   doesn't equal `n_fri_layers × DIGEST_LEN`.
+/// - [`OnChainError::Sha256SyscallFailed`] on hash failure.
+pub fn derive_layer_betas<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    query_seed: &[u8; DIGEST_LEN],
+    fri_layer_commits: &[u8],
+    n_fri_layers: u8,
+) -> Result<Vec<u64>, OnChainError> {
+    if fri_layer_commits.len() != (n_fri_layers as usize) * DIGEST_LEN {
+        return Err(OnChainError::ProofLengthMismatch);
+    }
+    // Goldilocks prime for reduction.
+    const P_GOLDILOCKS: u64 = 0xFFFF_FFFF_0000_0001;
+    let mut betas = Vec::with_capacity(n_fri_layers as usize);
+    for i in 0..(n_fri_layers as u32) {
+        let idx_bytes = i.to_le_bytes();
+        let layer_start = (i as usize) * DIGEST_LEN;
+        let layer_end = layer_start + DIGEST_LEN;
+        let layer_root = &fri_layer_commits[layer_start..layer_end];
+        let hash = backend.sha256(&[query_seed, &idx_bytes, layer_root])?;
+        // First 8 bytes LE as u64; reduce mod p.
+        let raw = u64::from_le_bytes([
+            hash[0], hash[1], hash[2], hash[3],
+            hash[4], hash[5], hash[6], hash[7],
+        ]);
+        // u64 mod p: at worst one subtraction since raw < 2^64 < 2p.
+        let beta = if raw >= P_GOLDILOCKS {
+            raw - P_GOLDILOCKS
+        } else {
+            raw
+        };
+        betas.push(beta);
+    }
+    Ok(betas)
+}
+
 /// Verify a proof-of-work grinding: `sha256(query_seed ‖ pow_nonce)`
 /// must have at least `pow_bits` leading zero bits.
 ///
@@ -444,5 +504,80 @@ mod tests {
         digest[0] = 0;
         assert!(has_leading_zero_bits(&digest, 8));
         assert!(!has_leading_zero_bits(&digest, 9));
+    }
+
+    // ---- derive_layer_betas ----
+
+    #[test]
+    fn layer_betas_count_matches_request() {
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        let commits = vec![0xABu8; 4 * DIGEST_LEN]; // 4 layers.
+        let betas = derive_layer_betas(&backend, &seed, &commits, 4).unwrap();
+        assert_eq!(betas.len(), 4);
+    }
+
+    #[test]
+    fn layer_betas_all_in_goldilocks_range() {
+        const P: u64 = 0xFFFF_FFFF_0000_0001;
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        let commits = vec![0xABu8; 8 * DIGEST_LEN];
+        let betas = derive_layer_betas(&backend, &seed, &commits, 8).unwrap();
+        for b in betas {
+            assert!(b < P, "β = {b} out of Goldilocks range");
+        }
+    }
+
+    #[test]
+    fn layer_betas_deterministic() {
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        let commits = vec![0xABu8; 3 * DIGEST_LEN];
+        let a = derive_layer_betas(&backend, &seed, &commits, 3).unwrap();
+        let b = derive_layer_betas(&backend, &seed, &commits, 3).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn layer_betas_differ_per_layer() {
+        // Each layer's β is domain-separated by its index → distinct
+        // with overwhelming probability even for identical roots.
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        let commits = vec![0xABu8; 4 * DIGEST_LEN];
+        let betas = derive_layer_betas(&backend, &seed, &commits, 4).unwrap();
+        for i in 0..betas.len() {
+            for j in (i + 1)..betas.len() {
+                assert_ne!(betas[i], betas[j], "β_{i} == β_{j}");
+            }
+        }
+    }
+
+    #[test]
+    fn layer_betas_differ_on_commit_change() {
+        let backend = HostBackend::new();
+        let seed = [0x42u8; DIGEST_LEN];
+        let mut commits = vec![0xABu8; 3 * DIGEST_LEN];
+        let a = derive_layer_betas(&backend, &seed, &commits, 3).unwrap();
+        // Flip a byte in layer-1's root.
+        commits[DIGEST_LEN] ^= 0xFF;
+        let b = derive_layer_betas(&backend, &seed, &commits, 3).unwrap();
+        // Layer 0 unchanged, layer 1 differs, layer 2 unchanged
+        // (each β uses only its own layer's root).
+        assert_eq!(a[0], b[0]);
+        assert_ne!(a[1], b[1]);
+        assert_eq!(a[2], b[2]);
+    }
+
+    #[test]
+    fn layer_betas_rejects_wrong_commit_buffer_length() {
+        let backend = HostBackend::new();
+        let seed = [0u8; DIGEST_LEN];
+        let commits = vec![0u8; 2 * DIGEST_LEN]; // 2 layers of data
+        assert!(matches!(
+            derive_layer_betas(&backend, &seed, &commits, 3), // claiming 3
+            Err(OnChainError::ProofLengthMismatch),
+        ));
     }
 }
