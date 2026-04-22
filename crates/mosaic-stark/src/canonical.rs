@@ -83,8 +83,12 @@ pub mod sizes {
     /// Max PoW grinding bits — 32 is already extremely hard; cap here.
     pub const MAX_POW_BITS: u8 = 32;
     /// Max variable-tail length (bytes). Guards against pathological
-    /// input without capping realistic 200 KB proofs (ample margin).
-    pub const MAX_TAIL_LEN: u32 = 1_048_576; // 1 MiB
+    /// input. Session 15 bumped the cap from 1 MiB to 32 MiB to
+    /// accommodate realistic `fri_layer_auth_paths` buffers —
+    /// `num_queries × num_fri × 2 × depth × 32` can reach ~1.4 MiB
+    /// for typical Plonky3 parameters (80 queries × 16 layers ×
+    /// depth 17) and ~10 MiB for deeper circuits.
+    pub const MAX_TAIL_LEN: u32 = 32 * 1_048_576; // 32 MiB
 }
 
 /// Base field identifier. Plonky3 supports several; we encode a tag
@@ -159,6 +163,18 @@ pub struct FriStarkProof<'a> {
     /// `num_queries × num_fri_layers × 16` bytes carrying `(f(x),
     /// f(-x))` Goldilocks pairs. Empty when `num_fri_layers = 0`.
     pub fri_layer_openings: &'a [u8],
+    /// Per-FRI-layer Merkle authentication paths (session 15). Flat
+    /// buffer of `num_queries × num_fri_layers × 2 × depth × 32`
+    /// bytes where `depth = trace_log_height + log_blowup` — one
+    /// auth-path per fold-opening leaf (f(x) and f(-x) each).
+    ///
+    /// Layer leaves are encoded as `digest = f_bytes ‖ 24·0x00`. Session
+    /// 15b may replace with a per-field canonical hash if fixture
+    /// work pins a specific convention (Plonky3 uses 8-byte leaves
+    /// directly with the Merkle tree's internal padding).
+    ///
+    /// Empty when `num_fri_layers = 0` or `depth = 0` (edge cases).
+    pub fri_layer_auth_paths: &'a [u8],
     /// Proof-of-work nonce used for grinding.
     pub pow_nonce: u64,
 }
@@ -218,9 +234,9 @@ impl<'a> FriStarkProof<'a> {
         };
 
         // Minimum length: header + two root digests + pow nonce +
-        // four length prefixes (ood / final / queries / fri_layer_openings,
-        // even if zero).
-        let minimum = FIXED_HEADER_LEN + 2 * DIGEST_LEN + POW_NONCE_LEN + 4 * 4;
+        // five length prefixes (ood / final / queries /
+        // fri_layer_openings / fri_layer_auth_paths, even if zero).
+        let minimum = FIXED_HEADER_LEN + 2 * DIGEST_LEN + POW_NONCE_LEN + 5 * 4;
         if bytes.len() < minimum {
             return Err(OnChainError::ProofLengthMismatch);
         }
@@ -263,8 +279,9 @@ impl<'a> FriStarkProof<'a> {
         let fri_layer_commits = &bytes[off..off + fri_layer_bytes];
         off += fri_layer_bytes;
 
-        // Four length-prefixed variable sections (ood / final /
-        // queries / fri_layer_openings — new in session 13b).
+        // Five length-prefixed variable sections (ood / final /
+        // queries / fri_layer_openings / fri_layer_auth_paths —
+        // last added in session 15).
         let (ood_evals, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
         off = new_off;
         let (fri_final_poly, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
@@ -272,6 +289,8 @@ impl<'a> FriStarkProof<'a> {
         let (query_responses, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
         off = new_off;
         let (fri_layer_openings, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
+        off = new_off;
+        let (fri_layer_auth_paths, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
         off = new_off;
 
         // Expected fri_layer_openings length check (session 13b
@@ -282,6 +301,20 @@ impl<'a> FriStarkProof<'a> {
             .and_then(|n| n.checked_mul(FRI_LAYER_OPENING_LEN))
             .ok_or(OnChainError::ProofLengthMismatch)?;
         if fri_layer_openings.len() != expected_fri_openings_len {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        // Session 15 structural invariant for fri_layer_auth_paths:
+        //   num_queries × num_fri_layers × 2 × depth × DIGEST_LEN
+        // where depth = trace_log_height + log_blowup.
+        let depth = (trace_log_height as usize) + (log_blowup as usize);
+        let expected_auth_paths_len = (num_queries as usize)
+            .checked_mul(num_fri_layers as usize)
+            .and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_mul(depth))
+            .and_then(|n| n.checked_mul(DIGEST_LEN))
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        if fri_layer_auth_paths.len() != expected_auth_paths_len {
             return Err(OnChainError::ProofLengthMismatch);
         }
 
@@ -315,6 +348,7 @@ impl<'a> FriStarkProof<'a> {
             fri_final_poly,
             query_responses,
             fri_layer_openings,
+            fri_layer_auth_paths,
             pow_nonce,
         })
     }
@@ -479,6 +513,12 @@ mod tests {
         let fri_openings_bytes =
             (num_queries as usize) * (num_fri_layers as usize) * FRI_LAYER_OPENING_LEN;
 
+        let depth = (trace_log_height as usize) + 1; // log_blowup=1 below
+        let auth_paths_bytes = (num_queries as usize)
+            * (num_fri_layers as usize)
+            * 2
+            * depth
+            * DIGEST_LEN;
         let total = FIXED_HEADER_LEN
             + 2 * DIGEST_LEN
             + (num_fri_layers as usize) * DIGEST_LEN
@@ -486,6 +526,7 @@ mod tests {
             + 4 + final_bytes
             + 4 + query_bytes
             + 4 + fri_openings_bytes
+            + 4 + auth_paths_bytes
             + POW_NONCE_LEN;
 
         let mut buf = vec![0u8; total];
@@ -506,6 +547,8 @@ mod tests {
         off += 4 + query_bytes;
         buf[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
         off += 4 + fri_openings_bytes;
+        buf[off..off + 4].copy_from_slice(&(auth_paths_bytes as u32).to_le_bytes());
+        off += 4 + auth_paths_bytes;
         // pow nonce
         buf[off..off + POW_NONCE_LEN].copy_from_slice(&0xABCD_EF12_3456_7890u64.to_le_bytes());
         buf

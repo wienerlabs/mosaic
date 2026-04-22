@@ -296,6 +296,10 @@ mod tests {
         let query_bytes = (num_q as usize) * 64;
         let fri_openings_bytes =
             (num_q as usize) * (num_fri as usize) * FRI_LAYER_OPENING_LEN;
+        // Session 15: auth paths sized by trace_log_height=16 +
+        // log_blowup=1 = 17 depth below.
+        let auth_paths_bytes =
+            (num_q as usize) * (num_fri as usize) * 2 * 17 * sizes::DIGEST_LEN;
         let total = sizes::FIXED_HEADER_LEN
             + 2 * sizes::DIGEST_LEN
             + (num_fri as usize) * sizes::DIGEST_LEN
@@ -303,6 +307,7 @@ mod tests {
             + 4 + final_bytes
             + 4 + query_bytes
             + 4 + fri_openings_bytes
+            + 4 + auth_paths_bytes
             + sizes::POW_NONCE_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = StarkFieldId::Goldilocks as u8;
@@ -320,6 +325,8 @@ mod tests {
         buf[off..off + 4].copy_from_slice(&(query_bytes as u32).to_le_bytes());
         off += 4 + query_bytes;
         buf[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
+        off += 4 + fri_openings_bytes;
+        buf[off..off + 4].copy_from_slice(&(auth_paths_bytes as u32).to_le_bytes());
         buf
     }
 

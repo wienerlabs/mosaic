@@ -290,6 +290,8 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             //    b. Evaluate `fri_final_poly` at final_x →
             //       expected_final.
             //    c. Compare; mismatch → VerificationFailed.
+            //    d. Session-15: authenticate each layer opening
+            //       against its committed Merkle root.
             //
             //    Session 14a upgrade: instead of one shared
             //    `final_layer_value` scalar, each query can have a
@@ -297,6 +299,11 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             //    has non-zero degree. This matches Plonky3/Winterfell
             //    semantics.
             let n_layers = proof.num_fri_layers as usize;
+            let depth = (proof.trace_log_height as usize)
+                + (proof.log_blowup as usize);
+            let path_bytes_per_leaf = depth * 32;
+            let path_bytes_per_layer_per_query = 2 * path_bytes_per_leaf;
+
             for (q_idx, &global_idx) in indices.iter().enumerate() {
                 let x_0 = omega.pow(global_idx);
                 let start = q_idx * n_layers;
@@ -308,6 +315,56 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
                     eval_poly_le_bytes(proof.fri_final_poly, final_x)?;
                 if computed_final != expected_final {
                     return Err(OnChainError::VerificationFailed);
+                }
+
+                // Session 15: per-layer Merkle authentication.
+                //   Each layer opening's (f_x, f_neg_x) leaves must
+                //   authenticate against fri_layer_commits[layer].
+                //   Leaf digest convention:
+                //     digest = f_bytes ‖ 24 × 0x00
+                //   Session 15b may swap for a per-field canonical
+                //   hash once fixture work pins the convention.
+                if depth > 0 {
+                    for (l_idx, (f_x, f_neg_x)) in layer_evals.iter().enumerate() {
+                        let layer_root_start = l_idx * 32;
+                        let layer_root = &proof.fri_layer_commits
+                            [layer_root_start..layer_root_start + 32];
+                        let path_base =
+                            (q_idx * n_layers + l_idx) * path_bytes_per_layer_per_query;
+                        let f_x_path_start = path_base;
+                        let f_x_path_end = f_x_path_start + path_bytes_per_leaf;
+                        let f_neg_x_path_start = f_x_path_end;
+                        let f_neg_x_path_end =
+                            f_neg_x_path_start + path_bytes_per_leaf;
+
+                        let f_x_path = &proof.fri_layer_auth_paths
+                            [f_x_path_start..f_x_path_end];
+                        let f_neg_x_path = &proof.fri_layer_auth_paths
+                            [f_neg_x_path_start..f_neg_x_path_end];
+
+                        // Leaf digests: pad Goldilocks bytes to 32.
+                        let mut f_x_leaf = [0u8; 32];
+                        f_x_leaf[..8].copy_from_slice(&f_x.to_bytes_le());
+                        let mut f_neg_x_leaf = [0u8; 32];
+                        f_neg_x_leaf[..8]
+                            .copy_from_slice(&f_neg_x.to_bytes_le());
+
+                        verify_path(
+                            self.backend,
+                            &f_x_leaf,
+                            f_x_path,
+                            global_idx,
+                            layer_root,
+                        )?;
+                        // f(-x) lives at the sibling index (toggle LSB).
+                        verify_path(
+                            self.backend,
+                            &f_neg_x_leaf,
+                            f_neg_x_path,
+                            global_idx ^ 1,
+                            layer_root,
+                        )?;
+                    }
                 }
             }
         }
@@ -405,11 +462,17 @@ mod tests {
         let query_bytes = (num_q as usize) * per_query;
         let fri_openings_bytes =
             (num_q as usize) * (num_fri as usize) * FRI_LAYER_OPENING_LEN;
+        let auth_paths_bytes = (num_q as usize)
+            * (num_fri as usize)
+            * 2
+            * depth
+            * sizes::DIGEST_LEN;
         let total = sizes::FIXED_HEADER_LEN
             + 2 * sizes::DIGEST_LEN
             + (num_fri as usize) * sizes::DIGEST_LEN
             + 4 + ood_bytes + 4 + final_bytes + 4 + query_bytes
             + 4 + fri_openings_bytes
+            + 4 + auth_paths_bytes
             + sizes::POW_NONCE_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = field as u8;
@@ -434,8 +497,10 @@ mod tests {
         }
         off += query_bytes;
         buf[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
-        // fri_openings buffer + final_layer_value remain zero (default
-        // behavior when num_fri = 0 is to skip the fold-chain check).
+        off += 4 + fri_openings_bytes;
+        // Session 15: fri_layer_auth_paths length prefix + zero-fill
+        // payload. At depth=0 the payload is empty.
+        buf[off..off + 4].copy_from_slice(&(auth_paths_bytes as u32).to_le_bytes());
         buf
     }
 
