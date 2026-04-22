@@ -39,28 +39,49 @@ use ark_bn254::Fr;
 use mosaic_core::OnChainError;
 use mosaic_zk_primitives::field::fr_from_canonical_bytes;
 
-/// Fixed-position evaluation indices.
+/// Fixed-position evaluation indices into the proof's `evaluations`
+/// flat byte buffer.
 pub mod idx {
-    // Wires at [0, 3).
+    // --- Wires at [0, 3) ---
+    /// Left-wire evaluation `a(ξ)`.
     pub const A: usize = 0;
+    /// Right-wire evaluation `b(ξ)`.
     pub const B: usize = 1;
+    /// Output-wire evaluation `c(ξ)`.
     pub const C: usize = 2;
-    // Selectors at [3, 8).
+
+    // --- Selectors at [3, 8) ---
+    /// Multiplication selector `q_M(ξ)`.
     pub const Q_M: usize = 3;
+    /// Left linear selector `q_L(ξ)`.
     pub const Q_L: usize = 4;
+    /// Right linear selector `q_R(ξ)`.
     pub const Q_R: usize = 5;
+    /// Output linear selector `q_O(ξ)`.
     pub const Q_O: usize = 6;
+    /// Constant selector `q_C(ξ)`.
     pub const Q_C: usize = 7;
-    // Permutation at [8, 13).
+
+    // --- Permutation at [8, 13) ---
+    /// Permutation grand-product `z(ξ)`.
     pub const Z: usize = 8;
+    /// Permutation grand-product at the shifted point `z(ξ·ω)`.
     pub const Z_NEXT: usize = 9;
+    /// Left-wire permutation `σ_1(ξ)`.
     pub const SIGMA_1: usize = 10;
+    /// Right-wire permutation `σ_2(ξ)`.
     pub const SIGMA_2: usize = 11;
+    /// Output-wire permutation `σ_3(ξ)`.
     pub const SIGMA_3: usize = 12;
-    // Lookup at [13, 16).
+
+    // --- Lookup at [13, 16) ---
+    /// Lookup argument input expression `input(ξ)`.
     pub const LOOKUP_INPUT: usize = 13;
+    /// Lookup table evaluation `table(ξ)`.
     pub const LOOKUP_TABLE: usize = 14;
+    /// Lookup multiplicity polynomial `m(ξ)`.
     pub const LOOKUP_M: usize = 15;
+
     /// Number of fixed-position evaluations before the quotient tail.
     pub const FIXED_SLOTS: usize = 16;
 }

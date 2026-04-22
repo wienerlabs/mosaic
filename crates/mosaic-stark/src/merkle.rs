@@ -13,8 +13,11 @@
 //! node). The hash concatenation order depends on this bit.
 
 use crate::canonical::sizes::DIGEST_LEN;
-use alloc::vec::Vec;
 use mosaic_core::{syscall::SyscallBackend, OnChainError};
+
+// Note: `Vec` is imported within `#[cfg(test)]` helpers below where
+// construct_root/construct_path allocate per-level digest arrays.
+// The on-chain `verify_path` path is zero-allocation.
 
 /// Verify a SHA-256 Merkle authentication path.
 ///

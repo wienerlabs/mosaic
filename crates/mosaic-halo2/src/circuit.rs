@@ -23,7 +23,7 @@
 //! session 4e when real fixtures drive the extension.
 
 use ark_bn254::Fr;
-use ark_ff::{Field, One};
+use ark_ff::Field;
 use mosaic_core::OnChainError;
 
 // ---------------------------------------------------------------------
@@ -217,7 +217,7 @@ pub fn combined_expr(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_ff::{UniformRand, Zero};
+    use ark_ff::{One, UniformRand, Zero};
     use ark_std::rand::{rngs::StdRng, SeedableRng};
 
     fn rng(seed: u64) -> StdRng {

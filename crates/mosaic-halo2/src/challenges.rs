@@ -56,7 +56,7 @@
 //!   committed before the evaluation point is sampled (else the prover
 //!   could construct h post-hoc to satisfy the check at ξ).
 
-use crate::canonical::{sizes::G1_LEN, Halo2KzgProof, Halo2KzgVerifyingKey};
+use crate::canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
 use ark_bn254::Fr;
 use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::{
