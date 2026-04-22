@@ -156,29 +156,49 @@ pub struct FriStarkProof<'a> {
 }
 
 impl<'a> FriStarkProof<'a> {
-    /// Iterate query responses as `(leaf, auth_path)` pairs.
+    /// Per-query byte count for the structured `query_responses`
+    /// layout (session 8 revision): each query carries **two**
+    /// `(leaf, auth_path)` pairs — one for the trace commitment and
+    /// one for the constraint commitment.
     ///
-    /// The structured layout requires each query's response to be
-    /// exactly `DIGEST_LEN + depth · DIGEST_LEN` bytes where
-    /// `depth = trace_log_height + log_blowup` (the Merkle tree for
-    /// the committed trace has one leaf per row in the blown-up
-    /// evaluation domain).
+    /// Total length:
+    /// `2 · (DIGEST_LEN + depth · DIGEST_LEN) = 2 · (1 + depth) · 32 B`
+    /// where `depth = trace_log_height + log_blowup`.
+    #[must_use]
+    pub fn per_query_bytes(&self) -> usize {
+        let depth = (self.trace_log_height as usize) + (self.log_blowup as usize);
+        2 * (sizes::DIGEST_LEN + depth * sizes::DIGEST_LEN)
+    }
+
+    /// Iterate query responses as `(trace_leaf, trace_path,
+    /// constraint_leaf, constraint_path)` 4-tuples.
+    ///
+    /// Each query carries openings against two Merkle commitments:
+    /// the **trace** commitment (containing the executed program's
+    /// state at each row) and the **constraint** commitment
+    /// (containing the constraint-composition polynomial's
+    /// evaluations). The verifier must check both paths for
+    /// full soundness.
     ///
     /// Returns `None` if the buffer isn't consistent with the
     /// declared `(num_queries, depth)`.
-    pub fn query_response_iter(&self) -> Option<impl Iterator<Item = (&'a [u8], &'a [u8])> + '_> {
+    pub fn query_response_iter(
+        &self,
+    ) -> Option<impl Iterator<Item = (&'a [u8], &'a [u8], &'a [u8], &'a [u8])> + '_> {
         use sizes::DIGEST_LEN;
         let depth = (self.trace_log_height as usize) + (self.log_blowup as usize);
-        let per_query = DIGEST_LEN + depth * DIGEST_LEN;
+        let single_len = DIGEST_LEN + depth * DIGEST_LEN;
+        let per_query = 2 * single_len;
         let expected_len = (self.num_queries as usize) * per_query;
         if self.query_responses.len() != expected_len {
             return None;
         }
-        Some(
-            self.query_responses
-                .chunks_exact(per_query)
-                .map(move |chunk| chunk.split_at(DIGEST_LEN)),
-        )
+        Some(self.query_responses.chunks_exact(per_query).map(move |chunk| {
+            let (trace, constraint) = chunk.split_at(single_len);
+            let (t_leaf, t_path) = trace.split_at(DIGEST_LEN);
+            let (c_leaf, c_path) = constraint.split_at(DIGEST_LEN);
+            (t_leaf, t_path, c_leaf, c_path)
+        }))
     }
 
     /// Parse a canonical FRI-STARK proof. Performs bounds + sanity

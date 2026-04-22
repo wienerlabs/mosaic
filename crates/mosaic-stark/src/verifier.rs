@@ -182,8 +182,12 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
         let iter = proof
             .query_response_iter()
             .ok_or(OnChainError::ProofLengthMismatch)?;
-        for ((leaf, path), idx) in iter.zip(indices.iter().copied()) {
-            verify_path(self.backend, leaf, path, idx, proof.trace_commitment)?;
+        for ((t_leaf, t_path, c_leaf, c_path), idx) in iter.zip(indices.iter().copied()) {
+            // Trace commitment path.
+            verify_path(self.backend, t_leaf, t_path, idx, proof.trace_commitment)?;
+            // Constraint commitment path (session 8 addition — second
+            // soundness gate closes the composition-polynomial side).
+            verify_path(self.backend, c_leaf, c_path, idx, proof.constraint_commitment)?;
         }
 
         Ok(())
@@ -252,10 +256,12 @@ mod tests {
         }
     }
 
-    /// Build a proof with the session-7 structured query layout.
+    /// Build a proof with the session-8 structured query layout.
     ///
     /// `log_h` + `log_blowup` determines the Merkle depth: each query
-    /// response is `(1 + depth) · 32 B = leaf || auth_path`.
+    /// response is **two** `(leaf, auth_path)` pairs concatenated —
+    /// one for the trace commitment, one for the constraint
+    /// commitment. Per-query total: `2 · (1 + depth) · 32 B`.
     ///
     /// For deterministic tests, all leaves and path nodes are filled
     /// with `leaf_fill` so callers can construct trees whose root is
@@ -272,7 +278,7 @@ mod tests {
         let ood_bytes = 10 * field.field_elem_bytes();
         let final_bytes = 4 * field.field_elem_bytes();
         let depth = (log_h as usize) + (log_blowup as usize);
-        let per_query = sizes::DIGEST_LEN + depth * sizes::DIGEST_LEN;
+        let per_query = 2 * (sizes::DIGEST_LEN + depth * sizes::DIGEST_LEN);
         let query_bytes = (num_q as usize) * per_query;
         let total = sizes::FIXED_HEADER_LEN
             + 2 * sizes::DIGEST_LEN
@@ -319,44 +325,78 @@ mod tests {
         .to_bytes()
     }
 
-    /// Session-7 happy path: depth-0 Merkle tree (domain size 1 → 1
-    /// leaf → leaf == root). With `trace_commitment = leaf_fill` and
-    /// query_responses filled with leaf_fill, every query trivially
-    /// verifies against the root.
+    /// Session-8 happy path: depth-0 Merkle trees (1 leaf each → leaf
+    /// == root) for BOTH trace and constraint commitments. With both
+    /// commits set to `leaf_fill` and query_responses filled with
+    /// `leaf_fill`, every (trace_path, constraint_path) pair trivially
+    /// verifies.
     #[test]
-    fn full_pipeline_accepts_depth_zero_merkle() {
+    fn full_pipeline_accepts_depth_zero_merkle_both_commits() {
         let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = FriStark::new(&backend);
         let vk = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
-        // trace_commitment at offset FIXED_HEADER (16).
         let mut proof = proof_bytes(StarkFieldId::Goldilocks, 0, 4, 0, 32, 0, 0xAB);
-        for byte in proof[sizes::FIXED_HEADER_LEN..sizes::FIXED_HEADER_LEN + sizes::DIGEST_LEN]
-            .iter_mut()
-        {
+        // Both commitments at offset FIXED_HEADER (trace) and
+        // FIXED_HEADER + DIGEST_LEN (constraint).
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        let constraint_off = trace_off + sizes::DIGEST_LEN;
+        for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        for byte in proof[constraint_off..constraint_off + sizes::DIGEST_LEN].iter_mut() {
             *byte = 0xAB;
         }
         let r = FriStark::verify(&v, &vk, &proof, &[]);
-        assert!(r.is_ok(), "depth-0 Merkle check should pass, got {r:?}");
+        assert!(r.is_ok(), "depth-0 dual Merkle check should pass, got {r:?}");
     }
 
-    /// Session-7 soundness gate: mismatched trace_commitment vs
-    /// query-leaf contents → `VerificationFailed` from merkle.rs.
+    /// Session-8 trace-side soundness: trace_commitment mismatches
+    /// the query leaves → first path check fails → `VerificationFailed`.
     #[test]
-    fn rejects_mismatched_merkle_leaf() {
+    fn rejects_mismatched_trace_merkle_leaf() {
         let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = FriStark::new(&backend);
         let vk = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
         let mut proof = proof_bytes(StarkFieldId::Goldilocks, 0, 4, 0, 32, 0, 0xAB);
-        // trace_commitment = 0xCD (all), query leaves = 0xAB.
-        for byte in proof[sizes::FIXED_HEADER_LEN..sizes::FIXED_HEADER_LEN + sizes::DIGEST_LEN]
-            .iter_mut()
-        {
+        // Constraint commitment matches (0xAB), trace doesn't.
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        let constraint_off = trace_off + sizes::DIGEST_LEN;
+        for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xCD;
+        }
+        for byte in proof[constraint_off..constraint_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        let r = FriStark::verify(&v, &vk, &proof, &[]);
+        assert!(
+            matches!(r, Err(OnChainError::VerificationFailed)),
+            "mismatched trace leaf should fail Merkle, got {r:?}",
+        );
+    }
+
+    /// Session-8 constraint-side soundness: trace check passes but
+    /// constraint_commitment mismatches → second path check fails
+    /// → `VerificationFailed`. Confirms the constraint commitment
+    /// is actually being verified, not just parsed.
+    #[test]
+    fn rejects_mismatched_constraint_merkle_leaf() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let vk = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 0, 4, 0, 32, 0, 0xAB);
+        // Trace commitment matches (0xAB), constraint doesn't.
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        let constraint_off = trace_off + sizes::DIGEST_LEN;
+        for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        for byte in proof[constraint_off..constraint_off + sizes::DIGEST_LEN].iter_mut() {
             *byte = 0xCD;
         }
         let r = FriStark::verify(&v, &vk, &proof, &[]);
         assert!(
             matches!(r, Err(OnChainError::VerificationFailed)),
-            "mismatched leaf vs trace root should fail Merkle, got {r:?}",
+            "mismatched constraint leaf should fail Merkle, got {r:?}",
         );
     }
 
