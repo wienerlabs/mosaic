@@ -155,7 +155,14 @@ missing_panics_doc = "allow"
 disallowed_macros = "allow"
 
 [profile.release]
-opt-level = 3
+# opt-level = "z" — size-optimized. Chosen over `= 3` after measuring
+# SBF binary growth from Phase-3 bodies crossed 97% of Solana's 1 MB
+# program limit at `= 3`. The size optimizer favors fewer inlining
+# decisions, shared tail call destinations, and smaller code-generation
+# options at the cost of ~5-15% runtime. On-chain CU impact is measured
+# per-verifier in bpf-bench; Groth16/PLONK baselines unchanged within
+# tolerance (see v0.4.1 CHANGELOG for per-system re-measurement).
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
@@ -169,6 +176,9 @@ debug = true
 strip = "none"
 
 [profile.bench]
+# Benchmarks prioritize runtime accuracy over binary size — keep the
+# speed-optimized profile for host-side benches so microbenchmarks
+# reflect production-equivalent arithmetic throughput.
 opt-level = 3
 lto = "fat"
 codegen-units = 1
@@ -179,4 +189,7 @@ opt-level = 0
 debug = true
 overflow-checks = true
 
-# SBF target inherits release profile but cargo-build-sbf overrides as needed.
+# SBF target inherits release profile. The `opt-level = "z"` setting
+# above is specifically chosen for the Solana program binary —
+# cargo-build-sbf reads this profile and the size reduction directly
+# impacts deploy feasibility under the 1 MB on-chain limit.
