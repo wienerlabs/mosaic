@@ -73,7 +73,11 @@
 //!   first Phase-3 milestone targets Nova only, with HyperNova and
 //!   ProtoStar landing in follow-up commits (tracked on issue #4).
 
-use crate::canonical::{NovaFoldingProof, NovaFoldingVerifyingKey};
+use crate::{
+    canonical::{NovaFoldingProof, NovaFoldingVerifyingKey},
+    challenges::derive_challenges,
+    kzg::verify_opening_scaffold,
+};
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
@@ -92,15 +96,34 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
         Self { backend }
     }
 
-    /// Phase-2 scaffolding: parse byte layout, cross-check VK vs proof
-    /// on variant + public input count, return
-    /// `UnimplementedProofSystem`. Phase 3 wires the actual folded-
-    /// instance verifier per the module-level plan.
+    /// Verify a Nova / HyperNova / ProtoStar folding proof.
+    ///
+    /// Session-5c implementation: full pipeline from parse through
+    /// KZG scaffold opening. Returns `Ok(())` on success.
+    ///
+    /// ## Scaffold caveat
+    ///
+    /// The Hadamard-relation check + folded-commitment reconstruction
+    /// primitives are implemented in `folding.rs` and unit-tested,
+    /// but not yet composed into the pipeline — the pipeline
+    /// currently runs transcript challenges + a single-commitment
+    /// KZG opening. Session 6 pins the full folded-instance check
+    /// against `sonobe` reference fixtures and wires Hadamard +
+    /// commitment reconstruction into the main flow.
+    ///
+    /// ## Errors
+    ///
+    /// - `VerifyingKeyLengthMismatch` / `ProofLengthMismatch` — wire.
+    /// - `VerifyingKeyProofMismatch` — variant or n_public disagree.
+    /// - `PublicInputCountMismatch` / `PublicInputOutOfRange` — PI
+    ///   validation in challenges.
+    /// - `PairingCheckFailed` — KZG opening failed.
+    /// - `InvalidPointEncoding` — malformed G1 commitment.
     pub fn verify(
         &self,
         vk_bytes: &[u8],
         proof_bytes: &[u8],
-        _public_inputs_bytes: &[u8],
+        public_inputs_bytes: &[u8],
     ) -> Result<(), OnChainError> {
         let vk = NovaFoldingVerifyingKey::from_bytes(vk_bytes)?;
         let proof = NovaFoldingProof::from_bytes(proof_bytes)?;
@@ -109,10 +132,15 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
             return Err(OnChainError::VerifyingKeyProofMismatch);
         }
 
-        // Backend will drive MSMs + pairing in Phase 3. Drop reference
-        // to silence warnings for now.
-        let _ = self.backend;
-        Err(OnChainError::UnimplementedProofSystem)
+        // Derive challenges (r, ξ, ν) from VK + proof + PI.
+        let (challenges, _transcript) =
+            derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
+
+        // KZG scaffold opening at ξ (single-commitment stand-in;
+        // session 6 extends to the full Spartan-batched opening).
+        verify_opening_scaffold(self.backend, &vk, &proof, &challenges.xi)?;
+
+        Ok(())
     }
 }
 
@@ -198,7 +226,8 @@ mod tests {
             variant,
             n_public,
             n_constraints: 1024,
-            x2_g2: [0; sizes::G2_LEN],
+            // Real G2 generator — pairing syscall rejects (0,0,0,0).
+            x2_g2: mosaic_plonk::g1_consts::g2_generator_bytes(),
             a_comm: [0; sizes::G1_LEN],
             b_comm: [0; sizes::G1_LEN],
             c_comm: [0; sizes::G1_LEN],
@@ -207,24 +236,33 @@ mod tests {
         .to_bytes()
     }
 
+    /// Build a PI buffer of n Fr zero elements (matching n_public).
+    fn zero_pi(n: u16) -> Vec<u8> {
+        vec![0u8; (n as usize) * sizes::FR_LEN]
+    }
+
+    /// Session-5c integration: full pipeline runs with HostBackend +
+    /// zero-filled proof/PI; pairing of identities accepts.
     #[test]
-    fn parses_wire_before_returning_unimplemented() {
-        let backend = MockBackend;
+    fn full_pipeline_zero_proof_accepts() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = NovaFolding::new(&backend);
         let vk = matching_vk(FoldingVariant::Nova, 4);
         let proof = proof_bytes(FoldingVariant::Nova, 0, 4);
-        let r = NovaFolding::verify(&v, &vk, &proof, &[]);
-        assert!(matches!(r, Err(OnChainError::UnimplementedProofSystem)));
+        let pi = zero_pi(4);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        assert!(r.is_ok(), "zero-proof pipeline should pass, got {r:?}");
     }
 
     #[test]
-    fn parses_hypernova_with_aux_commits() {
-        let backend = MockBackend;
+    fn full_pipeline_hypernova_with_aux_commits() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = NovaFolding::new(&backend);
         let vk = matching_vk(FoldingVariant::HyperNova, 2);
         let proof = proof_bytes(FoldingVariant::HyperNova, 4, 2);
-        let r = NovaFolding::verify(&v, &vk, &proof, &[]);
-        assert!(matches!(r, Err(OnChainError::UnimplementedProofSystem)));
+        let pi = zero_pi(2);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        assert!(r.is_ok(), "HyperNova zero-proof pipeline should pass, got {r:?}");
     }
 
     #[test]
@@ -233,7 +271,8 @@ mod tests {
         let v = NovaFolding::new(&backend);
         let vk = matching_vk(FoldingVariant::Nova, 2);
         let proof = proof_bytes(FoldingVariant::HyperNova, 0, 2);
-        let r = NovaFolding::verify(&v, &vk, &proof, &[]);
+        let pi = zero_pi(2);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
         assert!(matches!(r, Err(OnChainError::VerifyingKeyProofMismatch)));
     }
 
@@ -243,7 +282,8 @@ mod tests {
         let v = NovaFolding::new(&backend);
         let vk = matching_vk(FoldingVariant::Nova, 2);
         let proof = proof_bytes(FoldingVariant::Nova, 0, 4);
-        let r = NovaFolding::verify(&v, &vk, &proof, &[]);
+        let pi = zero_pi(2); // VK says 2 but proof has 4
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
         assert!(matches!(r, Err(OnChainError::VerifyingKeyProofMismatch)));
     }
 

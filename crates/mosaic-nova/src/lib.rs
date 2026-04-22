@@ -82,7 +82,13 @@
 extern crate alloc;
 
 pub mod canonical;
+pub mod challenges;
+pub mod folding;
+pub mod kzg;
 pub mod verifier;
 
 pub use canonical::{FoldingVariant, NovaFoldingProof, NovaFoldingVerifyingKey};
+pub use challenges::{derive_challenges, NovaChallenges};
+pub use folding::{folded_commitment_from_fold, folded_error_commitment, hadamard_residual};
+pub use kzg::verify_opening_scaffold;
 pub use verifier::NovaFolding;

@@ -198,12 +198,11 @@ pub(crate) fn dispatch_verify(
             FriStark::verify(&v, vk, proof, public_inputs)
         },
         ProofSystemId::NovaFolding | ProofSystemId::ProtoStarFolding => {
-            // Phase-3 scaffold. Nova / HyperNova / ProtoStar share the
-            // same canonical layout; the proof's variant tag byte
-            // disambiguates inside `NovaFolding::verify`. The Halo2/
-            // PLONK dispatcher discriminant is coarser than the folding
-            // variant tag — ProtoStarFolding routes here too, with the
-            // proof's own tag byte claiming ProtoStar (variant = 2).
+            // Phase-3 body (session 5c): full verifier pipeline wired —
+            // parse → challenges (r, ξ, ν) → KZG scaffold opening.
+            // Hadamard-relation check + folded-commitment reconstruction
+            // primitives are built but not yet composed; full Spartan-
+            // wrapped multi-opening lands in session 6.
             let v = NovaFolding::new(&backend);
             NovaFolding::verify(&v, vk, proof, public_inputs)
         },
