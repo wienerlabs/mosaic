@@ -159,12 +159,6 @@ pub struct FriStarkProof<'a> {
     /// `num_queries × num_fri_layers × 16` bytes carrying `(f(x),
     /// f(-x))` Goldilocks pairs. Empty when `num_fri_layers = 0`.
     pub fri_layer_openings: &'a [u8],
-    /// Claimed final-layer scalar after all FRI folds
-    /// (session 13b). Single Goldilocks value, 8-byte LE. All queries
-    /// must fold to this same scalar (scaffold assumption: final
-    /// polynomial is constant; Session 14 extends to multi-coefficient
-    /// final polynomials).
-    pub final_layer_value: [u8; 8],
     /// Proof-of-work nonce used for grinding.
     pub pow_nonce: u64,
 }
@@ -225,8 +219,8 @@ impl<'a> FriStarkProof<'a> {
 
         // Minimum length: header + two root digests + pow nonce +
         // four length prefixes (ood / final / queries / fri_layer_openings,
-        // even if zero) + 8 bytes final_layer_value.
-        let minimum = FIXED_HEADER_LEN + 2 * DIGEST_LEN + POW_NONCE_LEN + 4 * 4 + 8;
+        // even if zero).
+        let minimum = FIXED_HEADER_LEN + 2 * DIGEST_LEN + POW_NONCE_LEN + 4 * 4;
         if bytes.len() < minimum {
             return Err(OnChainError::ProofLengthMismatch);
         }
@@ -291,13 +285,10 @@ impl<'a> FriStarkProof<'a> {
             return Err(OnChainError::ProofLengthMismatch);
         }
 
-        // Trailing: final_layer_value (8 bytes LE Goldilocks) + pow_nonce.
-        if bytes.len() != off + 8 + POW_NONCE_LEN {
+        // Trailing: pow_nonce.
+        if bytes.len() != off + POW_NONCE_LEN {
             return Err(OnChainError::ProofLengthMismatch);
         }
-        let mut final_layer_value = [0u8; 8];
-        final_layer_value.copy_from_slice(&bytes[off..off + 8]);
-        off += 8;
         let pow_nonce = u64::from_le_bytes([
             bytes[off],
             bytes[off + 1],
@@ -324,7 +315,6 @@ impl<'a> FriStarkProof<'a> {
             fri_final_poly,
             query_responses,
             fri_layer_openings,
-            final_layer_value,
             pow_nonce,
         })
     }
@@ -496,7 +486,6 @@ mod tests {
             + 4 + final_bytes
             + 4 + query_bytes
             + 4 + fri_openings_bytes
-            + 8 // final_layer_value
             + POW_NONCE_LEN;
 
         let mut buf = vec![0u8; total];
@@ -517,8 +506,6 @@ mod tests {
         off += 4 + query_bytes;
         buf[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
         off += 4 + fri_openings_bytes;
-        // final_layer_value (8 bytes, left zero).
-        off += 8;
         // pow nonce
         buf[off..off + POW_NONCE_LEN].copy_from_slice(&0xABCD_EF12_3456_7890u64.to_le_bytes());
         buf

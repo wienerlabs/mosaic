@@ -303,7 +303,6 @@ mod tests {
             + 4 + final_bytes
             + 4 + query_bytes
             + 4 + fri_openings_bytes
-            + 8 // final_layer_value
             + sizes::POW_NONCE_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = StarkFieldId::Goldilocks as u8;
