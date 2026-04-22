@@ -70,10 +70,12 @@ extern crate alloc;
 
 pub mod canonical;
 pub mod challenges;
+pub mod goldilocks;
 pub mod merkle;
 pub mod verifier;
 
 pub use canonical::{FriStarkProof, FriStarkVerifyingKey, StarkFieldId};
 pub use challenges::{derive_challenges, derive_query_indices, StarkChallenges};
+pub use goldilocks::Goldilocks;
 pub use merkle::verify_path;
 pub use verifier::FriStark;
