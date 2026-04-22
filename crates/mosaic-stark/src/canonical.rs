@@ -156,6 +156,31 @@ pub struct FriStarkProof<'a> {
 }
 
 impl<'a> FriStarkProof<'a> {
+    /// Iterate query responses as `(leaf, auth_path)` pairs.
+    ///
+    /// The structured layout requires each query's response to be
+    /// exactly `DIGEST_LEN + depth · DIGEST_LEN` bytes where
+    /// `depth = trace_log_height + log_blowup` (the Merkle tree for
+    /// the committed trace has one leaf per row in the blown-up
+    /// evaluation domain).
+    ///
+    /// Returns `None` if the buffer isn't consistent with the
+    /// declared `(num_queries, depth)`.
+    pub fn query_response_iter(&self) -> Option<impl Iterator<Item = (&'a [u8], &'a [u8])> + '_> {
+        use sizes::DIGEST_LEN;
+        let depth = (self.trace_log_height as usize) + (self.log_blowup as usize);
+        let per_query = DIGEST_LEN + depth * DIGEST_LEN;
+        let expected_len = (self.num_queries as usize) * per_query;
+        if self.query_responses.len() != expected_len {
+            return None;
+        }
+        Some(
+            self.query_responses
+                .chunks_exact(per_query)
+                .map(move |chunk| chunk.split_at(DIGEST_LEN)),
+        )
+    }
+
     /// Parse a canonical FRI-STARK proof. Performs bounds + sanity
     /// checks; does *not* verify cryptographic content.
     pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, OnChainError> {

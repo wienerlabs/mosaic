@@ -78,6 +78,7 @@
 use crate::{
     canonical::{FriStarkProof, FriStarkVerifyingKey},
     challenges::{derive_challenges, derive_query_indices},
+    merkle::verify_path,
 };
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
@@ -160,16 +161,31 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             return Err(OnChainError::ProofLengthMismatch);
         }
         let domain_size: u64 = 1u64 << domain_log;
-        let _indices = derive_query_indices(
+        let indices = derive_query_indices(
             self.backend,
             &challenges.query_seed,
             proof.num_queries,
             domain_size,
         )?;
 
-        // Session 7: per-query Merkle path verification + FRI-layer
-        // fold checks. For now the structural pipeline runs
-        // end-to-end and returns Ok().
+        // Session 7: per-query Merkle path verification against the
+        // trace commitment. The proof's `query_responses` buffer is
+        // parsed as (leaf, auth_path) pairs; each path is walked via
+        // SHA-256 and compared to `proof.trace_commitment`. A single
+        // tampered path yields `OnChainError::VerificationFailed`.
+        //
+        // Scaffold caveat: this only validates the trace commitment
+        // side. Constraint-commitment paths + FRI-layer consistency
+        // checks remain session 8 work (needs structured layout
+        // extensions for constraint query responses + per-layer
+        // opening bundles).
+        let iter = proof
+            .query_response_iter()
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        for ((leaf, path), idx) in iter.zip(indices.iter().copied()) {
+            verify_path(self.backend, leaf, path, idx, proof.trace_commitment)?;
+        }
+
         Ok(())
     }
 }
@@ -236,10 +252,28 @@ mod tests {
         }
     }
 
-    fn proof_bytes(field: StarkFieldId, num_fri: u8, num_q: u16, log_h: u16, width: u32) -> Vec<u8> {
+    /// Build a proof with the session-7 structured query layout.
+    ///
+    /// `log_h` + `log_blowup` determines the Merkle depth: each query
+    /// response is `(1 + depth) · 32 B = leaf || auth_path`.
+    ///
+    /// For deterministic tests, all leaves and path nodes are filled
+    /// with `leaf_fill` so callers can construct trees whose root is
+    /// known analytically.
+    fn proof_bytes(
+        field: StarkFieldId,
+        num_fri: u8,
+        num_q: u16,
+        log_h: u16,
+        width: u32,
+        log_blowup: u8,
+        leaf_fill: u8,
+    ) -> Vec<u8> {
         let ood_bytes = 10 * field.field_elem_bytes();
         let final_bytes = 4 * field.field_elem_bytes();
-        let query_bytes = (num_q as usize) * 64;
+        let depth = (log_h as usize) + (log_blowup as usize);
+        let per_query = sizes::DIGEST_LEN + depth * sizes::DIGEST_LEN;
+        let query_bytes = (num_q as usize) * per_query;
         let total = sizes::FIXED_HEADER_LEN
             + 2 * sizes::DIGEST_LEN
             + (num_fri as usize) * sizes::DIGEST_LEN
@@ -247,7 +281,7 @@ mod tests {
             + sizes::POW_NONCE_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = field as u8;
-        buf[1] = 1; // log_blowup
+        buf[1] = log_blowup;
         buf[2] = num_fri;
         buf[4..6].copy_from_slice(&num_q.to_le_bytes());
         buf[6..8].copy_from_slice(&log_h.to_le_bytes());
@@ -260,30 +294,91 @@ mod tests {
         buf[off..off + 4].copy_from_slice(&(final_bytes as u32).to_le_bytes());
         off += 4 + final_bytes;
         buf[off..off + 4].copy_from_slice(&(query_bytes as u32).to_le_bytes());
+        off += 4;
+        // Fill query_responses with the leaf_fill pattern so every
+        // 32-byte chunk is a consistent leaf/sibling digest.
+        for byte in buf[off..off + query_bytes].iter_mut() {
+            *byte = leaf_fill;
+        }
         buf
     }
 
-    fn matching_vk(field: StarkFieldId, log_h: u16, width: u32) -> Vec<u8> {
+    fn matching_vk(
+        field: StarkFieldId,
+        log_h: u16,
+        width: u32,
+        log_blowup: u8,
+    ) -> Vec<u8> {
         FriStarkVerifyingKey {
             field_id: field,
             trace_width: width,
             trace_log_height: log_h,
-            log_blowup: 1,
+            log_blowup,
             air_hash: [0; 32],
         }
         .to_bytes()
     }
 
-    /// Session-6 full pipeline: parse → challenges → query indices →
-    /// Ok(()). Uses HostBackend for real SHA-256.
+    /// Session-7 happy path: depth-0 Merkle tree (domain size 1 → 1
+    /// leaf → leaf == root). With `trace_commitment = leaf_fill` and
+    /// query_responses filled with leaf_fill, every query trivially
+    /// verifies against the root.
     #[test]
-    fn full_pipeline_accepts_well_formed_proof() {
+    fn full_pipeline_accepts_depth_zero_merkle() {
         let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = FriStark::new(&backend);
-        let vk = matching_vk(StarkFieldId::Goldilocks, 16, 32);
-        let proof = proof_bytes(StarkFieldId::Goldilocks, 16, 80, 16, 32);
+        let vk = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+        // trace_commitment at offset FIXED_HEADER (16).
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 0, 4, 0, 32, 0, 0xAB);
+        for byte in proof[sizes::FIXED_HEADER_LEN..sizes::FIXED_HEADER_LEN + sizes::DIGEST_LEN]
+            .iter_mut()
+        {
+            *byte = 0xAB;
+        }
         let r = FriStark::verify(&v, &vk, &proof, &[]);
-        assert!(r.is_ok(), "structural pipeline should accept, got {r:?}");
+        assert!(r.is_ok(), "depth-0 Merkle check should pass, got {r:?}");
+    }
+
+    /// Session-7 soundness gate: mismatched trace_commitment vs
+    /// query-leaf contents → `VerificationFailed` from merkle.rs.
+    #[test]
+    fn rejects_mismatched_merkle_leaf() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let vk = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 0, 4, 0, 32, 0, 0xAB);
+        // trace_commitment = 0xCD (all), query leaves = 0xAB.
+        for byte in proof[sizes::FIXED_HEADER_LEN..sizes::FIXED_HEADER_LEN + sizes::DIGEST_LEN]
+            .iter_mut()
+        {
+            *byte = 0xCD;
+        }
+        let r = FriStark::verify(&v, &vk, &proof, &[]);
+        assert!(
+            matches!(r, Err(OnChainError::VerificationFailed)),
+            "mismatched leaf vs trace root should fail Merkle, got {r:?}",
+        );
+    }
+
+    /// Session-7 length guard: query_responses buffer that doesn't
+    /// match the structured `num_queries × (1 + depth) × DIGEST_LEN`
+    /// shape is rejected up-front.
+    #[test]
+    fn rejects_malformed_query_responses_length() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let vk = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+        // Build a valid proof then shift n_queries to claim one extra
+        // query without adding its 32 bytes of response → length
+        // guard fires.
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 0, 4, 0, 32, 0, 0xAB);
+        // Bump num_queries header from 4 to 5.
+        proof[4..6].copy_from_slice(&5u16.to_le_bytes());
+        let r = FriStark::verify(&v, &vk, &proof, &[]);
+        assert!(
+            matches!(r, Err(OnChainError::ProofLengthMismatch)),
+            "num_queries/buffer mismatch should fail length check, got {r:?}",
+        );
     }
 
     #[test]
@@ -291,8 +386,8 @@ mod tests {
         let backend = MockBackend;
         let v = FriStark::new(&backend);
         // VK says Goldilocks, proof says BabyBear.
-        let vk = matching_vk(StarkFieldId::Goldilocks, 10, 8);
-        let proof = proof_bytes(StarkFieldId::BabyBear, 4, 10, 10, 8);
+        let vk = matching_vk(StarkFieldId::Goldilocks, 10, 8, 1);
+        let proof = proof_bytes(StarkFieldId::BabyBear, 4, 10, 10, 8, 1, 0);
         let r = FriStark::verify(&v, &vk, &proof, &[]);
         assert!(matches!(r, Err(OnChainError::VerifyingKeyProofMismatch)));
     }
@@ -301,8 +396,8 @@ mod tests {
     fn rejects_vk_proof_trace_width_mismatch() {
         let backend = MockBackend;
         let v = FriStark::new(&backend);
-        let vk = matching_vk(StarkFieldId::Goldilocks, 16, 32);
-        let proof = proof_bytes(StarkFieldId::Goldilocks, 8, 40, 16, 64); // width 64 ≠ 32
+        let vk = matching_vk(StarkFieldId::Goldilocks, 16, 32, 1);
+        let proof = proof_bytes(StarkFieldId::Goldilocks, 8, 40, 16, 64, 1, 0); // width 64 ≠ 32
         let r = FriStark::verify(&v, &vk, &proof, &[]);
         assert!(matches!(r, Err(OnChainError::VerifyingKeyProofMismatch)));
     }
@@ -312,7 +407,7 @@ mod tests {
         let backend = MockBackend;
         let v = FriStark::new(&backend);
         let bad_vk = vec![0u8; FriStarkVerifyingKey::SERIALIZED_LEN - 1];
-        let proof = proof_bytes(StarkFieldId::Goldilocks, 4, 10, 10, 4);
+        let proof = proof_bytes(StarkFieldId::Goldilocks, 4, 10, 10, 4, 1, 0);
         let r = FriStark::verify(&v, &bad_vk, &proof, &[]);
         assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
     }
@@ -321,7 +416,7 @@ mod tests {
     fn rejects_wrong_proof_length() {
         let backend = MockBackend;
         let v = FriStark::new(&backend);
-        let vk = matching_vk(StarkFieldId::Goldilocks, 16, 32);
+        let vk = matching_vk(StarkFieldId::Goldilocks, 16, 32, 1);
         let bad_proof = vec![0u8; 8]; // way too short
         let r = FriStark::verify(&v, &vk, &bad_proof, &[]);
         assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
