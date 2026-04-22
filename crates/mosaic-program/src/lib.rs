@@ -190,10 +190,11 @@ pub(crate) fn dispatch_verify(
             Halo2KzgBn254::verify(&v, vk, proof, public_inputs)
         },
         ProofSystemId::FriStark => {
-            // Phase-3 scaffold — wire-format + VK/proof cross-check runs;
-            // real hash-based verifier body lands with #3. Large proofs
-            // must arrive via the chunked-upload protocol before reaching
-            // this dispatcher.
+            // Phase-3 body (session 6): structural pipeline wired —
+            // parse → challenges (α, z, query_seed via SHA-256) →
+            // per-query index derivation. Full FRI-layer fold + Merkle
+            // opening checks land in session 7 against Plonky3/
+            // Winterfell fixtures.
             let v = FriStark::new(&backend);
             FriStark::verify(&v, vk, proof, public_inputs)
         },

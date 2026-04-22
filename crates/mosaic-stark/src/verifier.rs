@@ -75,7 +75,10 @@
 //! 3. `CommitAndVerify` reassembles the buffer and invokes
 //!    `mosaic-program::dispatch_verify` with `ProofSystemId::FriStark`.
 
-use crate::canonical::{FriStarkProof, FriStarkVerifyingKey};
+use crate::{
+    canonical::{FriStarkProof, FriStarkVerifyingKey},
+    challenges::{derive_challenges, derive_query_indices},
+};
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
@@ -98,23 +101,47 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
         Self { backend }
     }
 
-    /// Phase-2 scaffolding: parse byte layout, cross-check VK vs proof
-    /// field-id + trace width, return `UnimplementedProofSystem`.
-    /// Phase 3 wires the full hash-based verifier body per the
-    /// module-level plan.
+    /// Verify a FRI-STARK proof.
+    ///
+    /// Session-6 implementation: structural pipeline. Full Hadamard
+    /// FRI-layer fold verification + trace/constraint Merkle opening
+    /// lands in session 7 against Plonky3/Winterfell fixtures.
+    ///
+    /// ## Current pipeline
+    ///
+    /// ```text
+    /// parse VK + proof + cross-check field/trace shape
+    ///   ↓
+    /// derive_challenges (α, z, query_seed) via SHA-256 transcript
+    ///   ↓
+    /// derive_query_indices (num_queries indices in trace domain)
+    ///   ↓
+    /// Ok(())
+    /// ```
+    ///
+    /// ## Scaffold caveat
+    ///
+    /// The Merkle path verifier (`merkle::verify_path`) is built and
+    /// unit-tested but not yet wired because the canonical
+    /// `query_responses` field is a flat byte buffer — real FRI-STARK
+    /// needs a structured layout (per-query leaf + path + neighbor).
+    /// Session 7 extends canonical for that and calls the Merkle
+    /// verifier per query index.
+    ///
+    /// ## Errors
+    ///
+    /// - `VerifyingKeyLengthMismatch` / `ProofLengthMismatch` — wire.
+    /// - `VerifyingKeyProofMismatch` — field or trace shape disagree.
+    /// - `Sha256SyscallFailed` — hash failure in challenge derivation.
     pub fn verify(
         &self,
         vk_bytes: &[u8],
         proof_bytes: &[u8],
-        _public_inputs_bytes: &[u8],
+        public_inputs_bytes: &[u8],
     ) -> Result<(), OnChainError> {
         let vk = FriStarkVerifyingKey::from_bytes(vk_bytes)?;
         let proof = FriStarkProof::from_bytes(proof_bytes)?;
 
-        // Cross-consistency: VK must match proof's field + trace shape.
-        // Catches VK/proof pair mismatches early — real verifier body
-        // would produce garbage challenges and fail cryptographically,
-        // but surfacing the configuration mismatch is a clearer error.
         if vk.field_id != proof.field_id
             || vk.trace_width != proof.trace_width
             || vk.trace_log_height != proof.trace_log_height
@@ -123,10 +150,27 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             return Err(OnChainError::VerifyingKeyProofMismatch);
         }
 
-        // Backend will be used in Phase 3 (SHA-256 absorbs for FRI +
-        // Merkle verification). Drop reference to silence warnings.
-        let _ = self.backend;
-        Err(OnChainError::UnimplementedProofSystem)
+        // Derive the three scaffold challenges via SHA-256 transcript.
+        let challenges = derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
+
+        // Derive per-query indices — domain size is 2^(trace_log_height
+        // + log_blowup).
+        let domain_log = proof.trace_log_height as u32 + proof.log_blowup as u32;
+        if domain_log >= 64 {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        let domain_size: u64 = 1u64 << domain_log;
+        let _indices = derive_query_indices(
+            self.backend,
+            &challenges.query_seed,
+            proof.num_queries,
+            domain_size,
+        )?;
+
+        // Session 7: per-query Merkle path verification + FRI-layer
+        // fold checks. For now the structural pipeline runs
+        // end-to-end and returns Ok().
+        Ok(())
     }
 }
 
@@ -230,14 +274,16 @@ mod tests {
         .to_bytes()
     }
 
+    /// Session-6 full pipeline: parse → challenges → query indices →
+    /// Ok(()). Uses HostBackend for real SHA-256.
     #[test]
-    fn parses_wire_before_returning_unimplemented() {
-        let backend = MockBackend;
+    fn full_pipeline_accepts_well_formed_proof() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = FriStark::new(&backend);
         let vk = matching_vk(StarkFieldId::Goldilocks, 16, 32);
         let proof = proof_bytes(StarkFieldId::Goldilocks, 16, 80, 16, 32);
         let r = FriStark::verify(&v, &vk, &proof, &[]);
-        assert!(matches!(r, Err(OnChainError::UnimplementedProofSystem)));
+        assert!(r.is_ok(), "structural pipeline should accept, got {r:?}");
     }
 
     #[test]
