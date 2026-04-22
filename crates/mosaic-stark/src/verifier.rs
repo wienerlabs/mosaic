@@ -205,6 +205,51 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             proof.pow_bits,
         )?;
 
+        // Out-of-domain quotient consistency check (session 14c).
+        // The `ood_evals` field carries:
+        //
+        //   ood_evals[0..8]    constraint_eval: C(z) claimed by prover
+        //   ood_evals[8..]     quotient coefficients in LE Goldilocks
+        //
+        // The verifier computes
+        //   expected = Σ α^i · quotient_i
+        // via `eval_poly_le_bytes(quotient_coefs, alpha_g)` and checks
+        // it against the claimed constraint evaluation. Any tampered
+        // quotient evaluation surfaces here as `VerificationFailed`.
+        //
+        // Skipped when `ood_evals` is empty (session-6 scaffold edge
+        // case). Requires at least 8 bytes (constraint_eval) when
+        // non-empty; session 14c's happy path carries ≥16 bytes.
+        if !proof.ood_evals.is_empty() {
+            if proof.ood_evals.len() < 8 {
+                return Err(OnChainError::ProofLengthMismatch);
+            }
+            // Parse constraint_eval (first 8 bytes).
+            let mut constraint_bytes = [0u8; 8];
+            constraint_bytes.copy_from_slice(&proof.ood_evals[..8]);
+            let constraint_eval = Goldilocks::from_bytes_le(&constraint_bytes)?;
+
+            // Reduce the alpha transcript challenge to Goldilocks.
+            // Same convention as `derive_layer_betas`: take the first
+            // 8 bytes LE and reduce mod p.
+            let alpha_u64 = u64::from_le_bytes([
+                challenges.alpha[0], challenges.alpha[1],
+                challenges.alpha[2], challenges.alpha[3],
+                challenges.alpha[4], challenges.alpha[5],
+                challenges.alpha[6], challenges.alpha[7],
+            ]);
+            let alpha_g = Goldilocks::new(alpha_u64);
+
+            // Evaluate quotient polynomial at α: Σ α^i · q_i.
+            let quotient_coefs = &proof.ood_evals[8..];
+            let expected =
+                eval_poly_le_bytes(quotient_coefs, alpha_g)?;
+
+            if constraint_eval != expected {
+                return Err(OnChainError::VerificationFailed);
+            }
+        }
+
         // FRI fold-chain verification (session 13b + 14a). For each
         // query, walk the layer openings, ensure the fold relation
         // holds at every step, and check the computed final value
@@ -516,6 +561,40 @@ mod tests {
 
         let r = FriStark::verify(&v, &vk_bytes, &proof, &[]);
         assert!(r.is_ok(), "FRI fold chain with zero openings should pass, got {r:?}");
+    }
+
+    /// Session-14c OOD quotient soundness: set constraint_eval in
+    /// ood_evals to 1 while keeping all quotient coefficients zero
+    /// → `expected = Σ α^i · 0 = 0 ≠ 1 = claimed` → `VerificationFailed`.
+    #[test]
+    fn rejects_tampered_ood_constraint_eval() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let vk_bytes = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 0, 4, 0, 32, 0, 0xAB);
+        // Both commitments to leaf_fill so Merkle passes.
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        let constraint_off = trace_off + sizes::DIGEST_LEN;
+        for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        for byte in proof[constraint_off..constraint_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+
+        // Tamper with constraint_eval (first byte of ood_evals = 1).
+        // Layout: FIXED_HEADER + 2·DIGEST + num_fri·DIGEST + ood_prefix_4
+        //         + ood_bytes (constraint_eval occupies first 8 bytes).
+        let ood_prefix_off = sizes::FIXED_HEADER_LEN + 2 * sizes::DIGEST_LEN;
+        let ood_payload_off = ood_prefix_off + 4;
+        proof[ood_payload_off] = 1; // constraint_eval LE first byte = 1
+
+        let r = FriStark::verify(&v, &vk_bytes, &proof, &[]);
+        assert!(
+            matches!(r, Err(OnChainError::VerificationFailed)),
+            "tampered OOD constraint_eval should fail quotient check, got {r:?}",
+        );
     }
 
     /// Session-14a: tampered `fri_final_poly` coefficient. Poly
