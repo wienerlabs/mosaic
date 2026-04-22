@@ -52,7 +52,7 @@ use mosaic_core::{
     syscall::{AltBn128Op, InputEndianness, SyscallBackend},
     OnChainError,
 };
-use mosaic_plonk::{
+use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
     msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1},
@@ -191,7 +191,7 @@ mod tests {
     use super::*;
     use crate::canonical::sizes::{FIXED_HEADER_LEN, SUMCHECK_POLY_LEN};
     use mosaic_core::syscall::host::HostBackend;
-    use mosaic_plonk::transcript::Kind;
+    use mosaic_zk_primitives::transcript::Kind;
 
     /// VK with identity G1 commits (accepted as zero points) and the
     /// real G2 generator for `x2_g2` (required to be on-curve by the

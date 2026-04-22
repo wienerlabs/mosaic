@@ -49,7 +49,7 @@ use alloc::vec::Vec;
 use ark_bn254::Fr;
 use ark_ff::{One, Zero};
 use mosaic_core::{syscall::SyscallBackend, OnChainError};
-use mosaic_plonk::{
+use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     transcript::Transcript,
 };
@@ -234,7 +234,7 @@ mod tests {
     use ark_ff::{Field, UniformRand};
     use ark_std::rand::{rngs::StdRng, SeedableRng};
     use mosaic_core::syscall::host::HostBackend;
-    use mosaic_plonk::transcript::Kind;
+    use mosaic_zk_primitives::transcript::Kind;
 
     fn seeded_rng(seed: u64) -> StdRng {
         StdRng::seed_from_u64(seed)

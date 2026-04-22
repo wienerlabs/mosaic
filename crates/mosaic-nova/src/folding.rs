@@ -30,7 +30,7 @@ use mosaic_core::{
     syscall::SyscallBackend,
     OnChainError,
 };
-use mosaic_plonk::{
+use mosaic_zk_primitives::{
     field::fr_to_canonical_bytes,
     msm::{add_g1, scalar_mul_g1},
 };
@@ -142,7 +142,7 @@ mod tests {
     use ark_ff::{UniformRand, Zero};
     use ark_std::rand::{rngs::StdRng, SeedableRng};
     use mosaic_core::syscall::host::HostBackend;
-    use mosaic_plonk::g1_consts::g1_generator_bytes;
+    use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
 
     fn rng(seed: u64) -> StdRng {
         StdRng::seed_from_u64(seed)

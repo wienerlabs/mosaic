@@ -51,13 +51,13 @@
 //! ```
 //!
 //! Shared primitives consumed from `mosaic_plonk`:
-//! - `mosaic_plonk::fr` — Fr byte range ops
-//! - `mosaic_plonk::field` — arkworks Fr arithmetic (for folding scalar
+//! - `mosaic_zk_primitives::fr` — Fr byte range ops
+//! - `mosaic_zk_primitives::field` — arkworks Fr arithmetic (for folding scalar
 //!   reductions)
-//! - `mosaic_plonk::msm` — G1 MSM primitive (the dominant CU cost in
+//! - `mosaic_zk_primitives::msm` — G1 MSM primitive (the dominant CU cost in
 //!   the Hadamard relation check)
-//! - `mosaic_plonk::transcript` — Keccak-256 round transcript
-//! - `mosaic_plonk::g1_consts` — G1/G2 generator bytes for the final
+//! - `mosaic_zk_primitives::transcript` — Keccak-256 round transcript
+//! - `mosaic_zk_primitives::g1_consts` — G1/G2 generator bytes for the final
 //!   pairing check
 //!
 //! ## Implementation notes
@@ -227,7 +227,7 @@ mod tests {
             n_public,
             n_constraints: 1024,
             // Real G2 generator — pairing syscall rejects (0,0,0,0).
-            x2_g2: mosaic_plonk::g1_consts::g2_generator_bytes(),
+            x2_g2: mosaic_zk_primitives::g1_consts::g2_generator_bytes(),
             a_comm: [0; sizes::G1_LEN],
             b_comm: [0; sizes::G1_LEN],
             c_comm: [0; sizes::G1_LEN],

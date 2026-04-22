@@ -56,11 +56,11 @@
 //! ```
 //!
 //! Shared primitives reused from `mosaic_plonk`:
-//! - `mosaic_plonk::fr` — Fr byte range ops
-//! - `mosaic_plonk::field` — arkworks Fr arithmetic
-//! - `mosaic_plonk::msm` — G1 MSM primitive
-//! - `mosaic_plonk::transcript` — Keccak-256 round transcript
-//! - `mosaic_plonk::g1_consts` — G1/G2 generator bytes for pairing
+//! - `mosaic_zk_primitives::fr` — Fr byte range ops
+//! - `mosaic_zk_primitives::field` — arkworks Fr arithmetic
+//! - `mosaic_zk_primitives::msm` — G1 MSM primitive
+//! - `mosaic_zk_primitives::transcript` — Keccak-256 round transcript
+//! - `mosaic_zk_primitives::g1_consts` — G1/G2 generator bytes for pairing
 
 use crate::{
     bundle::EvaluationBundle,
@@ -241,7 +241,7 @@ mod tests {
             n_advice: 5,
             n_fixed: 2,
             // Real G2 generator — pairing syscall rejects (0,0,0,0).
-            x2_g2: mosaic_plonk::g1_consts::g2_generator_bytes(),
+            x2_g2: mosaic_zk_primitives::g1_consts::g2_generator_bytes(),
             fixed_commits: vec![0; 2 * G1_LEN],
             permutation_commits: vec![0; 5 * G1_LEN],
         }
@@ -258,7 +258,7 @@ mod tests {
     /// With n_quotient = 3, bundle layout requires n_evals = 19
     /// (FIXED_SLOTS 16 + 3 quotient chunks).
     fn dummy_proof_bytes_typical() -> alloc::vec::Vec<u8> {
-        use mosaic_plonk::field::fr_to_canonical_bytes;
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
         let n_advice: u32 = 5;
         let n_lookups: u32 = 1;
         let n_quotient: u32 = 3;
@@ -309,7 +309,7 @@ mod tests {
     /// t(ξ)·Z_H(ξ). Identity fails.
     #[test]
     fn rejects_tampered_gate_coefficient() {
-        use mosaic_plonk::field::fr_to_canonical_bytes;
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
         let backend = mosaic_core::syscall::host::HostBackend::new();
         let v = Halo2KzgBn254::new(&backend);
         let vk = dummy_vk_bytes();

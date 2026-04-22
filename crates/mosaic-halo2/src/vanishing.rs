@@ -40,7 +40,7 @@
 use ark_bn254::Fr;
 use ark_ff::One;
 use mosaic_core::OnChainError;
-use mosaic_plonk::field::fr_pow_u64;
+use mosaic_zk_primitives::field::fr_pow_u64;
 
 /// Evaluate the vanishing polynomial `Z_H(ξ) = ξ^(2^k) - 1`.
 ///

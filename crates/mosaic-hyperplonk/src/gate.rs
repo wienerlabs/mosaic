@@ -111,7 +111,7 @@ pub fn gate_expr(wires: &WireEvals, selectors: &SelectorEvals) -> Fr {
 /// below `3 × 32 = 96`, or [`OnChainError::PublicInputOutOfRange`] if
 /// any Fr value is not reduced modulo the BN254 scalar order.
 pub fn decode_wire_evals(bytes: &[u8]) -> Result<WireEvals, OnChainError> {
-    use mosaic_plonk::field::fr_from_canonical_bytes;
+    use mosaic_zk_primitives::field::fr_from_canonical_bytes;
     if bytes.len() < 3 * 32 {
         return Err(OnChainError::ProofLengthMismatch);
     }
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn decode_wire_evals_roundtrip() {
-        use mosaic_plonk::field::fr_to_canonical_bytes;
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
         let a = Fr::from(111u64);
         let b = Fr::from(222u64);
         let c = Fr::from(333u64);

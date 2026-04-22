@@ -61,7 +61,7 @@
 use crate::canonical::{HyperPlonkProof, HyperPlonkVerifyingKey};
 use ark_bn254::Fr;
 use mosaic_core::{syscall::SyscallBackend, OnChainError};
-use mosaic_plonk::{
+use mosaic_zk_primitives::{
     field::fr_from_canonical_bytes,
     transcript::{Kind, Transcript},
 };
@@ -160,7 +160,7 @@ mod tests {
     use crate::canonical::HyperPlonkVerifyingKey;
     use alloc::vec;
     use mosaic_core::syscall::host::HostBackend;
-    use mosaic_plonk::field::fr_to_canonical_bytes;
+    use mosaic_zk_primitives::field::fr_to_canonical_bytes;
 
     fn sample_vk() -> HyperPlonkVerifyingKey {
         HyperPlonkVerifyingKey {

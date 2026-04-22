@@ -40,7 +40,7 @@ use mosaic_core::{
     syscall::{AltBn128Op, InputEndianness, SyscallBackend},
     OnChainError,
 };
-use mosaic_plonk::{
+use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
     msm::{add_g1, negate_g1, scalar_mul_g1},

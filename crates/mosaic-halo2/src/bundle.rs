@@ -37,7 +37,7 @@ use crate::{
 use alloc::vec::Vec;
 use ark_bn254::Fr;
 use mosaic_core::OnChainError;
-use mosaic_plonk::field::fr_from_canonical_bytes;
+use mosaic_zk_primitives::field::fr_from_canonical_bytes;
 
 /// Fixed-position evaluation indices.
 pub mod idx {
@@ -148,7 +148,7 @@ mod tests {
     use alloc::vec;
     use ark_ff::UniformRand;
     use ark_std::rand::{rngs::StdRng, SeedableRng};
-    use mosaic_plonk::field::fr_to_canonical_bytes;
+    use mosaic_zk_primitives::field::fr_to_canonical_bytes;
 
     fn build_proof_with_bundle(
         n_advice: u32,

@@ -59,7 +59,7 @@
 use crate::canonical::{sizes::G1_LEN, Halo2KzgProof, Halo2KzgVerifyingKey};
 use ark_bn254::Fr;
 use mosaic_core::{syscall::SyscallBackend, OnChainError};
-use mosaic_plonk::{
+use mosaic_zk_primitives::{
     field::fr_from_canonical_bytes,
     transcript::{Kind, Transcript},
 };
@@ -197,7 +197,7 @@ mod tests {
     use crate::canonical::sizes::{FIXED_HEADER_LEN, FR_LEN, G1_LEN};
     use alloc::vec;
     use mosaic_core::syscall::host::HostBackend;
-    use mosaic_plonk::field::fr_to_canonical_bytes;
+    use mosaic_zk_primitives::field::fr_to_canonical_bytes;
 
     fn sample_vk() -> Halo2KzgVerifyingKey {
         Halo2KzgVerifyingKey {

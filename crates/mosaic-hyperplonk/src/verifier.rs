@@ -44,12 +44,12 @@
 //! ```
 //!
 //! Shared primitives consumed from `mosaic_plonk`:
-//! - `mosaic_plonk::fr` — byte-level Fr range ops
-//! - `mosaic_plonk::field` — arkworks Fr arithmetic
-//! - `mosaic_plonk::msm` — G1 multi-scalar multiplication
-//! - `mosaic_plonk::transcript` — Keccak-256 transcript (reuse the
+//! - `mosaic_zk_primitives::fr` — byte-level Fr range ops
+//! - `mosaic_zk_primitives::field` — arkworks Fr arithmetic
+//! - `mosaic_zk_primitives::msm` — G1 multi-scalar multiplication
+//! - `mosaic_zk_primitives::transcript` — Keccak-256 transcript (reuse the
 //!   round-by-round absorb API)
-//! - `mosaic_plonk::g1_consts` — G1/G2 generator bytes for KZG opening
+//! - `mosaic_zk_primitives::g1_consts` — G1/G2 generator bytes for KZG opening
 //!   and final pairing check
 
 use crate::{
@@ -69,7 +69,7 @@ use mosaic_core::{
     syscall::SyscallBackend,
     OnChainError,
 };
-use mosaic_plonk::field::fr_from_canonical_bytes;
+use mosaic_zk_primitives::field::fr_from_canonical_bytes;
 
 /// HyperPlonk-KZG verifier over BN254. Phase-3 scaffold.
 pub struct HyperPlonkKzgBn254<'a, B: SyscallBackend + ?Sized> {
@@ -311,7 +311,7 @@ mod tests {
     use super::*;
     use crate::canonical::sizes::{FINAL_EVALS, FIXED_HEADER_LEN, G1_LEN};
     use mosaic_core::syscall::host::HostBackend;
-    use mosaic_plonk::g1_consts::g2_generator_bytes;
+    use mosaic_zk_primitives::g1_consts::g2_generator_bytes;
 
     /// Stub backend that fails on every syscall. Used in tests that
     /// check wire-format rejection paths that should short-circuit
