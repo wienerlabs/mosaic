@@ -7,7 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.4.0-phase3-bodies
+### Planned beyond v0.4.1-phase3-soundness
+
+- **Fixture-driven final tightening** across all four Phase-3 bodies:
+  Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK.
+  Requires external prover tooling out-of-scope for in-tree work.
+- **FRI-STARK session 8 extensions**: constraint-commitment paths,
+  per-FRI-layer consistency checks, Goldilocks arithmetic, PoW
+  grinding verification.
+- **CU re-measurement post opt-level = "z"**: compare mosaic-bench
+  targets `groth16_single`, `groth16_batch_n5`, `plonk_bn254`
+  between speed-optimized baseline and size-optimized current.
+- **gnark format adapter** (issue
+  [#10](https://github.com/wienerlabs/mosaic/issues/10)).
+- **External security audit** (issue
+  [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+
+## [0.4.1-phase3-soundness] — 2026-04-22
+
+**Phase-3 cryptographic soundness gates complete.** All four Phase-3
+verifier bodies now surface tampered prover data with specific error
+codes — soundness gates wired uniformly across BN254 + hash-based
+families. Combined with a 72% SBF binary reduction, this release
+restores ~760 KB of on-chain headroom for continued work and delivers
+deploy-ready verifier surfaces for adapter authors to integrate
+against.
+
+### Added — cryptographic soundness gates
+
+Four verifier bodies gained real cryptographic soundness checks that
+detect tampered prover data before the final KZG/Merkle acceptance:
+
+| Verifier | Soundness gate | Error | Commit |
+|---|---|---|---|
+| HyperPlonk-KZG | permutation term at ξ | `SumcheckFailed` | `ad299f1` |
+| Halo2-KZG | vanishing identity `t(ξ)·Z_H(ξ) == gate + y·perm + y²·lookup` | `SumcheckFailed` | `3b83cc6` |
+| Nova / HyperNova / ProtoStar | Hadamard residual `a·b − u·c − e` | `SumcheckFailed` | `2bf8ba2` |
+| FRI-STARK | per-query Merkle path vs trace commitment | `VerificationFailed` | `034cbd6` |
+
+Four scaffold caveats from v0.4.0 are now closed to different
+degrees. Remaining items tracked under each verifier's issue.
+
+### Added — `mosaic-zk-primitives` crate
+
+Extracted `fr`, `field`, `msm`, `transcript`, `g1_consts` modules
+from `mosaic-plonk` into their own crate so all four BN254
+verifiers share the primitive layer without carrying a transitive
+PLONK dependency (commits `8e848e4`, `0fa017d`).
+
+- 38 tests migrated from mosaic-plonk to mosaic-zk-primitives.
+- mosaic-plonk retains backward-compat re-exports; downstream code
+  importing via `mosaic_plonk::*` continues to work.
+- mosaic-hyperplonk / mosaic-halo2 / mosaic-nova now depend on
+  mosaic-zk-primitives directly.
+
+### Added — canonical layout extensions (breaking from v0.4.0)
+
+- **Halo2 `EvaluationBundle` layout** — fixed 16-slot ordering
+  (wires, selectors, permutation, lookup) + `n_quotient` trailing
+  chunk evaluations. Required `n_evals == 16 + n_quotient`.
+- **Nova `hadamard_evals` field** — fixed 128-byte slot carrying
+  `(a, b, c, e)` at the Spartan evaluation point for the Hadamard
+  relation check. Proof size grew 128 B; still fits single-tx.
+- **FRI-STARK structured `query_responses`** — each query's response
+  is now `leaf (32 B) ‖ auth_path (depth × 32 B)` where
+  `depth = trace_log_height + log_blowup`. Required length:
+  `num_queries × (1 + depth) × 32 B`.
+
+### Changed — SBF binary optimization
+
+`[profile.release]` switched from `opt-level = 3` (speed) to
+`opt-level = "z"` (size) — commit `5ac8858`.
+
+| | Before | After | Delta |
+|---|---|---|---|
+| SBF binary | 1,027,000 B | **288,544 B** | −72% |
+| % of 1 MB Solana cap | 97.9% | 27.5% | |
+| Headroom for new work | 21 KB | **760 KB** | ×36 |
+
+Expected CU trade-off: 5–15% runtime growth. Per-system re-measurement
+listed in "Planned" above. Benchmark profile (`[profile.bench]`)
+retained at `opt-level = 3` so host-side microbenchmarks reflect
+production-equivalent arithmetic throughput.
+
+### Changed — workspace
+
+- Crate count: 14 → **15** (adds `mosaic-zk-primitives`).
+- Test count: 303 → **314** (+11 soundness + bundle tests,
+  maintaining all 303 prior tests).
+- Test redistribution:
+  - mosaic-plonk: 55 → 17 (primitives tests moved out).
+  - mosaic-zk-primitives: 0 → 38 (inherited).
+  - mosaic-hyperplonk: 61 → 62 (+1 σ tamper test).
+  - mosaic-halo2: 47 → 53 (+5 bundle + 1 gate tamper tests).
+  - mosaic-nova: 38 → 40 (+2 Hadamard soundness tests).
+  - mosaic-stark: 38 → 40 (+2 Merkle soundness tests - 1 renamed).
+- SBF binary: **288,544 B** (from 564 KB at v0.3.0-phase3-scaffolds;
+  net +28% binary for +140 tests and full Phase-3 body pipelines).
+
+### Not changed
+
+- Phase-2 CU measurements (Groth16 single, Groth16 batch, KZG-PLONK)
+  are frozen at their `v0.2.0-phase2` baselines pending the CU
+  re-measurement follow-up.
+- All canonical layouts from v0.2.0-phase2 (Groth16, KZG-PLONK)
+  unchanged. Phase-2-only consumers can stay pinned.
+
+## [0.4.0-phase3-bodies] — 2026-04-22
 
 - **Fixture-driven tightening** across all four Phase-3 bodies:
   - HyperPlonk: permutation term integration + multi-point opening
