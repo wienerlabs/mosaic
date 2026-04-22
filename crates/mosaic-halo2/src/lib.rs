@@ -70,6 +70,7 @@
 
 extern crate alloc;
 
+pub mod bundle;
 pub mod canonical;
 pub mod challenges;
 pub mod circuit;
@@ -77,6 +78,7 @@ pub mod kzg;
 pub mod vanishing;
 pub mod verifier;
 
+pub use bundle::EvaluationBundle;
 pub use canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
 pub use challenges::{derive_challenges, Halo2Challenges};
 pub use circuit::{

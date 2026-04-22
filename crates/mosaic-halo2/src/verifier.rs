@@ -63,9 +63,12 @@
 //! - `mosaic_plonk::g1_consts` — G1/G2 generator bytes for pairing
 
 use crate::{
+    bundle::EvaluationBundle,
     canonical::{Halo2KzgProof, Halo2KzgVerifyingKey},
     challenges::derive_challenges,
+    circuit::combined_expr,
     kzg::verify_opening_scaffold,
+    vanishing::{compute_t_from_chunks, compute_z_h, vanishing_identity_holds},
 };
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
@@ -126,9 +129,44 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
         let (challenges, _transcript) =
             derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
 
-        // 3. KZG scaffold opening check at ξ.
-        //    (Session 4e expands to vanishing-identity + two-point
-        //    batched multipoint opening.)
+        // 3. Parse the evaluation bundle per the scaffold layout.
+        //    Enforces `n_evals == 16 + n_quotient` and positions each
+        //    wire/selector/perm/lookup/quotient evaluation.
+        let bundle = EvaluationBundle::from_proof(&proof)?;
+
+        // 4. Vanishing-identity check at ξ.
+        //    LHS: t(ξ) · Z_H(ξ) where t(ξ) comes from quotient chunks.
+        //    RHS: gate_expr + y·perm_expr + y²·lookup_expr.
+        let t_xi = compute_t_from_chunks(&bundle.quotient_chunks, &challenges.xi, vk.k)?;
+        let z_h_xi = compute_z_h(&challenges.xi, vk.k)?;
+        let combined = combined_expr(
+            &bundle.wires,
+            &bundle.selectors,
+            &bundle.permutation,
+            &bundle.lookup,
+            &challenges.theta,
+            &challenges.beta,
+            &challenges.gamma,
+            &challenges.y,
+            &challenges.xi,
+        )?;
+        // Split gate / perm / lookup back out for identity check: we
+        // passed them through `combined_expr` already, which computes
+        // `gate + y·perm + y²·lookup`. Compare LHS = t·Z_H to that
+        // combined RHS.
+        let lhs = t_xi * z_h_xi;
+        if lhs != combined {
+            // Note: using the pairing helper with split inputs gives
+            // the same result but we'd duplicate the arithmetic. Keep
+            // the direct comparison for clarity. `vanishing_identity_holds`
+            // is available for callers who have pre-split terms.
+            let _ = vanishing_identity_holds; // keep the primitive public.
+            return Err(OnChainError::SumcheckFailed);
+        }
+
+        // 5. KZG scaffold opening check at ξ.
+        //    (Session 4f expands to two-point batched multipoint
+        //    opening over all committed polys.)
         verify_opening_scaffold(self.backend, &vk, &proof, &challenges.xi)?;
 
         Ok(())
@@ -210,13 +248,21 @@ mod tests {
         .to_bytes()
     }
 
+    /// Build a proof where the evaluation bundle satisfies the
+    /// vanishing identity `t(ξ)·Z_H(ξ) = 0 = combined_expr` trivially:
+    ///
+    /// - Wires/selectors/perm all zero → gate_expr = 0, perm_expr = 0.
+    /// - Lookup: `m = 1, input = 0, table = 0` → `1/θ - 1/θ = 0`.
+    /// - Quotient chunks all zero → t(ξ) = 0.
+    ///
+    /// With n_quotient = 3, bundle layout requires n_evals = 19
+    /// (FIXED_SLOTS 16 + 3 quotient chunks).
     fn dummy_proof_bytes_typical() -> alloc::vec::Vec<u8> {
-        // 5 advice, 1 lookup, 3 quotient chunks, 15 evals — a typical
-        // k=10 Halo2 circuit with one lookup argument.
+        use mosaic_plonk::field::fr_to_canonical_bytes;
         let n_advice: u32 = 5;
         let n_lookups: u32 = 1;
         let n_quotient: u32 = 3;
-        let n_evals: u32 = 15;
+        let n_evals: u32 = 19; // 16 + 3
         let total = FIXED_HEADER_LEN
             + (n_advice as usize) * G1_LEN
             + (n_lookups as usize) * G1_LEN
@@ -229,12 +275,25 @@ mod tests {
         buf[4..8].copy_from_slice(&n_lookups.to_le_bytes());
         buf[8..12].copy_from_slice(&n_quotient.to_le_bytes());
         buf[12..16].copy_from_slice(&n_evals.to_le_bytes());
+
+        // Evaluations offset.
+        let evals_off = FIXED_HEADER_LEN
+            + (n_advice as usize) * G1_LEN
+            + (n_lookups as usize) * G1_LEN
+            + G1_LEN
+            + (n_quotient as usize) * G1_LEN;
+        // Set lookup.m = 1 so lookup_expr evaluates to zero.
+        let m_off = evals_off + crate::bundle::idx::LOOKUP_M * FR_LEN;
+        let one_bytes = fr_to_canonical_bytes(&ark_bn254::Fr::from(1u64));
+        buf[m_off..m_off + FR_LEN].copy_from_slice(&one_bytes);
+        // All other evaluations stay zero; quotient chunks zero →
+        // t(ξ) = 0; identity 0 = 0 holds.
         buf
     }
 
     /// Full pipeline with real host backend: parse → challenges →
-    /// KZG scaffold opening (zero-commit → pairing of identities = 1).
-    /// Returns Ok(()) after session 4d integration.
+    /// vanishing identity check → KZG scaffold opening.
+    /// Constructed bundle satisfies the identity trivially.
     #[test]
     fn full_pipeline_zero_proof_accepts() {
         let backend = mosaic_core::syscall::host::HostBackend::new();
@@ -243,7 +302,35 @@ mod tests {
         let proof = dummy_proof_bytes_typical();
         let pi = [0u8; FR_LEN];
         let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
-        assert!(r.is_ok(), "zero-proof pipeline should pass, got {r:?}");
+        assert!(r.is_ok(), "identity-satisfying bundle should pass, got {r:?}");
+    }
+
+    /// Tampered gate: set q_c = 1 → gate_expr = 1 ≠ 0 =
+    /// t(ξ)·Z_H(ξ). Identity fails.
+    #[test]
+    fn rejects_tampered_gate_coefficient() {
+        use mosaic_plonk::field::fr_to_canonical_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let mut proof = dummy_proof_bytes_typical();
+
+        // Locate q_c slot inside the evaluation bundle.
+        let evals_off = FIXED_HEADER_LEN
+            + 5 * G1_LEN // advice
+            + 1 * G1_LEN // lookup
+            + G1_LEN     // permutation z
+            + 3 * G1_LEN; // quotient chunks
+        let q_c_off = evals_off + crate::bundle::idx::Q_C * FR_LEN;
+        let one = fr_to_canonical_bytes(&ark_bn254::Fr::from(1u64));
+        proof[q_c_off..q_c_off + FR_LEN].copy_from_slice(&one);
+
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "tampered q_c should fail vanishing identity, got {r:?}",
+        );
     }
 
     #[test]
