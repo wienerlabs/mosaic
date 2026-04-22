@@ -76,13 +76,17 @@
 use crate::{
     canonical::{NovaFoldingProof, NovaFoldingVerifyingKey},
     challenges::derive_challenges,
+    folding::hadamard_residual,
     kzg::verify_opening_scaffold,
 };
+use ark_bn254::Fr;
+use ark_ff::Zero;
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
     OnChainError,
 };
+use mosaic_zk_primitives::field::fr_from_canonical_bytes;
 
 /// Nova-family folding verifier. Phase-3 scaffold.
 pub struct NovaFolding<'a, B: SyscallBackend + ?Sized> {
@@ -98,18 +102,29 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
 
     /// Verify a Nova / HyperNova / ProtoStar folding proof.
     ///
-    /// Session-5c implementation: full pipeline from parse through
-    /// KZG scaffold opening. Returns `Ok(())` on success.
+    /// Session 6-partial implementation: parse → challenges → Hadamard
+    /// residual check (new in this commit) → KZG scaffold opening →
+    /// `Ok(())`.
+    ///
+    /// ## Hadamard relation check
+    ///
+    /// The folded instance satisfies the relaxed R1CS relation
+    /// `A·z ∘ B·z = u · C·z + E`. At the Spartan evaluation point ξ
+    /// this reduces to the scalar equation
+    /// `A(ξ) · B(ξ) - u · C(ξ) - E(ξ) = 0`. The verifier reads the
+    /// four evaluations from `proof.hadamard_evals`, reads `u` from
+    /// the proof header, and checks the residual. A non-zero residual
+    /// surfaces as `SumcheckFailed` (reused to match the claim-
+    /// reduction error in HyperPlonk/Halo2).
     ///
     /// ## Scaffold caveat
     ///
-    /// The Hadamard-relation check + folded-commitment reconstruction
-    /// primitives are implemented in `folding.rs` and unit-tested,
-    /// but not yet composed into the pipeline — the pipeline
-    /// currently runs transcript challenges + a single-commitment
-    /// KZG opening. Session 6 pins the full folded-instance check
-    /// against `sonobe` reference fixtures and wires Hadamard +
-    /// commitment reconstruction into the main flow.
+    /// The Hadamard check closes the folded-instance side. The KZG
+    /// opening is still single-commitment (session 7+ extends to
+    /// Spartan multi-poly batched opening); the
+    /// `folded_commitment_from_fold` primitive remains available for
+    /// future integration once the proof layout also carries the two
+    /// base commitments to fold against.
     ///
     /// ## Errors
     ///
@@ -117,6 +132,8 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
     /// - `VerifyingKeyProofMismatch` — variant or n_public disagree.
     /// - `PublicInputCountMismatch` / `PublicInputOutOfRange` — PI
     ///   validation in challenges.
+    /// - `SumcheckFailed` — Hadamard residual is non-zero or `u` is
+    ///   malformed.
     /// - `PairingCheckFailed` — KZG opening failed.
     /// - `InvalidPointEncoding` — malformed G1 commitment.
     pub fn verify(
@@ -136,8 +153,18 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
         let (challenges, _transcript) =
             derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
 
+        // Hadamard-relation residual check at the Spartan point.
+        // Parses (a, b, c, e) evaluations from proof.hadamard_evals and
+        // u from proof.u; computes `a·b - u·c - e` and rejects if non-zero.
+        let (a_eval, b_eval, c_eval, e_eval) = proof.parse_hadamard_evals()?;
+        let u = fr_from_canonical_bytes(proof.u)?;
+        let residual = hadamard_residual(&a_eval, &b_eval, &c_eval, &e_eval, &u);
+        if !residual.is_zero() {
+            return Err(OnChainError::SumcheckFailed);
+        }
+
         // KZG scaffold opening at ξ (single-commitment stand-in;
-        // session 6 extends to the full Spartan-batched opening).
+        // session 7+ extends to the full Spartan-batched opening).
         verify_opening_scaffold(self.backend, &vk, &proof, &challenges.xi)?;
 
         Ok(())
@@ -211,6 +238,7 @@ mod tests {
         let total = sizes::FIXED_HEADER_LEN
             + sizes::FIXED_COMMITS_LEN
             + sizes::SCALAR_LEN
+            + sizes::HADAMARD_EVALS_LEN
             + aux_len
             + pi_len
             + sizes::OPENING_LEN;
@@ -263,6 +291,66 @@ mod tests {
         let pi = zero_pi(2);
         let r = NovaFolding::verify(&v, &vk, &proof, &pi);
         assert!(r.is_ok(), "HyperNova zero-proof pipeline should pass, got {r:?}");
+    }
+
+    /// Session 6-partial soundness gate: set a=1, b=1, others zero →
+    /// residual = 1·1 - 0·0 - 0 = 1 ≠ 0 → `SumcheckFailed`.
+    #[test]
+    fn rejects_tampered_hadamard_evals() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = NovaFolding::new(&backend);
+        let vk = matching_vk(FoldingVariant::Nova, 2);
+        let mut proof = proof_bytes(FoldingVariant::Nova, 0, 2);
+
+        // Hadamard evals start at FIXED_HEADER + FIXED_COMMITS + SCALAR.
+        let had_off = sizes::FIXED_HEADER_LEN + sizes::FIXED_COMMITS_LEN + sizes::SCALAR_LEN;
+        // Set a_eval = 1 and b_eval = 1 (last byte of BE Fr).
+        proof[had_off + sizes::FR_LEN - 1] = 1;
+        proof[had_off + 2 * sizes::FR_LEN - 1] = 1;
+
+        let pi = zero_pi(2);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "tampered a·b ≠ u·c + e should fail Hadamard residual, got {r:?}",
+        );
+    }
+
+    /// Set u = 2 and e_eval = a_eval·b_eval - 2·c_eval with wires = 1
+    /// → residual = 1·1 - 2·1 - (1 - 2) = 1 - 2 + 1 = 0. Test the
+    /// happy path where a custom non-zero bundle satisfies the
+    /// relation.
+    #[test]
+    fn accepts_nonzero_hadamard_satisfying_bundle() {
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = NovaFolding::new(&backend);
+        let vk = matching_vk(FoldingVariant::Nova, 2);
+        let mut proof = proof_bytes(FoldingVariant::Nova, 0, 2);
+
+        // Set u = 2.
+        let u_off = sizes::FIXED_HEADER_LEN + sizes::FIXED_COMMITS_LEN;
+        let u_bytes = fr_to_canonical_bytes(&Fr::from(2u64));
+        proof[u_off..u_off + sizes::FR_LEN].copy_from_slice(&u_bytes);
+
+        // a = b = c = 1, e = 1·1 - 2·1 = -1.
+        let hadamard_off = u_off + sizes::FR_LEN;
+        let one_bytes = fr_to_canonical_bytes(&Fr::from(1u64));
+        let neg_one_bytes = fr_to_canonical_bytes(&(-Fr::from(1u64)));
+        proof[hadamard_off..hadamard_off + sizes::FR_LEN].copy_from_slice(&one_bytes);
+        proof[hadamard_off + sizes::FR_LEN..hadamard_off + 2 * sizes::FR_LEN]
+            .copy_from_slice(&one_bytes);
+        proof[hadamard_off + 2 * sizes::FR_LEN..hadamard_off + 3 * sizes::FR_LEN]
+            .copy_from_slice(&one_bytes);
+        proof[hadamard_off + 3 * sizes::FR_LEN..hadamard_off + 4 * sizes::FR_LEN]
+            .copy_from_slice(&neg_one_bytes);
+
+        let pi = zero_pi(2);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        assert!(
+            r.is_ok(),
+            "satisfying Hadamard bundle should pass, got {r:?}",
+        );
     }
 
     #[test]

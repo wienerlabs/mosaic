@@ -165,6 +165,7 @@ mod tests {
         let total = sizes::FIXED_HEADER_LEN
             + sizes::FIXED_COMMITS_LEN
             + sizes::SCALAR_LEN
+            + sizes::HADAMARD_EVALS_LEN
             + aux_len
             + pi_len
             + sizes::OPENING_LEN;
@@ -238,8 +239,11 @@ mod tests {
         let vk = sample_vk();
         let mut proof_a = sample_proof_bytes(2, 2);
         let mut proof_b = sample_proof_bytes(2, 2);
-        // Tamper with aux commit bytes (after E/W/T/u scalar).
-        let aux_off = sizes::FIXED_HEADER_LEN + sizes::FIXED_COMMITS_LEN + sizes::SCALAR_LEN;
+        // Tamper with aux commit bytes (after E/W/T/u + hadamard_evals).
+        let aux_off = sizes::FIXED_HEADER_LEN
+            + sizes::FIXED_COMMITS_LEN
+            + sizes::SCALAR_LEN
+            + sizes::HADAMARD_EVALS_LEN;
         proof_a[aux_off] = 0xAA;
         proof_b[aux_off] = 0xBB;
         let parsed_a = NovaFoldingProof::from_bytes(&proof_a).unwrap();

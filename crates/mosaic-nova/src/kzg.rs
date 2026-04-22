@@ -136,6 +136,7 @@ mod tests {
         let total = sizes::FIXED_HEADER_LEN
             + sizes::FIXED_COMMITS_LEN
             + sizes::SCALAR_LEN
+            + sizes::HADAMARD_EVALS_LEN
             + sizes::OPENING_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = FoldingVariant::Nova as u8;

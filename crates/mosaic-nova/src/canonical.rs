@@ -49,7 +49,9 @@
 //! fits in a single Solana transaction.
 
 use alloc::vec::Vec;
+use ark_bn254::Fr;
 use mosaic_core::OnChainError;
+use mosaic_zk_primitives::field::fr_from_canonical_bytes;
 
 /// Size + cap constants for the Nova canonical layout.
 pub mod sizes {
@@ -65,6 +67,10 @@ pub mod sizes {
     pub const FIXED_COMMITS_LEN: usize = 3 * G1_LEN;
     /// Folded scalar `u`.
     pub const SCALAR_LEN: usize = FR_LEN;
+    /// Hadamard-relation evaluations at the Spartan point ξ:
+    /// `a_eval ‖ b_eval ‖ c_eval ‖ e_eval` (4 × 32 B). Used by the
+    /// verifier's residual check `A(ξ)·B(ξ) - u·C(ξ) - E(ξ) == 0`.
+    pub const HADAMARD_EVALS_LEN: usize = 4 * FR_LEN;
     /// Two opening commitments (W_xi, W_xiw).
     pub const OPENING_LEN: usize = 2 * G1_LEN;
     /// Max variant-specific aux commitments. HyperNova uses ~4 for
@@ -117,6 +123,10 @@ pub struct NovaFoldingProof<'a> {
     pub t_comm: &'a [u8],
     /// Folding scalar `u` (Fr, big-endian canonical).
     pub u: &'a [u8],
+    /// Hadamard-relation evaluations at ξ:
+    /// `a_eval ‖ b_eval ‖ c_eval ‖ e_eval` (4 × 32 B). Used by the
+    /// verifier's residual check.
+    pub hadamard_evals: &'a [u8],
     /// Variant-specific extras (e.g. HyperNova higher-degree commits).
     pub aux_commits: &'a [u8],
     /// Public inputs concatenated (length = `n_public × 32`).
@@ -131,11 +141,15 @@ impl<'a> NovaFoldingProof<'a> {
     /// Parse a canonical folding-instance proof.
     pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, OnChainError> {
         use sizes::{
-            FIXED_COMMITS_LEN, FIXED_HEADER_LEN, FR_LEN, G1_LEN, MAX_AUX_COMMITS,
-            MAX_PUBLIC_INPUTS, OPENING_LEN, SCALAR_LEN,
+            FIXED_COMMITS_LEN, FIXED_HEADER_LEN, FR_LEN, G1_LEN, HADAMARD_EVALS_LEN,
+            MAX_AUX_COMMITS, MAX_PUBLIC_INPUTS, OPENING_LEN, SCALAR_LEN,
         };
 
-        let minimum = FIXED_HEADER_LEN + FIXED_COMMITS_LEN + SCALAR_LEN + OPENING_LEN;
+        let minimum = FIXED_HEADER_LEN
+            + FIXED_COMMITS_LEN
+            + SCALAR_LEN
+            + HADAMARD_EVALS_LEN
+            + OPENING_LEN;
         if bytes.len() < minimum {
             return Err(OnChainError::ProofLengthMismatch);
         }
@@ -155,8 +169,13 @@ impl<'a> NovaFoldingProof<'a> {
             .checked_mul(FR_LEN)
             .ok_or(OnChainError::ProofLengthMismatch)?;
 
-        let expected_len =
-            FIXED_HEADER_LEN + FIXED_COMMITS_LEN + SCALAR_LEN + aux_len + pi_len + OPENING_LEN;
+        let expected_len = FIXED_HEADER_LEN
+            + FIXED_COMMITS_LEN
+            + SCALAR_LEN
+            + HADAMARD_EVALS_LEN
+            + aux_len
+            + pi_len
+            + OPENING_LEN;
 
         if bytes.len() != expected_len {
             return Err(OnChainError::ProofLengthMismatch);
@@ -171,6 +190,8 @@ impl<'a> NovaFoldingProof<'a> {
         off += G1_LEN;
         let u = &bytes[off..off + FR_LEN];
         off += FR_LEN;
+        let hadamard_evals = &bytes[off..off + HADAMARD_EVALS_LEN];
+        off += HADAMARD_EVALS_LEN;
         let aux_commits = &bytes[off..off + aux_len];
         off += aux_len;
         let public_inputs = &bytes[off..off + pi_len];
@@ -187,11 +208,31 @@ impl<'a> NovaFoldingProof<'a> {
             w_comm,
             t_comm,
             u,
+            hadamard_evals,
             aux_commits,
             public_inputs,
             w_xi,
             w_xiw,
         })
+    }
+
+    /// Parse the Hadamard-relation evaluations `(a, b, c, e)` at ξ
+    /// from the proof's `hadamard_evals` bundle.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::PublicInputOutOfRange`] if any Fr is out of
+    ///   range.
+    pub fn parse_hadamard_evals(&self) -> Result<(Fr, Fr, Fr, Fr), OnChainError> {
+        let a = fr_from_canonical_bytes(&self.hadamard_evals[0..sizes::FR_LEN])?;
+        let b = fr_from_canonical_bytes(&self.hadamard_evals[sizes::FR_LEN..2 * sizes::FR_LEN])?;
+        let c = fr_from_canonical_bytes(
+            &self.hadamard_evals[2 * sizes::FR_LEN..3 * sizes::FR_LEN],
+        )?;
+        let e = fr_from_canonical_bytes(
+            &self.hadamard_evals[3 * sizes::FR_LEN..4 * sizes::FR_LEN],
+        )?;
+        Ok((a, b, c, e))
     }
 
     /// Iterate auxiliary commitments as 64-byte G1 slices.
@@ -291,13 +332,21 @@ impl NovaFoldingVerifyingKey {
 mod tests {
     use super::*;
     use alloc::vec;
-    use sizes::{FIXED_COMMITS_LEN, FIXED_HEADER_LEN, FR_LEN, G1_LEN, G2_LEN, OPENING_LEN, SCALAR_LEN};
+    use sizes::{
+        FIXED_COMMITS_LEN, FIXED_HEADER_LEN, FR_LEN, G1_LEN, G2_LEN, HADAMARD_EVALS_LEN,
+        OPENING_LEN, SCALAR_LEN,
+    };
 
     fn proof_bytes(variant: FoldingVariant, num_aux: u8, n_public: u16) -> Vec<u8> {
         let aux_len = (num_aux as usize) * G1_LEN;
         let pi_len = (n_public as usize) * FR_LEN;
-        let total =
-            FIXED_HEADER_LEN + FIXED_COMMITS_LEN + SCALAR_LEN + aux_len + pi_len + OPENING_LEN;
+        let total = FIXED_HEADER_LEN
+            + FIXED_COMMITS_LEN
+            + SCALAR_LEN
+            + HADAMARD_EVALS_LEN
+            + aux_len
+            + pi_len
+            + OPENING_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = variant as u8;
         buf[1] = num_aux;
