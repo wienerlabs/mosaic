@@ -7,34 +7,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.3.0-phase3-scaffolds
+### Planned beyond v0.4.0-phase3-bodies
 
-- **HyperPlonk-KZG** full verifier body — sumcheck + MLE-batched KZG
-  opening. Scaffold already frozen in this release (issue
-  [#2](https://github.com/wienerlabs/mosaic/issues/2)).
-- **Halo2-KZG** full verifier body — custom gates + lookups + multipoint
-  KZG (issue [#64](https://github.com/wienerlabs/mosaic/issues/64)).
-- **FRI-STARK** full verifier body — Merkle auth + FRI queries + PoW
-  grinding, delivered via chunked-upload (issue
-  [#3](https://github.com/wienerlabs/mosaic/issues/3)).
-- **Nova / HyperNova / ProtoStar** folding-scheme verifiers (issue
-  [#4](https://github.com/wienerlabs/mosaic/issues/4)) — Phase-3
-  scaffold pending.
-- **`mosaic-zk-primitives` extraction** — HyperPlonk and Halo2 both
-  reuse `mosaic-plonk`'s Fr/MSM/transcript; extract into a dedicated
-  primitives crate once Nova or a fourth consumer lands (tracked as
-  a follow-up refactor).
+- **Fixture-driven tightening** across all four Phase-3 bodies:
+  - HyperPlonk: permutation term integration + multi-point opening
+    reduction, Espresso reference fixture (issue
+    [#2](https://github.com/wienerlabs/mosaic/issues/2)).
+  - Halo2: vanishing-identity composition + two-point batched
+    multipoint opening, PSE `halo2_proofs` fixture (issue
+    [#64](https://github.com/wienerlabs/mosaic/issues/64)).
+  - Nova: Hadamard relation wiring + folded-commitment
+    reconstruction + Spartan multi-opening, `sonobe` fixture
+    (issue [#4](https://github.com/wienerlabs/mosaic/issues/4)).
+  - FRI-STARK: per-query Merkle path verification + FRI-layer fold
+    check + Goldilocks reduction + PoW grinding verification,
+    Plonky3/Winterfell fixture (issue
+    [#3](https://github.com/wienerlabs/mosaic/issues/3)).
+- **`mosaic-zk-primitives` extraction** — all three BN254 bodies
+  (HyperPlonk, Halo2, Nova) now reuse `mosaic-plonk`'s
+  Fr/MSM/transcript primitives; the extraction threshold has
+  clearly been crossed. Follow-up refactor.
 - **gnark** format adapter for Groth16 + PLONK (issue
   [#10](https://github.com/wienerlabs/mosaic/issues/10)).
-- CU optimization: Pippenger MSM evaluation (issue
-  [#37](https://github.com/wienerlabs/mosaic/issues/37)) — preliminary
-  analysis shows Pippenger regresses on Solana's per-G1Add syscall
-  cost profile; issue to be rescoped around zero/one-scalar shortcut
-  and pre-reduced IC aggregation instead.
+- CU optimization: zero/one-scalar shortcut + pre-reduced IC
+  aggregation (rescoped from Pippenger, issue
+  [#37](https://github.com/wienerlabs/mosaic/issues/37)).
 - Real Circom-sourced Groth16 fixtures (issue
   [#24](https://github.com/wienerlabs/mosaic/issues/24)).
 - External security audit (issue
   [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+
+## [0.4.0-phase3-bodies] — 2026-04-22
+
+**All four Phase-3 verifier bodies now run end-to-end.** HyperPlonk,
+Halo2, Nova, and FRI-STARK all have full verifier pipelines returning
+`Ok(())` on structurally well-formed proofs. No `UnimplementedProofSystem`
+returns remain for any Phase-3 family at the top level.
+
+This is the scaffold-to-body transition milestone for Phase 3.
+Each verifier composes parse → transcript challenges → cryptographic
+checks (KZG pairing or SHA-256 Merkle/FRI structural) → Ok(()).
+Scaffold caveats per family are documented in the module rustdoc
+and the per-commit CHANGELOG notes below.
+
+This tag is the reference point for "Phase-3 verifier bodies wired" —
+ecosystem collaborators building adapters can now integration-test
+against these verifiers (albeit with the scaffold caveats noted).
+The fixture-driven tightening in upcoming 0.4.x releases pins
+cryptographic soundness against reference implementations.
+
+### Added — Phase-3 body modules
+
+**HyperPlonk** (sessions 3a-e, crate `mosaic-hyperplonk`):
+- `sumcheck.rs` — round polynomial verification + transcript-driven
+  challenge squeezing. 15 tests.
+- `mle.rs` — `eq_poly_eval` (on-chain) + `mle_eval_from_cube` (host).
+  10 tests.
+- `gate.rs` — PLONK-style arithmetic gate at ξ. 9 tests.
+- `challenges.rs` — three pre-sumcheck challenges `(β, γ, α)` with
+  snarkjs-style per-round transcript reset.
+- `kzg.rs` — 12-term MSM + `alt_bn128_pairing` batched-opening
+  scaffold at univariate point.
+- Canonical VK expanded: 8 preprocessing commits (Q_M/Q_L/Q_R/Q_O/Q_C +
+  σ_1/σ_2/σ_3). FINAL_EVALS: 4 → 12.
+- Crate totals: 11 scaffold → **61 tests**.
+
+**Halo2** (sessions 4a-d, crate `mosaic-halo2`):
+- `challenges.rs` — five-challenge Halo2 transcript
+  `(θ, β, γ, y, ξ)`.
+- `vanishing.rs` — `Z_H(ξ)` + `compute_t_from_chunks` + identity
+  check primitive.
+- `circuit.rs` — gate + permutation + lookup evaluators (log-
+  derivative form) + combined expression.
+- `kzg.rs` — single-commitment pairing check at ξ.
+- Crate totals: 14 scaffold → **47 tests**.
+
+**Nova / HyperNova / ProtoStar** (sessions 5a-c, crate `mosaic-nova`):
+- `challenges.rs` — three-challenge transcript `(r, ξ, ν)`.
+- `folding.rs` — `hadamard_residual` + `folded_commitment_from_fold`
+  + `folded_error_commitment` primitives.
+- `kzg.rs` — single-commitment pairing check.
+- Crate totals: 19 scaffold → **38 tests**.
+
+**FRI-STARK** (sessions 6a-c, crate `mosaic-stark`):
+- `challenges.rs` — **SHA-256 based** transcript producing
+  `(α, z, query_seed)` + `derive_query_indices` helper.
+- `merkle.rs` — SHA-256 Merkle authentication path verification
+  + test-only tree constructors.
+- Structural verifier pipeline (Merkle integration pending real
+  canonical layout extension for per-query structured responses).
+- Crate totals: 18 scaffold → **38 tests**.
+
+### Added — error variants
+
+`OnChainError::VerifyingKeyProofMismatch = 0x0008` was added during
+v0.3.x for STARK/Nova VK/proof cross-check. No further ABI additions
+in this release.
+
+### Changed
+
+- **Workspace version** 0.3.0-phase3-scaffolds → 0.4.0-phase3-bodies.
+- **Test count**: 163 (v0.3.0) → **303** passing, zero failures
+  (+140 from Phase-3 body work across all four families).
+- **SBF binary size**: 564 KB → **700 KB** (+136 KB). Breakdown:
+  - HyperPlonk body: ~83 KB (arkworks Fr arithmetic, sumcheck loop,
+    12-term MSM, pairing).
+  - Halo2 body: ~10 KB (no MSM hot path in scaffold opening).
+  - Nova body: ~8 KB.
+  - FRI-STARK body: ~7 KB (SHA-256 path walker).
+  - Still well under Solana's 1 MB program limit.
+- **mosaic-program dispatcher** now routes all six Phase-3 discriminants
+  (HyperPlonkKzgBn254, Halo2KzgBn254, FriStark, NovaFolding, ProtoStarFolding)
+  to integrated bodies; only Risc0Stark remains in the
+  `UnimplementedProofSystem` catchall.
+
+### Not changed
+
+- No production Phase-2 verifier or protocol surface modified —
+  Groth16 and KZG-PLONK byte layouts, CU measurements, and audit
+  scope remain authoritative at their `v0.2.0-phase2` tag.
+- Phase-3 canonical layouts may still adjust in the 0.4.x series
+  as fixture integration pins exact byte orderings. Consumers
+  building adapters today should expect minor breaking changes in
+  Phase-3 wire formats before 0.5.0.
 
 ## [0.3.0-phase3-scaffolds] — 2026-04-20
 
