@@ -122,6 +122,130 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
     Ok(())
 }
 
+/// Session-16: two-point batched KZG opening.
+///
+/// Halo2 verifies two opening proofs simultaneously — one at `ξ`
+/// (most polynomials) and one at `ξω = ξ · ω` (shift-requiring
+/// polynomials like the permutation grand-product `z(ξω)`). The
+/// verifier combines both via a batching challenge `u` squeezed
+/// from the transcript after absorbing both opening commitments:
+///
+/// ```text
+/// A1 = C_ξ - y_ξ·G1 + ξ·W_ξ
+/// A2 = C_ξω - y_ξω·G1 + ξω·W_ξω
+/// A_batched = A1 + u·A2
+/// W_batched = W_ξ + u·W_ξω
+///
+/// e(A_batched, [1]_2) · e(-W_batched, [x]_2) ?= 1
+/// ```
+///
+/// Matches the standard Halo2-KZG reduction from PSE's
+/// `halo2_proofs::plonk::verify_proof`. Single 2-pair pairing
+/// syscall vs two independent pairings.
+///
+/// ## Scaffold choices
+///
+/// - `C_ξ` and `C_ξω` both use `proof.permutation_z` (single-
+///   commitment scaffold). Real Halo2 does a full MSM over all
+///   committed polys weighted by a per-poly batching challenge `v`.
+/// - `y_ξ` = `evaluations[Z]`, `y_ξω` = `evaluations[Z_NEXT]`.
+/// - `u` is caller-provided — session 16 derives it inline in
+///   `verifier.rs` via transcript absorb/squeeze after the
+///   session-4 challenge set. Future session may promote it to a
+///   `Halo2Challenges` field.
+///
+/// ## Errors
+///
+/// - `ProofLengthMismatch`: `proof.evaluations` shorter than
+///   `FIXED_SLOTS × FR_LEN` (can't read `Z` and `Z_NEXT`).
+/// - `InvalidPointEncoding`: `permutation_z`, `w_xi`, or `w_xiw`
+///   not 64 bytes.
+/// - `PublicInputOutOfRange`: evaluation Fr out of BN254 scalar range.
+/// - `PairingCheckFailed`: the batched pairing doesn't reduce to
+///   the Fq12 identity.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_two_point_opening_scaffold<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    vk: &Halo2KzgVerifyingKey,
+    proof: &Halo2KzgProof<'_>,
+    xi: &Fr,
+    xi_omega: &Fr,
+    u: &Fr,
+) -> Result<(), OnChainError> {
+    use crate::bundle::idx;
+    const BUNDLE_MIN: usize = (idx::Z_NEXT + 1) * FR_LEN;
+    if proof.evaluations.len() < BUNDLE_MIN {
+        return Err(OnChainError::ProofLengthMismatch);
+    }
+    if proof.permutation_z.len() != G1_LEN
+        || proof.w_xi.len() != G1_LEN
+        || proof.w_xiw.len() != G1_LEN
+    {
+        return Err(OnChainError::InvalidPointEncoding);
+    }
+
+    // Parse the two evaluation points.
+    let y_xi = fr_from_canonical_bytes(
+        &proof.evaluations[idx::Z * FR_LEN..(idx::Z + 1) * FR_LEN],
+    )?;
+    let y_xi_omega = fr_from_canonical_bytes(
+        &proof.evaluations[idx::Z_NEXT * FR_LEN..(idx::Z_NEXT + 1) * FR_LEN],
+    )?;
+
+    // C - y·G1 for each opening point.
+    let g1_gen = g1_generator_bytes();
+    let y_xi_g1 = scalar_mul_g1(backend, &g1_gen, &fr_to_canonical_bytes(&y_xi))?;
+    let y_xi_omega_g1 =
+        scalar_mul_g1(backend, &g1_gen, &fr_to_canonical_bytes(&y_xi_omega))?;
+
+    let mut c_arr = [0u8; G1_LEN];
+    c_arr.copy_from_slice(proof.permutation_z);
+
+    let c_minus_y_xi = add_g1(backend, &c_arr, &negate_g1(&y_xi_g1))?;
+    let c_minus_y_xi_omega = add_g1(backend, &c_arr, &negate_g1(&y_xi_omega_g1))?;
+
+    // ξ·W_ξ  +  ξω·W_ξω
+    let mut wxi_arr = [0u8; G1_LEN];
+    wxi_arr.copy_from_slice(proof.w_xi);
+    let mut wxiw_arr = [0u8; G1_LEN];
+    wxiw_arr.copy_from_slice(proof.w_xiw);
+
+    let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &fr_to_canonical_bytes(xi))?;
+    let xi_omega_wxiw =
+        scalar_mul_g1(backend, &wxiw_arr, &fr_to_canonical_bytes(xi_omega))?;
+
+    let a1 = add_g1(backend, &c_minus_y_xi, &xi_wxi)?;
+    let a2 = add_g1(backend, &c_minus_y_xi_omega, &xi_omega_wxiw)?;
+
+    // Batch: A_batched = A1 + u·A2.
+    let u_bytes = fr_to_canonical_bytes(u);
+    let u_a2 = scalar_mul_g1(backend, &a2, &u_bytes)?;
+    let a_batched = add_g1(backend, &a1, &u_a2)?;
+
+    // Batch: W_batched = W_ξ + u·W_ξω.
+    let u_wxiw = scalar_mul_g1(backend, &wxiw_arr, &u_bytes)?;
+    let w_batched = add_g1(backend, &wxi_arr, &u_wxiw)?;
+    let neg_w_batched = negate_g1(&w_batched);
+
+    // Pairing: e(A_batched, [1]_2) · e(-W_batched, [x]_2) = 1.
+    let g2_gen = g2_generator_bytes();
+    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
+    pairing_input.extend_from_slice(&a_batched);
+    pairing_input.extend_from_slice(&g2_gen);
+    pairing_input.extend_from_slice(&neg_w_batched);
+    pairing_input.extend_from_slice(&vk.x2_g2);
+
+    let result = backend.alt_bn128_group_op(
+        AltBn128Op::Pairing,
+        InputEndianness::BigEndian,
+        &pairing_input,
+    )?;
+    if result.len() != 32 || result[31] != 0x01 {
+        return Err(OnChainError::PairingCheckFailed);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +260,7 @@ mod tests {
             n_advice: 1,
             n_fixed: 0,
             x2_g2: g2_generator_bytes(),
+            omega_fr: [0u8; 32],
             fixed_commits: vec![],
             permutation_commits: vec![],
         }

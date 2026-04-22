@@ -204,6 +204,12 @@ pub struct Halo2KzgVerifyingKey {
     pub n_fixed: u32,
     /// G2 SRS element for KZG pairing check.
     pub x2_g2: [u8; sizes::G2_LEN],
+    /// Domain generator `ω` (BN254 Fr, 32-byte BE). Primitive
+    /// `2^k`-th root of unity. Used by the verifier to compute the
+    /// shifted evaluation point `ξω` for polynomials that open at
+    /// adjacent-row indices (e.g. the permutation grand-product
+    /// `z(ξω) = z_next`). Session-16 addition.
+    pub omega_fr: [u8; sizes::FR_LEN],
     /// Fixed column commitments concatenated (length = `n_fixed * 64`).
     /// Boxed via Vec so the VK size is dynamic at decode time.
     pub fixed_commits: Vec<u8>,
@@ -219,6 +225,7 @@ impl Halo2KzgVerifyingKey {
         + 4 // n_advice
         + 4 // n_fixed
         + sizes::G2_LEN
+        + sizes::FR_LEN // omega_fr
         + 4 // fixed_commits.len() (bytes)
         + 4; // permutation_commits.len() (bytes)
 
@@ -234,19 +241,23 @@ impl Halo2KzgVerifyingKey {
         let mut x2_g2 = [0u8; sizes::G2_LEN];
         x2_g2.copy_from_slice(&bytes[16..16 + sizes::G2_LEN]);
         let after_g2 = 16 + sizes::G2_LEN;
+        // Session-16: omega_fr (32 bytes BE) immediately after x2_g2.
+        let mut omega_fr = [0u8; sizes::FR_LEN];
+        omega_fr.copy_from_slice(&bytes[after_g2..after_g2 + sizes::FR_LEN]);
+        let after_omega = after_g2 + sizes::FR_LEN;
         let fixed_len = u32::from_le_bytes([
-            bytes[after_g2],
-            bytes[after_g2 + 1],
-            bytes[after_g2 + 2],
-            bytes[after_g2 + 3],
+            bytes[after_omega],
+            bytes[after_omega + 1],
+            bytes[after_omega + 2],
+            bytes[after_omega + 3],
         ]) as usize;
         let perm_len = u32::from_le_bytes([
-            bytes[after_g2 + 4],
-            bytes[after_g2 + 5],
-            bytes[after_g2 + 6],
-            bytes[after_g2 + 7],
+            bytes[after_omega + 4],
+            bytes[after_omega + 5],
+            bytes[after_omega + 6],
+            bytes[after_omega + 7],
         ]) as usize;
-        let payload_start = after_g2 + 8;
+        let payload_start = after_omega + 8;
         let expected = payload_start + fixed_len + perm_len;
         if bytes.len() != expected {
             return Err(OnChainError::VerifyingKeyLengthMismatch);
@@ -256,7 +267,7 @@ impl Halo2KzgVerifyingKey {
             bytes[payload_start + fixed_len..payload_start + fixed_len + perm_len].to_vec();
         Ok(Self {
             k, n_instances, n_advice, n_fixed,
-            x2_g2, fixed_commits, permutation_commits,
+            x2_g2, omega_fr, fixed_commits, permutation_commits,
         })
     }
 
@@ -271,6 +282,7 @@ impl Halo2KzgVerifyingKey {
         out.extend_from_slice(&self.n_advice.to_le_bytes());
         out.extend_from_slice(&self.n_fixed.to_le_bytes());
         out.extend_from_slice(&self.x2_g2);
+        out.extend_from_slice(&self.omega_fr);
         out.extend_from_slice(&(self.fixed_commits.len() as u32).to_le_bytes());
         out.extend_from_slice(&(self.permutation_commits.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.fixed_commits);
@@ -358,6 +370,7 @@ mod tests {
             n_advice: 5,
             n_fixed: 2,
             x2_g2: [0xCD; G2_LEN],
+            omega_fr: [0u8; FR_LEN],
             fixed_commits: vec![],
             permutation_commits: vec![],
         };
@@ -374,6 +387,7 @@ mod tests {
             n_advice: 5,
             n_fixed: 2,
             x2_g2: [0xCD; G2_LEN],
+            omega_fr: [0u8; FR_LEN],
             fixed_commits: vec![0x11; 2 * G1_LEN], // 2 fixed columns
             permutation_commits: vec![0x22; 5 * G1_LEN], // 5 advice columns permuted
         };
@@ -401,6 +415,7 @@ mod tests {
             n_advice: 5,
             n_fixed: 2,
             x2_g2: [0; G2_LEN],
+            omega_fr: [0u8; FR_LEN],
             fixed_commits: vec![0x11; G1_LEN],
             permutation_commits: vec![],
         };

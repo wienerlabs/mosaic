@@ -67,9 +67,10 @@ use crate::{
     canonical::{Halo2KzgProof, Halo2KzgVerifyingKey},
     challenges::derive_challenges,
     circuit::combined_expr,
-    kzg::verify_opening_scaffold,
+    kzg::verify_two_point_opening_scaffold,
     vanishing::{compute_t_from_chunks, compute_z_h, vanishing_identity_holds},
 };
+use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
@@ -164,10 +165,43 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
             return Err(OnChainError::SumcheckFailed);
         }
 
-        // 5. KZG scaffold opening check at ξ.
-        //    (Session 4f expands to two-point batched multipoint
-        //    opening over all committed polys.)
-        verify_opening_scaffold(self.backend, &vk, &proof, &challenges.xi)?;
+        // 5. Session-16: two-point batched KZG opening at (ξ, ξω).
+        //    The second opening point ξω is needed for polynomials
+        //    that evaluate at adjacent rows (e.g. the permutation
+        //    grand-product z(ξω) = z_next). We derive a `u` batching
+        //    challenge from the transcript after the σ (=ξ) phase,
+        //    using the VK's ω generator to compute ξω = ξ · ω.
+        let omega = fr_from_canonical_bytes(&vk.omega_fr)?;
+        let xi_omega = challenges.xi * omega;
+
+        // Derive `u` batching challenge. Uses a deterministic keccak
+        // of (xi || omega || w_xi || w_xiw) — domain-separated from
+        // the other transcript rounds.
+        let u_bytes = self.backend.keccak256(&[
+            &fr_to_canonical_bytes(&challenges.xi),
+            &vk.omega_fr,
+            proof.w_xi,
+            proof.w_xiw,
+        ])?;
+        // Reduce into BN254 Fr range.
+        let u = fr_from_canonical_bytes(&u_bytes).unwrap_or(
+            fr_from_canonical_bytes(&{
+                let mut b = u_bytes;
+                // Clear top bit to force into-range for any pathological
+                // keccak output (BN254 Fr is slightly less than 2^254).
+                b[0] &= 0x3F;
+                b
+            })?,
+        );
+
+        verify_two_point_opening_scaffold(
+            self.backend,
+            &vk,
+            &proof,
+            &challenges.xi,
+            &xi_omega,
+            &u,
+        )?;
 
         Ok(())
     }
@@ -242,6 +276,7 @@ mod tests {
             n_fixed: 2,
             // Real G2 generator — pairing syscall rejects (0,0,0,0).
             x2_g2: mosaic_zk_primitives::g1_consts::g2_generator_bytes(),
+            omega_fr: [0u8; 32],
             fixed_commits: vec![0; 2 * G1_LEN],
             permutation_commits: vec![0; 5 * G1_LEN],
         }

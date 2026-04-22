@@ -85,6 +85,6 @@ pub use circuit::{
     combined_expr, gate_expr, lookup_expr, permutation_expr, LookupEvals, PermutationEvals,
     SelectorEvals, WireEvals,
 };
-pub use kzg::verify_opening_scaffold;
+pub use kzg::{verify_opening_scaffold, verify_two_point_opening_scaffold};
 pub use vanishing::{compute_t_from_chunks, compute_z_h, vanishing_identity_holds};
 pub use verifier::Halo2KzgBn254;

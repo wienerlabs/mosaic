@@ -206,6 +206,7 @@ mod tests {
             n_advice: 3,
             n_fixed: 2,
             x2_g2: [0xCC; 128],
+            omega_fr: [0u8; 32],
             fixed_commits: vec![0x11; 2 * G1_LEN],
             permutation_commits: vec![0x22; 3 * G1_LEN],
         }
