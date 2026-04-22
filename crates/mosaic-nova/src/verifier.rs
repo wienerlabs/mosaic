@@ -76,7 +76,7 @@
 use crate::{
     canonical::{NovaFoldingProof, NovaFoldingVerifyingKey},
     challenges::derive_challenges,
-    folding::hadamard_residual,
+    folding::{folded_commitment_from_fold, hadamard_residual},
     kzg::verify_opening_scaffold,
 };
 use ark_bn254::Fr;
@@ -163,6 +163,40 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
             return Err(OnChainError::SumcheckFailed);
         }
 
+        // Session-15-nova: folded-commitment reconstruction.
+        // Recompute `E_folded` and `W_folded` from the two base
+        // instances and the cross-term T using the transcript-
+        // derived folding challenge `r`. Reject if the reconstruction
+        // doesn't match the declared `e_comm` / `w_comm`.
+        //
+        //   E_folded ?= E_1 + r·E_2 + r²·T     (folding.rs primitive)
+        //   W_folded ?= W_1 + r·W_2 + r²·T
+        //
+        // Catches a malicious prover who sends inconsistent base/fold
+        // commitments — even with a valid Hadamard residual, the
+        // fold reconstruction will disagree with the declared E/W.
+        let r = challenges.r;
+        let computed_e = folded_commitment_from_fold(
+            self.backend,
+            proof.base_e_1,
+            proof.base_e_2,
+            proof.t_comm,
+            &r,
+        )?;
+        if &computed_e[..] != proof.e_comm {
+            return Err(OnChainError::VerificationFailed);
+        }
+        let computed_w = folded_commitment_from_fold(
+            self.backend,
+            proof.base_w_1,
+            proof.base_w_2,
+            proof.t_comm,
+            &r,
+        )?;
+        if &computed_w[..] != proof.w_comm {
+            return Err(OnChainError::VerificationFailed);
+        }
+
         // KZG scaffold opening at ξ (single-commitment stand-in;
         // session 7+ extends to the full Spartan-batched opening).
         verify_opening_scaffold(self.backend, &vk, &proof, &challenges.xi)?;
@@ -238,6 +272,7 @@ mod tests {
         let total = sizes::FIXED_HEADER_LEN
             + sizes::FIXED_COMMITS_LEN
             + sizes::SCALAR_LEN
+            + 4 * sizes::G1_LEN // session-15-nova base commits
             + sizes::HADAMARD_EVALS_LEN
             + aux_len
             + pi_len
@@ -293,6 +328,34 @@ mod tests {
         assert!(r.is_ok(), "HyperNova zero-proof pipeline should pass, got {r:?}");
     }
 
+    /// Session-15-nova: tamper with `base_e_1` (set to G1 generator,
+    /// a non-zero point) while leaving `e_comm` zero → the folded
+    /// commitment reconstruction yields `G1_generator + r·0 + r²·0
+    /// = G1_generator ≠ 0 = e_comm` → `VerificationFailed`.
+    /// Demonstrates the new fold-reconstruction soundness gate.
+    #[test]
+    fn rejects_tampered_base_e_commitment() {
+        use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = NovaFolding::new(&backend);
+        let vk = matching_vk(FoldingVariant::Nova, 2);
+        let mut proof = proof_bytes(FoldingVariant::Nova, 0, 2);
+
+        // Layout: FIXED_HEADER + E/W/T (3·G1) + u (32 B) → base_e_1.
+        let base_e_1_off = sizes::FIXED_HEADER_LEN
+            + sizes::FIXED_COMMITS_LEN
+            + sizes::SCALAR_LEN;
+        let g1_gen = g1_generator_bytes();
+        proof[base_e_1_off..base_e_1_off + sizes::G1_LEN].copy_from_slice(&g1_gen);
+
+        let pi = zero_pi(2);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::VerificationFailed)),
+            "tampered base_e_1 should fail fold reconstruction, got {r:?}",
+        );
+    }
+
     /// Session 6-partial soundness gate: set a=1, b=1, others zero →
     /// residual = 1·1 - 0·0 - 0 = 1 ≠ 0 → `SumcheckFailed`.
     #[test]
@@ -302,8 +365,12 @@ mod tests {
         let vk = matching_vk(FoldingVariant::Nova, 2);
         let mut proof = proof_bytes(FoldingVariant::Nova, 0, 2);
 
-        // Hadamard evals start at FIXED_HEADER + FIXED_COMMITS + SCALAR.
-        let had_off = sizes::FIXED_HEADER_LEN + sizes::FIXED_COMMITS_LEN + sizes::SCALAR_LEN;
+        // Hadamard evals start at FIXED_HEADER + FIXED_COMMITS +
+        // SCALAR + 4·G1 (session-15-nova base commits).
+        let had_off = sizes::FIXED_HEADER_LEN
+            + sizes::FIXED_COMMITS_LEN
+            + sizes::SCALAR_LEN
+            + 4 * sizes::G1_LEN;
         // Set a_eval = 1 and b_eval = 1 (last byte of BE Fr).
         proof[had_off + sizes::FR_LEN - 1] = 1;
         proof[had_off + 2 * sizes::FR_LEN - 1] = 1;
@@ -334,7 +401,9 @@ mod tests {
         proof[u_off..u_off + sizes::FR_LEN].copy_from_slice(&u_bytes);
 
         // a = b = c = 1, e = 1·1 - 2·1 = -1.
-        let hadamard_off = u_off + sizes::FR_LEN;
+        // Session-15-nova: hadamard now sits after u (32 B) + base
+        // commits (4 × 64 = 256 B).
+        let hadamard_off = u_off + sizes::FR_LEN + 4 * sizes::G1_LEN;
         let one_bytes = fr_to_canonical_bytes(&Fr::from(1u64));
         let neg_one_bytes = fr_to_canonical_bytes(&(-Fr::from(1u64)));
         proof[hadamard_off..hadamard_off + sizes::FR_LEN].copy_from_slice(&one_bytes);

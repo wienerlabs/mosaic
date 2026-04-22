@@ -136,6 +136,7 @@ mod tests {
         let total = sizes::FIXED_HEADER_LEN
             + sizes::FIXED_COMMITS_LEN
             + sizes::SCALAR_LEN
+            + 4 * sizes::G1_LEN // session-15-nova base commits
             + sizes::HADAMARD_EVALS_LEN
             + sizes::OPENING_LEN;
         let mut buf = vec![0u8; total];

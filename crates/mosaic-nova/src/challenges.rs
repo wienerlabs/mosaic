@@ -165,6 +165,7 @@ mod tests {
         let total = sizes::FIXED_HEADER_LEN
             + sizes::FIXED_COMMITS_LEN
             + sizes::SCALAR_LEN
+            + 4 * sizes::G1_LEN // session-15-nova base commits
             + sizes::HADAMARD_EVALS_LEN
             + aux_len
             + pi_len
@@ -239,10 +240,12 @@ mod tests {
         let vk = sample_vk();
         let mut proof_a = sample_proof_bytes(2, 2);
         let mut proof_b = sample_proof_bytes(2, 2);
-        // Tamper with aux commit bytes (after E/W/T/u + hadamard_evals).
+        // Tamper with aux commit bytes (after E/W/T/u + 4·G1 base
+        // commits + hadamard_evals).
         let aux_off = sizes::FIXED_HEADER_LEN
             + sizes::FIXED_COMMITS_LEN
             + sizes::SCALAR_LEN
+            + 4 * sizes::G1_LEN
             + sizes::HADAMARD_EVALS_LEN;
         proof_a[aux_off] = 0xAA;
         proof_b[aux_off] = 0xBB;

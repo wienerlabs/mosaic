@@ -123,6 +123,18 @@ pub struct NovaFoldingProof<'a> {
     pub t_comm: &'a [u8],
     /// Folding scalar `u` (Fr, big-endian canonical).
     pub u: &'a [u8],
+    /// Base E commitment #1 (pre-fold instance). 64-byte G1.
+    ///
+    /// Session-15-nova: enables verifier-side reconstruction check
+    /// `E_folded ?= E_1 + r·E_2 + r²·T` where `r` is the folding
+    /// challenge squeezed from the transcript.
+    pub base_e_1: &'a [u8],
+    /// Base E commitment #2 (pre-fold instance). 64-byte G1.
+    pub base_e_2: &'a [u8],
+    /// Base W commitment #1 (pre-fold instance). 64-byte G1.
+    pub base_w_1: &'a [u8],
+    /// Base W commitment #2 (pre-fold instance). 64-byte G1.
+    pub base_w_2: &'a [u8],
     /// Hadamard-relation evaluations at ξ:
     /// `a_eval ‖ b_eval ‖ c_eval ‖ e_eval` (4 × 32 B). Used by the
     /// verifier's residual check.
@@ -145,9 +157,14 @@ impl<'a> NovaFoldingProof<'a> {
             MAX_AUX_COMMITS, MAX_PUBLIC_INPUTS, OPENING_LEN, SCALAR_LEN,
         };
 
+        // Session-15-nova: +4 G1 for base_e_1, base_e_2, base_w_1,
+        // base_w_2 = 256 bytes pre-fold commitments.
+        let base_commits_len = 4 * G1_LEN;
+
         let minimum = FIXED_HEADER_LEN
             + FIXED_COMMITS_LEN
             + SCALAR_LEN
+            + base_commits_len
             + HADAMARD_EVALS_LEN
             + OPENING_LEN;
         if bytes.len() < minimum {
@@ -172,6 +189,7 @@ impl<'a> NovaFoldingProof<'a> {
         let expected_len = FIXED_HEADER_LEN
             + FIXED_COMMITS_LEN
             + SCALAR_LEN
+            + base_commits_len
             + HADAMARD_EVALS_LEN
             + aux_len
             + pi_len
@@ -190,6 +208,15 @@ impl<'a> NovaFoldingProof<'a> {
         off += G1_LEN;
         let u = &bytes[off..off + FR_LEN];
         off += FR_LEN;
+        // Session-15-nova: base pre-fold commitments.
+        let base_e_1 = &bytes[off..off + G1_LEN];
+        off += G1_LEN;
+        let base_e_2 = &bytes[off..off + G1_LEN];
+        off += G1_LEN;
+        let base_w_1 = &bytes[off..off + G1_LEN];
+        off += G1_LEN;
+        let base_w_2 = &bytes[off..off + G1_LEN];
+        off += G1_LEN;
         let hadamard_evals = &bytes[off..off + HADAMARD_EVALS_LEN];
         off += HADAMARD_EVALS_LEN;
         let aux_commits = &bytes[off..off + aux_len];
@@ -208,6 +235,10 @@ impl<'a> NovaFoldingProof<'a> {
             w_comm,
             t_comm,
             u,
+            base_e_1,
+            base_e_2,
+            base_w_1,
+            base_w_2,
             hadamard_evals,
             aux_commits,
             public_inputs,
@@ -343,6 +374,7 @@ mod tests {
         let total = FIXED_HEADER_LEN
             + FIXED_COMMITS_LEN
             + SCALAR_LEN
+            + 4 * G1_LEN // session-15-nova base commits
             + HADAMARD_EVALS_LEN
             + aux_len
             + pi_len
