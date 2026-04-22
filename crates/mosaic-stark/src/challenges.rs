@@ -285,19 +285,25 @@ mod tests {
             trace_log_height: 16,
             log_blowup: 1,
             air_hash: [0xAA; 32],
+            omega_g: [0u8; 8],
         }
     }
 
     fn sample_proof_bytes(num_fri: u8, num_q: u16) -> alloc::vec::Vec<u8> {
+        use crate::canonical::FRI_LAYER_OPENING_LEN;
         let ood_bytes = 10 * sizes::DIGEST_LEN; // dummy content length
         let final_bytes = 4 * sizes::DIGEST_LEN;
         let query_bytes = (num_q as usize) * 64;
+        let fri_openings_bytes =
+            (num_q as usize) * (num_fri as usize) * FRI_LAYER_OPENING_LEN;
         let total = sizes::FIXED_HEADER_LEN
             + 2 * sizes::DIGEST_LEN
             + (num_fri as usize) * sizes::DIGEST_LEN
             + 4 + ood_bytes
             + 4 + final_bytes
             + 4 + query_bytes
+            + 4 + fri_openings_bytes
+            + 8 // final_layer_value
             + sizes::POW_NONCE_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = StarkFieldId::Goldilocks as u8;
@@ -313,6 +319,8 @@ mod tests {
         buf[off..off + 4].copy_from_slice(&(final_bytes as u32).to_le_bytes());
         off += 4 + final_bytes;
         buf[off..off + 4].copy_from_slice(&(query_bytes as u32).to_le_bytes());
+        off += 4 + query_bytes;
+        buf[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
         buf
     }
 

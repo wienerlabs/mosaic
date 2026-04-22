@@ -122,6 +122,10 @@ impl StarkFieldId {
     }
 }
 
+/// Per-query per-layer Goldilocks opening size: two field elements
+/// (f(x), f(-x)), each 8 bytes LE.
+pub const FRI_LAYER_OPENING_LEN: usize = 2 * 8;
+
 /// Zero-copy view into a FRI-STARK proof buffer.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FriStarkProof<'a> {
@@ -151,6 +155,16 @@ pub struct FriStarkProof<'a> {
     pub fri_final_poly: &'a [u8],
     /// Query phase responses (opening values + Merkle auth paths).
     pub query_responses: &'a [u8],
+    /// Per-FRI-layer fold openings (session 13b). Flat buffer of
+    /// `num_queries × num_fri_layers × 16` bytes carrying `(f(x),
+    /// f(-x))` Goldilocks pairs. Empty when `num_fri_layers = 0`.
+    pub fri_layer_openings: &'a [u8],
+    /// Claimed final-layer scalar after all FRI folds
+    /// (session 13b). Single Goldilocks value, 8-byte LE. All queries
+    /// must fold to this same scalar (scaffold assumption: final
+    /// polynomial is constant; Session 14 extends to multi-coefficient
+    /// final polynomials).
+    pub final_layer_value: [u8; 8],
     /// Proof-of-work nonce used for grinding.
     pub pow_nonce: u64,
 }
@@ -210,8 +224,9 @@ impl<'a> FriStarkProof<'a> {
         };
 
         // Minimum length: header + two root digests + pow nonce +
-        // three length prefixes (ood / final / queries, even if zero).
-        let minimum = FIXED_HEADER_LEN + 2 * DIGEST_LEN + POW_NONCE_LEN + 3 * 4;
+        // four length prefixes (ood / final / queries / fri_layer_openings,
+        // even if zero) + 8 bytes final_layer_value.
+        let minimum = FIXED_HEADER_LEN + 2 * DIGEST_LEN + POW_NONCE_LEN + 4 * 4 + 8;
         if bytes.len() < minimum {
             return Err(OnChainError::ProofLengthMismatch);
         }
@@ -254,18 +269,35 @@ impl<'a> FriStarkProof<'a> {
         let fri_layer_commits = &bytes[off..off + fri_layer_bytes];
         off += fri_layer_bytes;
 
-        // Three length-prefixed variable sections.
+        // Four length-prefixed variable sections (ood / final /
+        // queries / fri_layer_openings — new in session 13b).
         let (ood_evals, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
         off = new_off;
         let (fri_final_poly, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
         off = new_off;
         let (query_responses, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
         off = new_off;
+        let (fri_layer_openings, new_off) = read_var_tail(bytes, off, MAX_TAIL_LEN)?;
+        off = new_off;
 
-        // Trailing pow nonce (8 bytes LE).
-        if bytes.len() != off + POW_NONCE_LEN {
+        // Expected fri_layer_openings length check (session 13b
+        // structural invariant):
+        //   num_queries × num_fri_layers × FRI_LAYER_OPENING_LEN
+        let expected_fri_openings_len = (num_queries as usize)
+            .checked_mul(num_fri_layers as usize)
+            .and_then(|n| n.checked_mul(FRI_LAYER_OPENING_LEN))
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        if fri_layer_openings.len() != expected_fri_openings_len {
             return Err(OnChainError::ProofLengthMismatch);
         }
+
+        // Trailing: final_layer_value (8 bytes LE Goldilocks) + pow_nonce.
+        if bytes.len() != off + 8 + POW_NONCE_LEN {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        let mut final_layer_value = [0u8; 8];
+        final_layer_value.copy_from_slice(&bytes[off..off + 8]);
+        off += 8;
         let pow_nonce = u64::from_le_bytes([
             bytes[off],
             bytes[off + 1],
@@ -291,8 +323,35 @@ impl<'a> FriStarkProof<'a> {
             ood_evals,
             fri_final_poly,
             query_responses,
+            fri_layer_openings,
+            final_layer_value,
             pow_nonce,
         })
+    }
+
+    /// Per-query per-layer opening iterator: yields
+    /// `(f(x), f(-x))` Goldilocks scalars for each (query, layer)
+    /// pair in row-major order (all layers of query 0, then all
+    /// layers of query 1, …).
+    ///
+    /// Returns `None` if the buffer length doesn't match the declared
+    /// `num_queries × num_fri_layers × FRI_LAYER_OPENING_LEN`. The
+    /// pre-check in `from_bytes` makes this rare but keeps the
+    /// Option as a belt-and-suspenders guard.
+    pub fn fri_layer_opening_iter(
+        &self,
+    ) -> Option<impl Iterator<Item = (&'a [u8], &'a [u8])> + '_> {
+        let expected = (self.num_queries as usize)
+            * (self.num_fri_layers as usize)
+            * FRI_LAYER_OPENING_LEN;
+        if self.fri_layer_openings.len() != expected {
+            return None;
+        }
+        Some(
+            self.fri_layer_openings
+                .chunks_exact(FRI_LAYER_OPENING_LEN)
+                .map(|chunk| chunk.split_at(8)),
+        )
     }
 
     /// Iterate FRI layer digests as 32-byte slices.
@@ -337,7 +396,9 @@ fn read_var_tail(
     ))
 }
 
-/// FRI-STARK verifying key. Scaffold layout.
+/// FRI-STARK verifying key. Session 13b extension: now carries a
+/// Goldilocks domain generator `omega_g` so the verifier can compute
+/// per-query x-values `ω^query_idx` for the FRI fold chain walk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FriStarkVerifyingKey {
     /// Base field for this AIR.
@@ -351,6 +412,15 @@ pub struct FriStarkVerifyingKey {
     /// AIR (Algebraic Intermediate Representation) hash — uniquely
     /// identifies the constraint system this VK is for.
     pub air_hash: [u8; 32],
+    /// Domain generator `ω` for the Goldilocks evaluation domain,
+    /// encoded as 8-byte LE. Must be a primitive
+    /// `2^(trace_log_height + log_blowup)`-th root of unity in
+    /// Goldilocks. Used by the verifier to compute per-query x-values
+    /// `x_q = ω^q` at FRI layer 0.
+    ///
+    /// For non-Goldilocks `field_id` variants, this slot carries a
+    /// field-specific generator encoded per the field's canonical form.
+    pub omega_g: [u8; 8],
 }
 
 impl FriStarkVerifyingKey {
@@ -359,7 +429,8 @@ impl FriStarkVerifyingKey {
         + 4 // trace_width
         + 2 // trace_log_height
         + 1 // log_blowup
-        + 32; // air_hash
+        + 32 // air_hash
+        + 8; // omega_g
 
     /// Decode from canonical bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, OnChainError> {
@@ -372,12 +443,15 @@ impl FriStarkVerifyingKey {
         let log_blowup = bytes[7];
         let mut air_hash = [0u8; 32];
         air_hash.copy_from_slice(&bytes[8..40]);
+        let mut omega_g = [0u8; 8];
+        omega_g.copy_from_slice(&bytes[40..48]);
         Ok(Self {
             field_id,
             trace_width,
             trace_log_height,
             log_blowup,
             air_hash,
+            omega_g,
         })
     }
 
@@ -390,6 +464,7 @@ impl FriStarkVerifyingKey {
         out.extend_from_slice(&self.trace_log_height.to_le_bytes());
         out.push(self.log_blowup);
         out.extend_from_slice(&self.air_hash);
+        out.extend_from_slice(&self.omega_g);
         out
     }
 }
@@ -411,6 +486,8 @@ mod tests {
         let ood_bytes = 10 * field_id.field_elem_bytes();
         let final_bytes = 4 * field_id.field_elem_bytes();
         let query_bytes = (num_queries as usize) * 64;
+        let fri_openings_bytes =
+            (num_queries as usize) * (num_fri_layers as usize) * FRI_LAYER_OPENING_LEN;
 
         let total = FIXED_HEADER_LEN
             + 2 * DIGEST_LEN
@@ -418,6 +495,8 @@ mod tests {
             + 4 + ood_bytes
             + 4 + final_bytes
             + 4 + query_bytes
+            + 4 + fri_openings_bytes
+            + 8 // final_layer_value
             + POW_NONCE_LEN;
 
         let mut buf = vec![0u8; total];
@@ -430,13 +509,16 @@ mod tests {
         buf[8..12].copy_from_slice(&trace_width.to_le_bytes());
 
         let mut off = FIXED_HEADER_LEN + 2 * DIGEST_LEN + (num_fri_layers as usize) * DIGEST_LEN;
-        // ood len prefix
         buf[off..off + 4].copy_from_slice(&(ood_bytes as u32).to_le_bytes());
         off += 4 + ood_bytes;
         buf[off..off + 4].copy_from_slice(&(final_bytes as u32).to_le_bytes());
         off += 4 + final_bytes;
         buf[off..off + 4].copy_from_slice(&(query_bytes as u32).to_le_bytes());
         off += 4 + query_bytes;
+        buf[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
+        off += 4 + fri_openings_bytes;
+        // final_layer_value (8 bytes, left zero).
+        off += 8;
         // pow nonce
         buf[off..off + POW_NONCE_LEN].copy_from_slice(&0xABCD_EF12_3456_7890u64.to_le_bytes());
         buf
@@ -533,6 +615,7 @@ mod tests {
             trace_log_height: 16,
             log_blowup: 1,
             air_hash: [0xAA; 32],
+            omega_g: [0xCD; 8],
         };
         let bytes = vk.to_bytes();
         assert_eq!(bytes.len(), FriStarkVerifyingKey::SERIALIZED_LEN);

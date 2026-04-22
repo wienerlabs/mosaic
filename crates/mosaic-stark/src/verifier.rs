@@ -77,9 +77,12 @@
 
 use crate::{
     canonical::{FriStarkProof, FriStarkVerifyingKey},
-    challenges::{derive_challenges, derive_query_indices, verify_pow},
+    challenges::{derive_challenges, derive_layer_betas, derive_query_indices, verify_pow},
+    fri::verify_fold_chain,
+    goldilocks::Goldilocks,
     merkle::verify_path,
 };
+use alloc::vec::Vec;
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
@@ -202,6 +205,62 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
             proof.pow_bits,
         )?;
 
+        // FRI fold-chain verification (session 13b). For each query,
+        // walk the layer openings, ensure the fold relation holds at
+        // every step, and check the final scalar matches the
+        // claimed final_layer_value. Skipped when num_fri_layers = 0
+        // (edge case — no fold-chain to verify).
+        if proof.num_fri_layers > 0 {
+            // 1. Derive per-layer β challenges from the transcript.
+            //    Reuses the already-absorbed fri_layer_commits plus
+            //    the query_seed as the seed material.
+            let beta_u64s = derive_layer_betas(
+                self.backend,
+                &challenges.query_seed,
+                proof.fri_layer_commits,
+                proof.num_fri_layers,
+            )?;
+            // Convert raw u64 betas → Goldilocks (already reduced).
+            let betas: Vec<Goldilocks> =
+                beta_u64s.iter().map(|&b| Goldilocks::new(b)).collect();
+
+            // 2. Parse VK's domain generator ω and the claimed final
+            //    value.
+            let omega = Goldilocks::from_bytes_le(&vk.omega_g)?;
+            let claimed_final = Goldilocks::from_bytes_le(&proof.final_layer_value)?;
+
+            // 3. Parse per-query per-layer opening bundle. Iterator
+            //    yields 2 × 8-byte slices (f(x), f(-x)) in row-major
+            //    order across (query, layer).
+            let opening_iter = proof
+                .fri_layer_opening_iter()
+                .ok_or(OnChainError::ProofLengthMismatch)?;
+            let openings: Vec<(Goldilocks, Goldilocks)> = opening_iter
+                .map(|(f_x_bytes, f_neg_x_bytes)| {
+                    let f_x_arr: [u8; 8] = f_x_bytes.try_into().unwrap();
+                    let f_neg_x_arr: [u8; 8] = f_neg_x_bytes.try_into().unwrap();
+                    let f_x = Goldilocks::from_bytes_le(&f_x_arr)?;
+                    let f_neg_x = Goldilocks::from_bytes_le(&f_neg_x_arr)?;
+                    Ok::<_, OnChainError>((f_x, f_neg_x))
+                })
+                .collect::<Result<_, _>>()?;
+
+            // 4. For each query, walk its fold chain and compare the
+            //    final scalar to the claimed final.
+            let n_layers = proof.num_fri_layers as usize;
+            for (q_idx, &global_idx) in indices.iter().enumerate() {
+                let x_0 = omega.pow(global_idx);
+                let start = q_idx * n_layers;
+                let end = start + n_layers;
+                let layer_evals = &openings[start..end];
+                let (_final_x, computed_final) =
+                    verify_fold_chain(layer_evals, &betas, x_0)?;
+                if computed_final != claimed_final {
+                    return Err(OnChainError::VerificationFailed);
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -287,15 +346,20 @@ mod tests {
         log_blowup: u8,
         leaf_fill: u8,
     ) -> Vec<u8> {
+        use crate::canonical::FRI_LAYER_OPENING_LEN;
         let ood_bytes = 10 * field.field_elem_bytes();
         let final_bytes = 4 * field.field_elem_bytes();
         let depth = (log_h as usize) + (log_blowup as usize);
         let per_query = 2 * (sizes::DIGEST_LEN + depth * sizes::DIGEST_LEN);
         let query_bytes = (num_q as usize) * per_query;
+        let fri_openings_bytes =
+            (num_q as usize) * (num_fri as usize) * FRI_LAYER_OPENING_LEN;
         let total = sizes::FIXED_HEADER_LEN
             + 2 * sizes::DIGEST_LEN
             + (num_fri as usize) * sizes::DIGEST_LEN
             + 4 + ood_bytes + 4 + final_bytes + 4 + query_bytes
+            + 4 + fri_openings_bytes
+            + 8 // final_layer_value
             + sizes::POW_NONCE_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = field as u8;
@@ -318,6 +382,10 @@ mod tests {
         for byte in buf[off..off + query_bytes].iter_mut() {
             *byte = leaf_fill;
         }
+        off += query_bytes;
+        buf[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
+        // fri_openings buffer + final_layer_value remain zero (default
+        // behavior when num_fri = 0 is to skip the fold-chain check).
         buf
     }
 
@@ -333,6 +401,7 @@ mod tests {
             trace_log_height: log_h,
             log_blowup,
             air_hash: [0; 32],
+            omega_g: [0u8; 8],
         }
         .to_bytes()
     }
@@ -409,6 +478,69 @@ mod tests {
         assert!(
             matches!(r, Err(OnChainError::VerificationFailed)),
             "mismatched constraint leaf should fail Merkle, got {r:?}",
+        );
+    }
+
+    /// Session-13b FRI fold happy path. Zero-filled layer openings +
+    /// zero final_layer_value → fold chain produces 0 regardless of
+    /// β and x, matches claimed final. Exercises the new
+    /// `derive_layer_betas` + `verify_fold_chain` wire-up end-to-end.
+    #[test]
+    fn full_pipeline_accepts_fri_fold_chain() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        // depth = 0 (log_h=0, log_blowup=0) → trivial Merkle; num_fri=1
+        // so the new FRI fold-chain path runs.
+        let mut vk_bytes = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+        // Set ω to 7 (non-zero Goldilocks; pow(7, 0) = 1 so x_0 ≠ 0).
+        let vk_omega_off = 40;
+        vk_bytes[vk_omega_off..vk_omega_off + 8].copy_from_slice(&7u64.to_le_bytes());
+
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 1, 1, 0, 32, 0, 0xAB);
+        // Set both commitments to match the leaf_fill pattern (session 8).
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        let constraint_off = trace_off + sizes::DIGEST_LEN;
+        for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        for byte in proof[constraint_off..constraint_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        // fri_layer_openings + final_layer_value left at all-zero →
+        // fold chain produces 0 regardless of β, matches claimed 0.
+
+        let r = FriStark::verify(&v, &vk_bytes, &proof, &[]);
+        assert!(r.is_ok(), "FRI fold chain with zero openings should pass, got {r:?}");
+    }
+
+    /// Session-13b tampered final-layer scalar: fold produces 0 but
+    /// proof claims 1 → chain mismatch → `VerificationFailed`.
+    #[test]
+    fn rejects_tampered_final_layer_value() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let mut vk_bytes = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+        vk_bytes[40..48].copy_from_slice(&7u64.to_le_bytes());
+
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 1, 1, 0, 32, 0, 0xAB);
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        let constraint_off = trace_off + sizes::DIGEST_LEN;
+        for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        for byte in proof[constraint_off..constraint_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+
+        // Tamper with final_layer_value: set to 1. Its byte layout is
+        // `proof.len() - POW_NONCE_LEN - 8..proof.len() - POW_NONCE_LEN`.
+        let final_off = proof.len() - sizes::POW_NONCE_LEN - 8;
+        proof[final_off] = 1; // LE first byte = 1 → Goldilocks::new(1)
+
+        let r = FriStark::verify(&v, &vk_bytes, &proof, &[]);
+        assert!(
+            matches!(r, Err(OnChainError::VerificationFailed)),
+            "tampered final_layer_value should fail fold chain, got {r:?}",
         );
     }
 
