@@ -216,15 +216,48 @@ pub struct HyperPlonkVerifyingKey {
     pub sigma_2_g1: [u8; sizes::G1_LEN],
     /// Permutation σ commitment `[σ_3]` — output-wire permutation MLE.
     pub sigma_3_g1: [u8; sizes::G1_LEN],
+    /// Permutation coset constant `k_1` for the left-wire identity
+    /// factor in the PLONK grand-product (canonical 32-byte BE Fr).
+    /// Sessions ≤17 hardcoded the triplet `(k_1, k_2, k_3) = (1, 2, 3)`;
+    /// session 18 lifts this to a VK-side circuit-specific value so
+    /// multi-point reductions can use any three distinct cosets.
+    pub k_1: [u8; sizes::FR_LEN],
+    /// Permutation coset constant `k_2` for the middle-wire identity
+    /// factor. Must differ from `k_1` and `k_3` (otherwise the
+    /// permutation argument loses its identity-separation property).
+    pub k_2: [u8; sizes::FR_LEN],
+    /// Permutation coset constant `k_3` for the output-wire identity
+    /// factor. Must differ from `k_1` and `k_2`.
+    pub k_3: [u8; sizes::FR_LEN],
 }
 
 impl HyperPlonkVerifyingKey {
     /// Number of preprocessed commitments (5 selectors + 3 σ).
     pub const NUM_COMMITS: usize = 8;
 
+    /// Canonical BE-encoded Fr for the small integer `n`. Used to build
+    /// the default `(k_1, k_2, k_3) = (1, 2, 3)` cosets in tests; real
+    /// circuits pick distinct cosets via the VK ceremony.
+    #[must_use]
+    pub const fn fr_be_from_u64(n: u64) -> [u8; sizes::FR_LEN] {
+        let mut out = [0u8; sizes::FR_LEN];
+        let bytes = n.to_be_bytes();
+        out[24] = bytes[0];
+        out[25] = bytes[1];
+        out[26] = bytes[2];
+        out[27] = bytes[3];
+        out[28] = bytes[4];
+        out[29] = bytes[5];
+        out[30] = bytes[6];
+        out[31] = bytes[7];
+        out
+    }
+
     /// Serialized VK length:
-    /// `n_public (4) + num_variables (4) + x2_g2 (128) + 8 × G1 (64)`.
-    pub const SERIALIZED_LEN: usize = 4 + 4 + 128 + Self::NUM_COMMITS * sizes::G1_LEN;
+    /// `n_public (4) + num_variables (4) + x2_g2 (128) + 8 × G1 (64)
+    ///  + 3 × Fr (32)`.
+    pub const SERIALIZED_LEN: usize =
+        4 + 4 + 128 + Self::NUM_COMMITS * sizes::G1_LEN + 3 * sizes::FR_LEN;
 
     /// Decode from canonical bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, OnChainError> {
@@ -251,6 +284,16 @@ impl HyperPlonkVerifyingKey {
         let sigma_1_g1 = take();
         let sigma_2_g1 = take();
         let sigma_3_g1 = take();
+        let k_start = off;
+        let mut take_fr = |i: usize| -> [u8; sizes::FR_LEN] {
+            let mut out = [0u8; sizes::FR_LEN];
+            let from = k_start + i * sizes::FR_LEN;
+            out.copy_from_slice(&bytes[from..from + sizes::FR_LEN]);
+            out
+        };
+        let k_1 = take_fr(0);
+        let k_2 = take_fr(1);
+        let k_3 = take_fr(2);
         Ok(Self {
             n_public,
             num_variables,
@@ -263,6 +306,9 @@ impl HyperPlonkVerifyingKey {
             sigma_1_g1,
             sigma_2_g1,
             sigma_3_g1,
+            k_1,
+            k_2,
+            k_3,
         })
     }
 
@@ -281,6 +327,9 @@ impl HyperPlonkVerifyingKey {
         out.extend_from_slice(&self.sigma_1_g1);
         out.extend_from_slice(&self.sigma_2_g1);
         out.extend_from_slice(&self.sigma_3_g1);
+        out.extend_from_slice(&self.k_1);
+        out.extend_from_slice(&self.k_2);
+        out.extend_from_slice(&self.k_3);
         out
     }
 
@@ -379,6 +428,9 @@ mod tests {
             sigma_1_g1: [0x66; G1_LEN],
             sigma_2_g1: [0x77; G1_LEN],
             sigma_3_g1: [0x88; G1_LEN],
+            k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+            k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+            k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
         }
     }
 
@@ -387,8 +439,8 @@ mod tests {
         let vk = sample_vk();
         let bytes = vk.to_bytes();
         assert_eq!(bytes.len(), HyperPlonkVerifyingKey::SERIALIZED_LEN);
-        // Explicit size check: 4 + 4 + 128 + 8·64 = 648 B.
-        assert_eq!(bytes.len(), 648);
+        // Session 18: 4 + 4 + 128 + 8·64 + 3·32 = 648 + 96 = 744 B.
+        assert_eq!(bytes.len(), 744);
         let decoded = HyperPlonkVerifyingKey::from_bytes(&bytes).unwrap();
         assert_eq!(vk, decoded);
     }

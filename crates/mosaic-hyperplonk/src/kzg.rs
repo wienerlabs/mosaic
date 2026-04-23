@@ -211,6 +211,9 @@ mod tests {
             sigma_1_g1: [0; G1_LEN],
             sigma_2_g1: [0; G1_LEN],
             sigma_3_g1: [0; G1_LEN],
+            k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+            k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+            k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
         }
     }
 

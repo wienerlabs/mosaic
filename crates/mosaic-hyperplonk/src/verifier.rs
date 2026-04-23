@@ -144,10 +144,12 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
         // 4. Claim reduction: compute the expected value of the
         //    combined polynomial at the sumcheck challenge point from
         //    the proof's final_evals bundle, and compare to the
-        //    sumcheck's final claim.
+        //    sumcheck's final claim. Session 18: permutation cosets
+        //    come from the VK rather than being hardcoded (1, 2, 3).
         let expected_claim = compute_expected_final_claim(
             proof.final_evals,
             &challenges,
+            &vk,
         )?;
         if expected_claim != sumcheck_out.final_claim {
             return Err(OnChainError::SumcheckFailed);
@@ -196,6 +198,7 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
 fn compute_expected_final_claim(
     final_evals_bytes: &[u8],
     challenges: &PreSumcheckChallenges,
+    vk: &HyperPlonkVerifyingKey,
 ) -> Result<Fr, OnChainError> {
     // Parse the 12 Fr evaluations at fixed offsets.
     let eval_at = |i: usize| -> Result<Fr, OnChainError> {
@@ -225,6 +228,9 @@ fn compute_expected_final_claim(
     let sigma_3 = eval_at(idx::SIGMA_3)?;
 
     let gate_value = gate_expr(&wires, &selectors);
+    let k_1 = fr_from_canonical_bytes(&vk.k_1)?;
+    let k_2 = fr_from_canonical_bytes(&vk.k_2)?;
+    let k_3 = fr_from_canonical_bytes(&vk.k_3)?;
     let perm_value = permutation_term(
         &wires,
         &z_eval,
@@ -233,6 +239,9 @@ fn compute_expected_final_claim(
         &sigma_3,
         &challenges.beta,
         &challenges.gamma,
+        &k_1,
+        &k_2,
+        &k_3,
     );
 
     Ok(challenges.alpha * gate_value + perm_value)
@@ -250,6 +259,7 @@ fn compute_expected_final_claim(
 ///
 /// Zero on a well-behaved proof where `σ_i` encodes the correct
 /// permutation; non-zero when any σ_i is tampered.
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 fn permutation_term(
     wires: &WireEvals,
@@ -259,16 +269,18 @@ fn permutation_term(
     sigma_3: &Fr,
     beta: &Fr,
     gamma: &Fr,
+    k_1: &Fr,
+    k_2: &Fr,
+    k_3: &Fr,
 ) -> Fr {
-    let one = Fr::from(1u64);
-    let two = Fr::from(2u64);
-    let three = Fr::from(3u64);
-
-    // Identity-permutation factors.
-    let id_term = (wires.a + *beta * one + gamma)
-        * (wires.b + *beta * two + gamma)
-        * (wires.c + *beta * three + gamma);
-    // Committed-permutation factors.
+    // Session 18: coset constants lifted from hardcoded `(1, 2, 3)` to
+    // VK-provided `(k_1, k_2, k_3)`. The tamper sensitivity of the
+    // permutation check now extends to the VK itself — a malicious
+    // prover can no longer rely on the identity factors being fixed
+    // regardless of the verifying key.
+    let id_term = (wires.a + *beta * k_1 + gamma)
+        * (wires.b + *beta * k_2 + gamma)
+        * (wires.c + *beta * k_3 + gamma);
     let sigma_term = (wires.a + *beta * sigma_1 + gamma)
         * (wires.b + *beta * sigma_2 + gamma)
         * (wires.c + *beta * sigma_3 + gamma);
@@ -367,6 +379,9 @@ mod tests {
             sigma_1_g1: [0; G1_LEN],
             sigma_2_g1: [0; G1_LEN],
             sigma_3_g1: [0; G1_LEN],
+            k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+            k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+            k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
         }
         .to_bytes()
     }
@@ -533,5 +548,120 @@ mod tests {
     #[allow(dead_code)]
     fn boxed(v: HyperPlonkKzgBn254<'static, NeverBackend>) -> alloc::boxed::Box<dyn ProofSystem> {
         alloc::boxed::Box::new(v)
+    }
+
+    /// Session 18: coset constants are circuit-specific, so changing
+    /// a VK's `k_1` produces a different identity factor and therefore
+    /// a different `permutation_term` value. Unit-level check that the
+    /// identity factors are actually fed from `k_1, k_2, k_3` rather
+    /// than hardcoded.
+    #[test]
+    fn permutation_term_depends_on_k_cosets() {
+        let wires = WireEvals {
+            a: Fr::from(3u64),
+            b: Fr::from(5u64),
+            c: Fr::from(7u64),
+        };
+        let z = Fr::from(11u64);
+        let sigma_1 = Fr::from(13u64);
+        let sigma_2 = Fr::from(17u64);
+        let sigma_3 = Fr::from(19u64);
+        let beta = Fr::from(23u64);
+        let gamma = Fr::from(29u64);
+
+        let k1_a = Fr::from(1u64);
+        let k2_a = Fr::from(2u64);
+        let k3_a = Fr::from(3u64);
+        let k1_b = Fr::from(41u64);
+        let k2_b = Fr::from(43u64);
+        let k3_b = Fr::from(47u64);
+
+        let term_a = permutation_term(
+            &wires, &z, &sigma_1, &sigma_2, &sigma_3, &beta, &gamma, &k1_a,
+            &k2_a, &k3_a,
+        );
+        let term_b = permutation_term(
+            &wires, &z, &sigma_1, &sigma_2, &sigma_3, &beta, &gamma, &k1_b,
+            &k2_b, &k3_b,
+        );
+
+        assert_ne!(
+            term_a, term_b,
+            "distinct (k_1, k_2, k_3) triples must yield distinct \
+             permutation_term values; otherwise VK coset tampering is \
+             undetectable"
+        );
+    }
+
+    /// Session 18: tampering `vk.k_1` must propagate into
+    /// `compute_expected_final_claim`. The identity factor for wire
+    /// `a` is `β·k_1 + γ`, so changing `k_1` changes the reconstructed
+    /// permutation term and therefore the expected final claim.
+    #[test]
+    fn tampered_k_1_breaks_expected_claim() {
+        use crate::canonical::final_evals_index as idx;
+        use crate::canonical::sizes::{FINAL_EVALS, FR_LEN};
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+
+        // HyperPlonk final_evals layout (12 slots): A, B, C, Z,
+        // Q_M, Q_L, Q_R, Q_O, Q_C, SIGMA_1, SIGMA_2, SIGMA_3.
+        let mut bundle = [Fr::from(0u64); FINAL_EVALS];
+        bundle[idx::A] = Fr::from(2u64);
+        bundle[idx::B] = Fr::from(3u64);
+        bundle[idx::C] = Fr::from(5u64);
+        bundle[idx::Z] = Fr::from(1u64);
+        bundle[idx::SIGMA_1] = Fr::from(7u64);
+        bundle[idx::SIGMA_2] = Fr::from(11u64);
+        bundle[idx::SIGMA_3] = Fr::from(13u64);
+        let mut evals_bytes = alloc::vec::Vec::with_capacity(FINAL_EVALS * FR_LEN);
+        for e in bundle.iter() {
+            evals_bytes.extend_from_slice(&fr_to_canonical_bytes(e));
+        }
+        // Compute the challenge set the verifier would receive. We
+        // bypass the sumcheck by calling `compute_expected_final_claim`
+        // directly against a minimal `PreSumcheckChallenges`.
+        let challenges = PreSumcheckChallenges {
+            alpha: Fr::from(1u64),
+            beta: Fr::from(1u64),
+            gamma: Fr::from(1u64),
+        };
+
+        let vk_ok = HyperPlonkVerifyingKey {
+            n_public: 0,
+            num_variables: 4,
+            x2_g2: g2_generator_bytes(),
+            q_m_g1: [0; G1_LEN],
+            q_l_g1: [0; G1_LEN],
+            q_r_g1: [0; G1_LEN],
+            q_o_g1: [0; G1_LEN],
+            q_c_g1: [0; G1_LEN],
+            sigma_1_g1: [0; G1_LEN],
+            sigma_2_g1: [0; G1_LEN],
+            sigma_3_g1: [0; G1_LEN],
+            k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+            k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+            k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
+        };
+        let mut vk_bad = vk_ok.clone();
+        vk_bad.k_1 = HyperPlonkVerifyingKey::fr_be_from_u64(99);
+
+        let claim_ok = compute_expected_final_claim(
+            &evals_bytes,
+            &challenges,
+            &vk_ok,
+        )
+        .unwrap();
+        let claim_bad = compute_expected_final_claim(
+            &evals_bytes,
+            &challenges,
+            &vk_bad,
+        )
+        .unwrap();
+
+        assert_ne!(
+            claim_ok, claim_bad,
+            "tampered vk.k_1 must produce a different final claim; \
+             otherwise VK coset tampering would be silently absorbed"
+        );
     }
 }

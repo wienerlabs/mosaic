@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HyperPlonk VK-side permutation cosets (session 18)** —
+  `HyperPlonkVerifyingKey` gained three canonical 32-byte Fr fields
+  `k_1`, `k_2`, `k_3` replacing the sessions-≤17 hardcoded `(1, 2, 3)`
+  coset triple in `permutation_term`. The identity factor for wire
+  `a` is now `β·k_1 + γ` drawn from the VK rather than the compiled
+  verifier binary — tampering a VK's `k_1` flips the reconstructed
+  permutation term and therefore the sumcheck's expected final claim,
+  which the verifier surfaces as `SumcheckFailed`. `SERIALIZED_LEN`
+  grew from 648 B → 744 B (+96 B for 3 × Fr). A new const
+  `HyperPlonkVerifyingKey::fr_be_from_u64` produces canonical BE Fr
+  bytes for small integer cosets — all test VK fixtures initialize
+  `(k_1, k_2, k_3)` with it to preserve existing sumcheck behavior.
+  New session-18 unit tests:
+  `permutation_term_depends_on_k_cosets` (distinct triples yield
+  distinct perm_term values) and `tampered_k_1_breaks_expected_claim`
+  (swapping `vk.k_1` produces a different final claim).
+
 - **Halo2 multi-poly MSM opening (session 17)** —
   `mosaic-halo2::kzg::verify_two_point_opening_multipoly` replaces
   the session-16 single-commitment scaffold with full v-weighted
@@ -52,9 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
   Requires external prover tooling; closes cryptographic soundness
   verification beyond in-tree scaffold construction.
-- **HyperPlonk multi-point KZG reduction** — pin Zeromorph / Pst /
-  Gemini convention; extend `compute_expected_final_claim` with real
-  `k_i` cosets from the VK.
+- **HyperPlonk multi-point KZG reduction** — Zeromorph / Pst /
+  Gemini univariate reduction in `kzg.rs` remains a scaffold
+  shortcut (uses last sumcheck challenge as univariate point). The
+  session-18 VK-side `k_i` cosets tighten the permutation argument;
+  the multi-point → univariate reduction itself pins in a future
+  session against Espresso's reference impl.
 - **Nova Spartan-batched multi-poly opening** — current scaffold
   opens `w_comm` only; full version covers (A·z, B·z, C·z) + E + W.
 - **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).

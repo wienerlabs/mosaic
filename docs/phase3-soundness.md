@@ -280,6 +280,8 @@ the coverage surface.
 | Halo2 two-point opening (session 16) | `mosaic-halo2::kzg::two_point_rejects_tampered_z_next_eval` |
 | Halo2 multi-poly MSM (advice commit) | `mosaic-halo2::verifier::multipoly_rejects_tampered_advice_commit` |
 | Halo2 multi-poly MSM (wire evaluation) | `mosaic-halo2::verifier::multipoly_rejects_tampered_wire_a_evaluation` |
+| HyperPlonk VK coset sensitivity | `mosaic-hyperplonk::verifier::permutation_term_depends_on_k_cosets` |
+| HyperPlonk VK k_1 tamper detection | `mosaic-hyperplonk::verifier::tampered_k_1_breaks_expected_claim` |
 | Hadamard residual | `mosaic-nova::verifier::rejects_tampered_hadamard_evals` |
 | Nova fold reconstruction | `mosaic-nova::verifier::rejects_tampered_base_e_commitment` |
 | Trace Merkle | `mosaic-stark::verifier::rejects_mismatched_trace_merkle_leaf` |
