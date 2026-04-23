@@ -7,15 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HyperPlonk univariate-point full-vector binding (session 28)** —
+  The KZG opening's univariate evaluation point is now derived via
+  `derive_fr_challenge(backend, "mosaic-hyperplonk/univ-point",
+  &r_0 ‖ r_1 ‖ … ‖ r_{n-1})` — a domain-separated keccak over the
+  FULL sumcheck challenge vector. Sessions ≤27 used only the last
+  challenge `r_{n-1}`. This closes the scaffold "earlier-challenge
+  binding gap" that would have mattered once a real Zeromorph / PST
+  / Gemini reduction lands; the univariate opening is now bound to
+  every multivariate sumcheck output scalar, not just the trailing
+  one. The reduction itself (intermediate commitments + fold
+  consistency) stays on the roadmap.
+
 ### Planned beyond v0.7.0-phase3-primitives
 
 - **Fixture-driven differential testing** across all four Phase-3
   bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
   Requires external prover tooling; closes cryptographic soundness
   verification beyond in-tree scaffold construction.
-- **HyperPlonk multi-point → univariate reduction** — Zeromorph /
-  Pst / Gemini pinning in `kzg.rs` still uses the scaffold shortcut
-  of the last sumcheck challenge as the univariate evaluation point.
+- **HyperPlonk full Zeromorph / Pst / Gemini reduction** —
+  intermediate commitment fields + fold-consistency pairing checks
+  against the Espresso reference impl. Session 28 tightened the
+  univariate-point binding; the actual multi-point → univariate
+  reduction proof (with its per-fold commitments) remains a
+  substantial canonical-layout change.
 - **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
 
 ## [0.7.0-phase3-primitives] — 2026-04-23

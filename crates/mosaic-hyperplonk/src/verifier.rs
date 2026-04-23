@@ -69,7 +69,8 @@ use mosaic_core::{
     syscall::SyscallBackend,
     OnChainError,
 };
-use mosaic_zk_primitives::field::fr_from_canonical_bytes;
+use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
+use mosaic_zk_primitives::transcript::derive_fr_challenge;
 
 /// HyperPlonk-KZG verifier over BN254. Phase-3 scaffold.
 pub struct HyperPlonkKzgBn254<'a, B: SyscallBackend + ?Sized> {
@@ -155,12 +156,34 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
             return Err(OnChainError::SumcheckFailed);
         }
 
-        // 5. KZG batched opening (scaffold univariate reduction).
-        //    Use the last sumcheck challenge as the univariate eval
-        //    point — a simplification of HyperPlonk's true multi-point
-        //    opening, pinned properly in session 3f.
-        let univ_point = sumcheck_out.challenges.last().copied()
-            .unwrap_or(Fr::from(0u64));
+        // 5. KZG batched opening — session 28 multi-point reduction.
+        //    Real HyperPlonk uses Zeromorph / PST / Gemini to reduce
+        //    the multi-variate evaluation claim at (r_0, ..., r_{n-1})
+        //    to a single univariate opening. We stop short of
+        //    implementing any of those reductions (they require
+        //    intermediate commitments + consistency checks) but we
+        //    bind the univariate evaluation point to the FULL
+        //    sumcheck challenge vector via a domain-separated keccak
+        //    derivation. Session-≤27 used only the last challenge —
+        //    attackers could (in principle, once a real reduction
+        //    lands) swap earlier challenges without affecting the
+        //    opening check. This session closes that scaffold gap
+        //    while the Gemini/Zeromorph reduction tracks separately.
+        let challenge_bytes: alloc::vec::Vec<[u8; FR_LEN]> = sumcheck_out
+            .challenges
+            .iter()
+            .map(fr_to_canonical_bytes)
+            .collect();
+        let mut challenge_refs: alloc::vec::Vec<&[u8]> =
+            alloc::vec::Vec::with_capacity(challenge_bytes.len());
+        for c in &challenge_bytes {
+            challenge_refs.push(c.as_slice());
+        }
+        let univ_point = derive_fr_challenge(
+            self.backend,
+            b"mosaic-hyperplonk/univ-point",
+            &challenge_refs,
+        )?;
         verify_batched_opening(self.backend, &mut transcript, &vk, &proof, &univ_point)?;
 
         Ok(())

@@ -68,7 +68,12 @@ use mosaic_zk_primitives::{
 /// MSM + pairing.
 ///
 /// `univ_eval_point` is the univariate evaluation point for the
-/// opening — session-3e scaffold uses the last sumcheck challenge.
+/// opening. Session 28 wires this via a domain-separated keccak of
+/// the full sumcheck challenge vector (see the caller in
+/// `verifier.rs`); prior sessions used only the last challenge.
+/// Real HyperPlonk would produce this via a Zeromorph / PST /
+/// Gemini reduction with accompanying consistency commitments —
+/// tracked as a scaffold caveat.
 ///
 /// ## Errors
 ///
