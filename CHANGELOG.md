@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned beyond v0.7.0-phase3-primitives
+
+- **Fixture-driven differential testing** across all four Phase-3
+  bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  Requires external prover tooling; closes cryptographic soundness
+  verification beyond in-tree scaffold construction.
+- **HyperPlonk multi-point → univariate reduction** — Zeromorph /
+  Pst / Gemini pinning in `kzg.rs` still uses the scaffold shortcut
+  of the last sumcheck challenge as the univariate evaluation point.
+- **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+
+## [0.7.0-phase3-primitives] — 2026-04-23
+
+**Shared-primitive consolidation.** Sessions 21-26 extract every
+duplicated arithmetic pattern from the four Phase-3 verifiers into
+`mosaic-zk-primitives`. Five new primitives land in the shared
+crate; Halo2, HyperPlonk, and Nova verifier `kzg.rs` files shed
+110+ lines of boilerplate without any behavior change. Gate count
+unchanged at 14 (session 23 tightens Nova's Spartan opening with a
+dedicated `w_eval` slot but doesn't add a new gate class).
+
 ### Added
 
 - **Nova `w_eval` dedicated canonical slot (session 23)** —
@@ -20,8 +41,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   32 B (+`W_EVAL_LEN`). New session-23 tamper test
   `spartan_rejects_tampered_w_eval_slot` flips the dedicated slot
   with `u=1, a=b=c=e=0` Hadamard-satisfying setup → the tampered
-  w_eval alone now propagates into `y_batched ≠ 0` while
+  w_eval alone propagates into `y_batched ≠ 0` while
   `C_batched = 0`, failing the batched pairing identity.
+
+- **Shared `commitment_minus_scalar_g1` primitive (session 26)** —
+  The `C - y·G1` KZG opening-minus-claim step was duplicated at 6
+  sites across all KZG-based verifiers. Lifted into
+  `mosaic-zk-primitives::msm::commitment_minus_scalar_g1`. Call-
+  site delta: 4 lines of boilerplate → 1 function call each. Two
+  new unit tests: `commitment_minus_zero_returns_commitment` and
+  `commitment_minus_one_equals_negate`.
+
+- **Shared `verify_two_pair_pairing` primitive (session 25)** —
+  The 2-pair BN254 pairing identity check (build 384-byte input,
+  call `AltBn128Op::Pairing`, inspect result[31]) was duplicated
+  at 5 sites. Lifted into
+  `mosaic-zk-primitives::msm::verify_two_pair_pairing`. Four new
+  unit tests cover zero pair, canceling pair, non-trivial pair,
+  and G2 length validation.
+
+- **Shared `fr_be_from_u64` primitive (session 24)** —
+  `HyperPlonkVerifyingKey::fr_be_from_u64` (session 18) lifted to
+  `mosaic-zk-primitives::field::fr_be_from_u64` as a `const fn`.
+  The HyperPlonk static method stays as a thin wrapper for
+  discoverability. Two new unit tests compare against
+  `fr_to_canonical_bytes(&Fr::from(n))` across small, boundary,
+  and `u64::MAX` inputs.
 
 - **Shared `derive_fr_challenge` primitive (session 22)** —
   Halo2 (session 17/20) and Nova (session 19) had three inlined
@@ -31,28 +76,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mosaic-zk-primitives::transcript::derive_fr_challenge`; each
   verifier passes its own domain separator string so challenges
   can't collide across protocols. Internally wraps
-  `SyscallBackend::keccak256` + `fr_from_be_bytes_reduced`. Three
+  `SyscallBackend::keccak256` +
+  [`fr_from_be_bytes_reduced`]. Three
   new unit tests exercise determinism, domain-separation, and
   input-sensitivity.
 
-### Breaking changes (post-v0.6.0)
+- **Shared `fr_from_be_bytes_reduced` primitive (session 21)** —
+  Halo2 (session 17) and Nova (session 19) had duplicated
+  `into_fr` private helpers wrapping `Fr::from_be_bytes_mod_order`.
+  Lifted into `mosaic-zk-primitives::field::fr_from_be_bytes_reduced`
+  for keccak-to-Fr reduction of auxiliary challenges. Two new unit
+  tests exercise in-range agreement with
+  `fr_from_canonical_bytes` and out-of-range reduction.
+
+### Breaking changes
 
 - `NovaFoldingProof` canonical layout grows by 32 B (new `w_eval`
   slot between `hadamard_evals` and `aux_commits`). Previously-
-  serialized proofs require re-encoding. Fixture helpers in
-  `canonical.rs`, `challenges.rs`, `kzg.rs`, and `verifier.rs`
-  tests have all been updated to include the slot.
+  serialized Nova proofs require re-encoding with the additional
+  slot. Fixture helpers in `canonical.rs`, `challenges.rs`,
+  `kzg.rs`, and `verifier.rs` tests have all been updated.
 
-### Planned beyond v0.6.0-phase3-extended
+### Gate inventory (unchanged from v0.6.0)
 
-- **Fixture-driven differential testing** across all four Phase-3
-  bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
-  Requires external prover tooling; closes cryptographic soundness
-  verification beyond in-tree scaffold construction.
-- **HyperPlonk multi-point → univariate reduction** — Zeromorph /
-  Pst / Gemini pinning in `kzg.rs` still uses the scaffold shortcut
-  of the last sumcheck challenge as the univariate evaluation point.
-- **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+| Verifier | Gates | Session-21+ changes |
+|---|---|---|
+| HyperPlonk-KZG | 2 | `fr_be_from_u64` hoisted to shared primitive (session 24) |
+| Halo2-KZG | 2 | 5 helpers (1 MSM, 2 commit/eval collectors + 2 shared primitives) share code-path with Nova |
+| Nova / HyperNova / ProtoStar | 3 | `w_eval` dedicated slot (session 23); Spartan opening uses 2 shared primitives |
+| FRI-STARK | 7 | unchanged |
+
+### Test counts (post-v0.7.0)
+
+| Crate | Passing |
+|---|---|
+| `mosaic-halo2` | 58 |
+| `mosaic-hyperplonk` | 64 |
+| `mosaic-nova` | 44 |
+| `mosaic-plonk` | 17 |
+| `mosaic-zk-primitives` | 51 |
+
+Total 234 tests across the Phase-3 verifier + shared-primitives
+crates (14 new unit tests + 1 new tamper test added in sessions
+21-26).
 
 ## [0.6.0-phase3-extended] — 2026-04-23
 

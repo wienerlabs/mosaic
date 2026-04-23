@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.6.0-phase3-extended](https://img.shields.io/badge/release-v0.6.0--phase3--extended-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.6.0-phase3-extended)
+[![Release: v0.7.0-phase3-primitives](https://img.shields.io/badge/release-v0.7.0--phase3--primitives-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.7.0-phase3-primitives)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -203,8 +203,15 @@ same locally.
   identity. HyperPlonk permutation cosets (k_1, k_2, k_3) lifted
   from hardcoded `(1, 2, 3)` into the VK. CU baselines re-measured
   under the `opt-level = "z"` profile (PLONK cap 800K → 1.1M).
-  Only fixture-driven differential testing remains before external
-  audit engagement.
+- **Phase-3 primitives release:** [`v0.7.0-phase3-primitives`](https://github.com/wienerlabs/mosaic/releases/tag/v0.7.0-phase3-primitives).
+  Five shared primitives extracted to `mosaic-zk-primitives` from
+  inlined duplication across Halo2 / HyperPlonk / Nova verifiers —
+  `fr_from_be_bytes_reduced`, `derive_fr_challenge`, `fr_be_from_u64`,
+  `verify_two_pair_pairing`, `commitment_minus_scalar_g1`. Nova
+  proof canonical gains a dedicated `w_eval` slot (session 23),
+  replacing the scaffold reuse of `public_inputs[0]`. 14 new unit
+  tests cover the lifted primitives. Only fixture-driven
+  differential testing remains before external audit engagement.
 - **Vulnerability reports:** see [SECURITY.md](SECURITY.md) and the
   [disclosure-timeline SLA](docs/responsible-disclosure-timeline.md).
 - **Audit history:** see [AUDIT.md](AUDIT.md).

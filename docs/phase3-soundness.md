@@ -2,14 +2,16 @@
 
 Reference document for the cryptographic soundness checks built into
 each Phase-3 verifier body. **Current as of
-`v0.6.0-phase3-extended`** — adds sessions 17-21 on top of the
-v0.5.0 12-gate baseline: multi-poly MSM batching in Halo2 (proof-
-and VK-side commits), HyperPlonk VK-side permutation cosets, Nova
-Spartan 5-way batched opening, and a shared keccak-to-Fr reduction
-primitive. Project-wide gate count went from 12 → 14 across 4
-Phase-3 bodies. Audit reviewers should start here to understand
-which classes of tampered prover data each verifier surfaces
-before the final structural check.
+`v0.7.0-phase3-primitives`** — gate count stays at 14 across 4
+Phase-3 bodies; sessions 21-26 consolidate duplicated arithmetic
+patterns across the verifier crates into five shared primitives
+in `mosaic-zk-primitives` (`fr_from_be_bytes_reduced`,
+`derive_fr_challenge`, `fr_be_from_u64`, `verify_two_pair_pairing`,
+`commitment_minus_scalar_g1`), and session 23 adds a dedicated
+`w_eval` slot to the Nova proof canonical replacing the scaffold
+reuse of `public_inputs[0]`. Audit reviewers should start here to
+understand which classes of tampered prover data each verifier
+surfaces before the final structural check.
 
 ## Summary table — 14 independent gates
 
