@@ -2,13 +2,16 @@
 
 Reference document for the cryptographic soundness checks built into
 each Phase-3 verifier body. **Current as of
-`v0.5.0-phase3-complete`** — consolidates 18 post-v0.4.1 sessions
-that brought all four verifiers from single-gate scaffolds to
-protocol-layer production depth. Audit reviewers should start here
-to understand which classes of tampered prover data each verifier
-surfaces before the final structural check.
+`v0.6.0-phase3-extended`** — adds sessions 17-21 on top of the
+v0.5.0 12-gate baseline: multi-poly MSM batching in Halo2 (proof-
+and VK-side commits), HyperPlonk VK-side permutation cosets, Nova
+Spartan 5-way batched opening, and a shared keccak-to-Fr reduction
+primitive. Project-wide gate count went from 12 → 14 across 4
+Phase-3 bodies. Audit reviewers should start here to understand
+which classes of tampered prover data each verifier surfaces
+before the final structural check.
 
-## Summary table — 12 independent gates
+## Summary table — 14 independent gates
 
 | Verifier | Gate | Error variant | Reference |
 |---|---|---|---|

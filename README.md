@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.5.0-phase3-complete](https://img.shields.io/badge/release-v0.5.0--phase3--complete-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.5.0-phase3-complete)
+[![Release: v0.6.0-phase3-extended](https://img.shields.io/badge/release-v0.6.0--phase3--extended-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.6.0-phase3-extended)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -195,9 +195,16 @@ same locally.
 - **Phase-3 complete release:** [`v0.5.0-phase3-complete`](https://github.com/wienerlabs/mosaic/releases/tag/v0.5.0-phase3-complete).
   **12 independent cryptographic soundness gates across 4 bodies.**
   FRI-STARK at Plonky3/Winterfell production parity (7 gates); Nova,
-  Halo2, HyperPlonk extended to protocol-appropriate depth. Only
-  fixture-driven differential testing remains before external audit
-  engagement.
+  Halo2, HyperPlonk extended to protocol-appropriate depth.
+- **Phase-3 extended release:** [`v0.6.0-phase3-extended`](https://github.com/wienerlabs/mosaic/releases/tag/v0.6.0-phase3-extended).
+  **14 soundness gates.** Multi-poly MSM batching in Halo2 (proof-
+  and VK-side commits) + Nova (Spartan 5-way batched opening)
+  folds every committed polynomial into the batched pairing
+  identity. HyperPlonk permutation cosets (k_1, k_2, k_3) lifted
+  from hardcoded `(1, 2, 3)` into the VK. CU baselines re-measured
+  under the `opt-level = "z"` profile (PLONK cap 800K → 1.1M).
+  Only fixture-driven differential testing remains before external
+  audit engagement.
 - **Vulnerability reports:** see [SECURITY.md](SECURITY.md) and the
   [disclosure-timeline SLA](docs/responsible-disclosure-timeline.md).
 - **Audit history:** see [AUDIT.md](AUDIT.md).

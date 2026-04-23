@@ -7,62 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned beyond v0.6.0-phase3-extended
+
+- **Fixture-driven differential testing** across all four Phase-3
+  bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  Requires external prover tooling; closes cryptographic soundness
+  verification beyond in-tree scaffold construction.
+- **HyperPlonk multi-point → univariate reduction** — Zeromorph /
+  Pst / Gemini pinning in `kzg.rs` still uses the scaffold shortcut
+  of the last sumcheck challenge as the univariate evaluation point.
+- **Nova `w_eval` from sumcheck** — current scaffold takes the first
+  public input; real Spartan derives it from the sumcheck tail.
+- **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+
+## [0.6.0-phase3-extended] — 2026-04-23
+
+**Phase-3 protocol depth extended.** Sessions 17-21 tighten every
+multi-poly KZG scaffold: Halo2's batched opening now folds in all
+committed polys (proof-side + VK-side preprocessed commits),
+HyperPlonk lifts the permutation coset triple into the VK, and
+Nova upgrades to a 5-way Spartan-batched opening spanning
+`(A·z, B·z, C·z, E, W)`. Project-wide soundness gate count went
+from 12 → 14 across 4 Phase-3 bodies.
+
 ### Added
-
-- **Halo2 VK-side commits in multi-poly MSM (session 20)** —
-  `collect_commits_at_xi` and `collect_evals_at_xi` now fold VK-side
-  preprocessed commits (`fixed_commits` = selector polynomials
-  Q_M..Q_C, `permutation_commits` = σ_1..σ_3) into the multi-poly
-  MSM alongside the session-17 proof-side commits (advice + lookup
-  + permutation_z + quotient). Any tampered VK selector or σ
-  commitment now breaks the batched pairing identity — sessions-≤17
-  silently tolerated VK-side tampering because those commits never
-  entered the MSM. Two new session-20 tamper tests cover the two
-  VK commit kinds:
-  `multipoly_rejects_tampered_vk_selector_commit` (swap q_M commit
-  to G1 generator) and `multipoly_rejects_tampered_vk_permutation_commit`
-  (swap σ_1 commit to G1 generator). Backward-compat preserved: VKs
-  with empty `fixed_commits` / `permutation_commits` produce the
-  exact same MSM as before session 20.
-
-- **Nova Spartan-batched multi-poly opening (session 19)** —
-  `mosaic-nova::kzg::verify_spartan_batched_opening` replaces the
-  single-commit scaffold (`verify_opening_scaffold`, which only
-  opened `w_comm` at the first public input) with a 5-way batched
-  MSM spanning (A·z, B·z, C·z) from the VK + (E, W) from the proof.
-  A `v` challenge is domain-separated-keccak-derived from the
-  Spartan point + hadamard evals + w_comm + e_comm, then produces
-  v-powers `[1, v, v², v³, v⁴]` for the batched MSM; y_batched
-  combines `(a_eval, b_eval, c_eval, e_eval, w_eval)` with the
-  same weights. Tampering any of the five commits (in VK or proof)
-  or their paired evaluations now propagates into the batched
-  pairing identity → `PairingCheckFailed`. Two new session-19
-  tamper tests cover the VK-side (`spartan_rejects_tampered_vk_a_comm`
-  via G1-generator swap) and proof-side (`spartan_rejects_tampered_hadamard_a_eval`
-  via non-zero a_eval with consistent u=1, b=c=0 Hadamard residual).
-  The pre-session-19 `accepts_nonzero_hadamard_satisfying_bundle`
-  test is updated to expect `PairingCheckFailed` — the stricter
-  batched opening now catches Hadamard-only bundles without matching
-  commit openings. Nova is now at **3 gates** (Hadamard residual,
-  folded-commitment reconstruction, Spartan-batched opening),
-  bringing the project-wide gate count from 13 → 14.
-
-- **HyperPlonk VK-side permutation cosets (session 18)** —
-  `HyperPlonkVerifyingKey` gained three canonical 32-byte Fr fields
-  `k_1`, `k_2`, `k_3` replacing the sessions-≤17 hardcoded `(1, 2, 3)`
-  coset triple in `permutation_term`. The identity factor for wire
-  `a` is now `β·k_1 + γ` drawn from the VK rather than the compiled
-  verifier binary — tampering a VK's `k_1` flips the reconstructed
-  permutation term and therefore the sumcheck's expected final claim,
-  which the verifier surfaces as `SumcheckFailed`. `SERIALIZED_LEN`
-  grew from 648 B → 744 B (+96 B for 3 × Fr). A new const
-  `HyperPlonkVerifyingKey::fr_be_from_u64` produces canonical BE Fr
-  bytes for small integer cosets — all test VK fixtures initialize
-  `(k_1, k_2, k_3)` with it to preserve existing sumcheck behavior.
-  New session-18 unit tests:
-  `permutation_term_depends_on_k_cosets` (distinct triples yield
-  distinct perm_term values) and `tampered_k_1_breaks_expected_claim`
-  (swapping `vk.k_1` produces a different final claim).
 
 - **Halo2 multi-poly MSM opening (session 17)** —
   `mosaic-halo2::kzg::verify_two_point_opening_multipoly` replaces
@@ -78,10 +46,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `multipoly_rejects_tampered_wire_a_evaluation` (non-zero `a(ξ)`
   with zero commit → `PairingCheckFailed`). `v` and `u` batching
   challenges derive via domain-separated keccak over current
-  transcript state + opening-proof bytes. `docs/phase3-soundness.md`
-  extended with session-17 primitive + tamper-test map. Halo2 is
-  now at **2 gates** (vanishing identity + multi-poly batched
-  opening), bringing the project-wide gate count from 12 → 13.
+  transcript state + opening-proof bytes.
+
+- **HyperPlonk VK-side permutation cosets (session 18)** —
+  `HyperPlonkVerifyingKey` gained three canonical 32-byte Fr fields
+  `k_1`, `k_2`, `k_3` replacing the sessions-≤17 hardcoded `(1, 2, 3)`
+  coset triple in `permutation_term`. The identity factor for wire
+  `a` is now `β·k_1 + γ` drawn from the VK rather than the compiled
+  verifier binary — tampering a VK's `k_1` flips the reconstructed
+  permutation term and therefore the sumcheck's expected final claim,
+  which the verifier surfaces as `SumcheckFailed`. `SERIALIZED_LEN`
+  grew from 648 B → 744 B (+96 B for 3 × Fr). A new const
+  `HyperPlonkVerifyingKey::fr_be_from_u64` produces canonical BE Fr
+  bytes for small integer cosets. New session-18 unit tests:
+  `permutation_term_depends_on_k_cosets` (distinct triples yield
+  distinct perm_term values) and `tampered_k_1_breaks_expected_claim`
+  (swapping `vk.k_1` produces a different final claim).
+
+- **Nova Spartan-batched multi-poly opening (session 19)** —
+  `mosaic-nova::kzg::verify_spartan_batched_opening` replaces the
+  single-commit scaffold (`verify_opening_scaffold`, which only
+  opened `w_comm` at the first public input) with a 5-way batched
+  MSM spanning (A·z, B·z, C·z) from the VK + (E, W) from the proof.
+  A `v` challenge is domain-separated-keccak-derived from the
+  Spartan point + hadamard evals + w_comm + e_comm; v-powers
+  `[1, v, v², v³, v⁴]` weight the batched MSM and Fr dot product.
+  Tampering any of the five commits (in VK or proof) or their
+  paired evaluations now propagates into the batched pairing
+  identity → `PairingCheckFailed`. Two new session-19 tamper tests:
+  `spartan_rejects_tampered_vk_a_comm` (VK a_comm → G1 generator)
+  and `spartan_rejects_tampered_hadamard_a_eval` (non-zero a_eval
+  with u=1, b=c=0 Hadamard-satisfying bundle).
+
+- **Halo2 VK-side commits in multi-poly MSM (session 20)** —
+  `collect_commits_at_xi` and `collect_evals_at_xi` now fold VK-side
+  preprocessed commits (`fixed_commits` = selector polynomials
+  Q_M..Q_C, `permutation_commits` = σ_1..σ_3) into the multi-poly
+  MSM alongside the session-17 proof-side commits. Any tampered VK
+  selector or σ commitment now breaks the batched pairing identity
+  — sessions-≤17 silently tolerated VK-side tampering because those
+  commits never entered the MSM. Two new session-20 tamper tests:
+  `multipoly_rejects_tampered_vk_selector_commit` (swap q_M commit
+  to G1 generator) and `multipoly_rejects_tampered_vk_permutation_commit`
+  (swap σ_1 commit to G1 generator).
+
+- **Shared `fr_from_be_bytes_reduced` primitive (session 21)** —
+  Session-17 and session-19 had independently duplicated an
+  `into_fr` helper wrapping `Fr::from_be_bytes_mod_order` for
+  reducing keccak digests into Fr challenges. Lifted into
+  `mosaic-zk-primitives::field::fr_from_be_bytes_reduced`; both
+  halo2 and nova verifiers now call the shared primitive. Two new
+  unit tests exercise the in-range agreement with
+  `fr_from_canonical_bytes` and the out-of-range reduction.
 
 ### Changed
 
@@ -101,19 +117,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cargo.toml` `[profile.release]` comment refreshed to match.
   `README.md` verifier matrix numbers updated.
 
-### Planned beyond v0.5.0-phase3-complete
+### Removed — superseded helpers
 
-- **Fixture-driven differential testing** across all four Phase-3
-  bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
-  Requires external prover tooling; closes cryptographic soundness
-  verification beyond in-tree scaffold construction.
-- **HyperPlonk multi-point KZG reduction** — Zeromorph / Pst /
-  Gemini univariate reduction in `kzg.rs` remains a scaffold
-  shortcut (uses last sumcheck challenge as univariate point). The
-  session-18 VK-side `k_i` cosets tighten the permutation argument;
-  the multi-point → univariate reduction itself pins in a future
-  session against Espresso's reference impl.
-- **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+- `mosaic-halo2::verifier::into_fr` private helper (replaced by
+  shared `fr_from_be_bytes_reduced`).
+- `mosaic-nova::verifier::into_fr` private helper (replaced by
+  shared `fr_from_be_bytes_reduced`).
+
+### Breaking changes
+
+- `HyperPlonkVerifyingKey::SERIALIZED_LEN` grew 648 B → 744 B.
+  Any previously-serialized HyperPlonk VK must be re-encoded with
+  the additional `(k_1, k_2, k_3)` coset triple. Test fixtures in
+  the `mosaic-hyperplonk` crate initialize these to the legacy
+  `(1, 2, 3)` defaults via `HyperPlonkVerifyingKey::fr_be_from_u64`
+  to preserve existing sumcheck behavior.
+
+- `mosaic-halo2::verifier::collect_commits_at_xi` / `collect_evals_at_xi`
+  signatures extended. Internal helpers; external code that reaches
+  the public `Halo2KzgBn254::verify` API is unaffected.
+
+### Gate inventory (post-v0.6.0)
+
+| Verifier | Gates | Sessions covering |
+|---|---|---|
+| HyperPlonk-KZG | 2 | sumcheck identity, permutation term at ξ (coset tamper in session 18) |
+| Halo2-KZG | 2 | vanishing identity, multi-poly batched two-point opening (sessions 16 → 17 → 20) |
+| Nova / HyperNova / ProtoStar | 3 | Hadamard residual, folded-commitment reconstruction, Spartan-batched opening (session 19) |
+| FRI-STARK | 7 | query indices, trace + constraint Merkle, PoW, FRI fold chain, OOD quotient, per-layer Merkle auth |
 
 ## [0.5.0-phase3-complete] — 2026-04-22
 
