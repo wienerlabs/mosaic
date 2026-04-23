@@ -42,9 +42,9 @@ frozen CU budgets.
 | Component | Status | On-chain CU |
 |---|---|---|
 | `mosaic-core` (traits, errors, syscall abstraction) | ✅ Production | — |
-| `mosaic-groth16` single verify | ✅ Production | 80,296 |
-| `mosaic-groth16` batch verify (N=5, Bowe-Gabizon) | ✅ Production | 230,626 (46K/proof, **-42%**) |
-| `mosaic-plonk` KZG-PLONK BN254 verifier | ✅ Production | 747,666 |
+| `mosaic-groth16` single verify | ✅ Production | 83,574 |
+| `mosaic-groth16` batch verify (N=5, Bowe-Gabizon) | ✅ Production | 258,397 (52K/proof, **-38%**) |
+| `mosaic-plonk` KZG-PLONK BN254 verifier | ✅ Production | 968,457 |
 | `mosaic-hyperplonk` KZG BN254 verifier | 🟠 Phase-3 body (structural, scaffold caveats) | target ~505K |
 | `mosaic-halo2` KZG BN254 verifier (PSE fork) | 🟠 Phase-3 body (structural, scaffold caveats) | target ~580K |
 | `mosaic-stark` FRI-STARK (Goldilocks / BabyBear / Mersenne31) | 🟠 Phase-3 body (structural, scaffold caveats) | target ~9.4M |

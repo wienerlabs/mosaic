@@ -159,9 +159,12 @@ disallowed_macros = "allow"
 # SBF binary growth from Phase-3 bodies crossed 97% of Solana's 1 MB
 # program limit at `= 3`. The size optimizer favors fewer inlining
 # decisions, shared tail call destinations, and smaller code-generation
-# options at the cost of ~5-15% runtime. On-chain CU impact is measured
-# per-verifier in bpf-bench; Groth16/PLONK baselines unchanged within
-# tolerance (see v0.4.1 CHANGELOG for per-system re-measurement).
+# options at the cost of runtime CU. On-chain CU re-measured 2026-04-23:
+# Groth16 +4.1 % (83 574), Groth16 batch +12.0 % (258 397), KZG-PLONK
+# +29.5 % (968 457; hard cap raised 800K → 1 100K). PLONK's polynomial-
+# heavy path is most affected; Groth16's pairing-dominated path absorbs
+# the tradeoff cleanly. See ADR-0005 "Re-measurement" note and
+# bpf-bench baseline block for per-system drift deltas.
 opt-level = "z"
 lto = "fat"
 codegen-units = 1

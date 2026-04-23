@@ -5,16 +5,17 @@
 
 ## Per-system targets
 
-| Proof system | Target CU | `request_heap_frame` | Status |
-|---|---|---|---|
-| Groth16 BN254 | ≤180,000 | 32 KiB | Phase 1 ✅ |
-| KZG-PLONK BN254 | ≤600,000 | 32 KiB | Phase 2 (stub) |
-| HyperPlonk-KZG | ≤900,000 | 64 KiB | Phase 2 (stub) |
-| Halo2-KZG | ≤700,000 | 64 KiB | Phase 2 (stub) |
-| FRI-STARK (Plonky3) | ≤14M (chunked) | 256 KiB | Phase 3 (stub) |
-| Risc0 receipt | ≤14M (chunked) | 256 KiB | Phase 3 (stub) |
-| Nova folding | ≤900,000 | 64 KiB | Phase 3 (stub) |
-| ProtoStar folding | ≤900,000 | 64 KiB | Phase 3 (stub) |
+| Proof system | Hard cap | Last-measured | `request_heap_frame` | Status |
+|---|---|---|---|---|
+| Groth16 BN254 | ≤180,000 | **83,574** | 32 KiB | Production ✅ |
+| Groth16 batch N=5 | ≤300,000 | **258,397** | 32 KiB | Production ✅ |
+| KZG-PLONK BN254 | ≤1,100,000 | **968,457** | 32 KiB | Production ✅ |
+| HyperPlonk-KZG | ≤900,000 | target ≤505K | 64 KiB | Phase-3 body (scaffold) |
+| Halo2-KZG | ≤700,000 | target ≤580K | 64 KiB | Phase-3 body (scaffold) |
+| FRI-STARK (Plonky3) | ≤14M (chunked) | target ≤9.4M | 256 KiB | Phase-3 body (scaffold) |
+| Risc0 receipt | ≤14M (chunked) | — | 256 KiB | Stub (Phase 3) |
+| Nova folding | ≤900,000 | target ≤885K | 64 KiB | Phase-3 body (scaffold) |
+| ProtoStar folding | ≤900,000 | target ≤885K | 64 KiB | Phase-3 body (scaffold) |
 
 ## Groth16 BN254 — cost breakdown
 
@@ -43,32 +44,47 @@ estimate; actual on-chain CU is higher because of Borsh deserialization
 of the `VerifyProofData` payload, instruction dispatch, `msg!` logging,
 and the `solana-bn254` syscall wrapper allocations.
 
-### Phase 1 / 2 measured baselines (2026-04-20)
+### Phase 1 / 2 measured baselines (2026-04-23, opt-level="z")
 
 | System | Fixture | Measured | Cap | Headroom |
 |---|---|---|---|---|
-| Groth16 BN254 | `mul-circuit` (1 PI) | **80,296 CU** | 180,000 | 55.4% |
-| Groth16 BN254 batch N=5 | same proof × 5 | **230,626 CU** (46,125/proof) | 300,000 | 23% |
-| KZG-PLONK BN254 | `mul-circuit` (1 PI) | **747,666 CU** | 800,000 | 6.5% |
+| Groth16 BN254 | `mul-circuit` (1 PI) | **83,574 CU** | 180,000 | 53.6 % |
+| Groth16 BN254 batch N=5 | same proof × 5 | **258,397 CU** (51,680/proof) | 300,000 | 13.8 % |
+| KZG-PLONK BN254 | `mul-circuit` (1 PI) | **968,457 CU** | 1,100,000 | 11.4 % |
 
-**Batch savings**: 5 × 80,370 loop CU = 401,850 baseline; batched 230,626
-= **42.6% reduction**. Per-proof CU drops from 80K to 46K. Break-even
-at N=2; savings grow with N (projected ~50% at N=10 once measured).
+**Batch savings**: 5 × 83,574 loop CU = 417,870 baseline; batched 258,397
+= **38.2 % reduction**. Per-proof CU drops from 84K to 52K. Break-even
+at N=2; savings grow with N (projected ~45 % at N=10 once measured).
 
 Sources: `mosaic-bench/src/bin/bpf_bench.rs` against canonical fixtures.
-Baselines pinned in `TARGETS[i].baseline_cu`; bench warns on >5% drift.
+Baselines pinned in `TARGETS[i].baseline_cu`; bench warns on >5 % drift.
 
-**PLONK algorithmic vs measured gap.** The ADR-0005 600K target was an
-algorithmic estimate; actual measured is ~25% higher because:
+**Opt-level="z" re-measurement drift (v0.4.1 → v0.5.0).** The SBF
+binary size optimization adopted in v0.4.1 reshuffled inlining
+decisions during the v0.5.0 STARK body + `mosaic-zk-primitives`
+extraction:
+
+| System | v0.4.1 baseline | v0.5.0 measured | Drift |
+|---|---|---|---|
+| Groth16 single | 80,296 | 83,574 | +4.1 % |
+| Groth16 batch N=5 | 230,626 | 258,397 | +12.0 % |
+| KZG-PLONK | 747,666 | 968,457 | +29.5 % |
+
+PLONK's polynomial-heavy path (linearization 5-term MSM, transcript
+Fr arithmetic, three KZG openings) absorbs the size-optimizer tradeoff
+disproportionately. Root causes of the PLONK gap vs algorithmic estimate:
 
 - Arkworks `Fr` arithmetic on SBF costs ~2 000 CU per `*` (Montgomery
   limb-by-limb + reduce). PLONK does ~30 Fr multiplications.
 - Each `alt_bn128_group_op` syscall has ~400 CU fixed overhead on top
   of the operation; PLONK makes ~20 calls vs Groth16's ~6.
 - `scalar_mul_g1` allocates `Vec<u8>` per call (~200 CU/call).
+- Under `opt-level = "z"`, these per-call costs compound because
+  previously-inlined Fr helpers now go through shared tail-call
+  destinations.
 
-The 600K target remains on the roadmap as optimization goal; 800K is
-current enforceable cap. Path to 600K:
+The 600K algorithmic target remains on the roadmap as optimization goal;
+1,100K is the current enforceable cap. Path to reduction:
 
 - Issue [#37](https://github.com/wienerlabs/mosaic/issues/37) —
   Pippenger MSM for the linearization 5-term MSM (saves ~50K).

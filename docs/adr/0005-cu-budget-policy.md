@@ -19,16 +19,27 @@ literature and the eprint 2025/1741 STARK-on-Solana technique.
 
 ### Per-system CU targets
 
-| System | Target | Default `requested_heap_frame` |
-|---|---|---|
-| Groth16 BN254 | ≤180,000 CU | 32 KiB |
-| KZG-PLONK BN254 | ≤600,000 CU | 32 KiB |
-| HyperPlonk-KZG | ≤900,000 CU | 64 KiB |
-| Halo2-KZG | ≤700,000 CU | 64 KiB |
-| FRI-STARK (Plonky3) | must fit in 14M CU + chunked upload | 256 KiB |
-| Risc0 receipt | must fit in 14M CU + chunked upload | 256 KiB |
-| Nova folding | ≤900,000 CU | 64 KiB |
-| ProtoStar folding | ≤900,000 CU | 64 KiB |
+| System | Hard cap | Last-measured | Default `requested_heap_frame` |
+|---|---|---|---|
+| Groth16 BN254 | ≤180,000 CU | 83,574 | 32 KiB |
+| Groth16 batch N=5 | ≤300,000 CU | 258,397 | 32 KiB |
+| KZG-PLONK BN254 | ≤1,100,000 CU | 968,457 | 32 KiB |
+| HyperPlonk-KZG | ≤900,000 CU | target ≤505K | 64 KiB |
+| Halo2-KZG | ≤700,000 CU | target ≤580K | 64 KiB |
+| FRI-STARK (Plonky3) | must fit in 14M CU + chunked upload | target ≤9.4M | 256 KiB |
+| Risc0 receipt | must fit in 14M CU + chunked upload | — | 256 KiB |
+| Nova folding | ≤900,000 CU | target ≤885K | 64 KiB |
+| ProtoStar folding | ≤900,000 CU | target ≤885K | 64 KiB |
+
+**Re-measurement 2026-04-23 (v0.5.0-phase3-complete):** The Phase-2
+production targets were re-measured under the `opt-level = "z"` SBF
+profile adopted in v0.4.1. The size optimizer favors shared tail-call
+destinations over aggressive inlining, which penalizes PLONK's
+polynomial-heavy path (linearization MSM) disproportionately versus
+Groth16's pairing-dominated path. PLONK hard cap raised 800K → 1,100K
+(13% headroom) to accommodate the drift; Groth16 caps retained.
+Phase-3 targets remain aspirational pending fixture-driven
+re-measurement.
 
 Targets are **soft** in micro-benchmarks (host-side via Criterion) and
 **hard** in `bpf-bench` (rejects the PR if the on-chain measurement

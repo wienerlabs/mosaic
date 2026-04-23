@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CU baselines re-measured** across Phase-2 production systems under
+  the `opt-level = "z"` SBF profile (v0.4.1 → v0.5.0 drift). Groth16
+  single +4.1 % (80 296 → 83 574), Groth16 batch N=5 +12.0 % (230 626
+  → 258 397), KZG-PLONK BN254 +29.5 % (747 666 → 968 457). PLONK's
+  polynomial-heavy path absorbs the size-optimizer tradeoff
+  disproportionately because the linearization MSM and transcript Fr
+  arithmetic relied on inlined helpers that now share tail-call
+  destinations after the v0.5.0 STARK body + `mosaic-zk-primitives`
+  extraction. KZG-PLONK hard cap raised 800K → 1 100K (13 %
+  regression headroom); Groth16 caps retained. ADR-0005 targets
+  table updated with `Hard cap | Last-measured` columns and a
+  "Re-measurement" note. `docs/compute-unit-budget.md` rewritten
+  with the v0.5.0 drift table and measured baselines.
+  `Cargo.toml` `[profile.release]` comment refreshed to match.
+  `README.md` verifier matrix numbers updated.
+
 ### Planned beyond v0.5.0-phase3-complete
 
 - **Fixture-driven differential testing** across all four Phase-3
@@ -21,8 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via a `v` challenge.
 - **Nova Spartan-batched multi-poly opening** — current scaffold
   opens `w_comm` only; full version covers (A·z, B·z, C·z) + E + W.
-- **CU re-measurement** across all six verifier targets under the
-  current size-optimized profile.
 - **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
 
 ## [0.5.0-phase3-complete] — 2026-04-22

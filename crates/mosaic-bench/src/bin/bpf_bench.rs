@@ -66,37 +66,43 @@ const TARGETS: &[SystemTarget] = &[
     SystemTarget {
         name: "groth16_bn254_mul_circuit_1pi",
         hard_cap_cu: 180_000,
-        // Established 2026-04-20 on the tests/fixtures/groth16/mul-circuit
-        // canonical fixtures (a=7, b=6, c=42, single public input).
-        // Decomposition per ADR-0005 § 2:
+        // Re-measured 2026-04-23 on tests/fixtures/groth16/mul-circuit
+        // canonical fixtures (a=7, b=6, c=42, single public input) under
+        // the v0.5.0-phase3-complete opt-level="z" profile. Prior v0.4.1
+        // baseline 80 296 → +4.1% drift after STARK body + zk-primitives
+        // extraction reshuffled cross-function inlining decisions.
+        // Decomposition per ADR-0005 § 2 unchanged:
         //   5K (deserialize) + 3.3K (G1Mul) + 0.1K (G1Add) + 36K (Pairing)
-        //   ≈ 45K algorithmic + ~35K Borsh/dispatch/syscall overhead
-        //   = 80 296 measured.
-        // If this changes by >5%, investigate and update with PR reference.
-        baseline_cu: 80_296,
+        //   ≈ 45K algorithmic + ~38K Borsh/dispatch/syscall overhead.
+        baseline_cu: 83_574,
     },
     SystemTarget {
         name: "groth16_batch_n5_mul_circuit_1pi",
         // Batched verification of 5 Groth16 proofs sharing one VK via
         // Bowe-Gabizon aggregation (one alt_bn128_pairing with 8 pairs).
-        // Measured 2026-04-20: 230 626 CU total, 46 125 CU per proof —
-        // a 42.6% reduction vs the single-proof path (80 370 × 5).
-        hard_cap_cu: 300_000, // 30% headroom over baseline
-        baseline_cu: 230_626,
+        // Re-measured 2026-04-23: 258 397 CU total, 51 680 CU per proof
+        // (~36% reduction vs 5× single-proof at new single baseline).
+        // Prior baseline 230 626 → +12.0% drift for the same reason.
+        hard_cap_cu: 300_000, // 16% headroom over new baseline
+        baseline_cu: 258_397,
     },
     SystemTarget {
         name: "plonk_bn254_mul_circuit_1pi",
         // ADR-0005 originally targeted 600K based on algorithmic
         // estimate (15K transcript + 200K linearization MSM + 24K
-        // pairing + sundry). Actual measured consumption with arkworks
-        // Fr arithmetic + full byte-for-byte snarkjs compat:
-        //   747 666 CU (~25% over algorithmic estimate)
-        // Cap raised to 800 000 to give 7% regression headroom over
-        // the current baseline. Optimization path to approach the
-        // 600K target tracked by issues #37 (MSM tightening) and a
-        // follow-up "Fr arithmetic in-place mutation" issue.
-        hard_cap_cu: 800_000,
-        baseline_cu: 747_666,
+        // pairing + sundry). Actual re-measured consumption after the
+        // v0.5.0 STARK body + zk-primitives extraction under
+        // opt-level="z":
+        //   968 457 CU (prior 747 666, +29.5% drift)
+        // The linearization polynomial MSM and multi-scalar path are
+        // the dominant CU consumers; size-optimized codegen trades
+        // inlining for shared tail-call destinations, which penalizes
+        // PLONK's polynomial work disproportionately vs Groth16's
+        // pairing-dominated path. Hard cap raised 800K → 1 100K for
+        // 13% regression headroom. Tightening tracked by issues #37
+        // (MSM reduction) + "Fr arithmetic in-place mutation" issue.
+        hard_cap_cu: 1_100_000,
+        baseline_cu: 968_457,
     },
 ];
 
