@@ -132,6 +132,37 @@ pub const FR_MINUS_ONE: [u8; 32] = {
     out
 };
 
+/// Derive a BN254 `Fr` challenge via a single keccak-256 round over a
+/// domain-separator prefix followed by caller-supplied byte slices.
+///
+/// This is the one-shot equivalent of building a fresh [`Transcript`]
+/// and absorbing one message — useful for auxiliary challenges that
+/// sit outside the main round-based transcript (e.g. Halo2's `v`/`u`
+/// batching challenges, Nova's Spartan-batching `v` challenge). Each
+/// caller gets its own domain separator string so the derived values
+/// can't collide across protocols even if their input bytes do.
+///
+/// The keccak output is reduced into Fr via
+/// [`crate::field::fr_from_be_bytes_reduced`] — any 32-byte input
+/// maps to a well-defined Fr element without retries.
+///
+/// ## Errors
+///
+/// - Propagates any backend error from
+///   [`SyscallBackend::keccak256`] (typically
+///   [`OnChainError::Keccak256SyscallFailed`]).
+pub fn derive_fr_challenge<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    domain: &[u8],
+    inputs: &[&[u8]],
+) -> Result<ark_bn254::Fr, OnChainError> {
+    let mut parts: Vec<&[u8]> = Vec::with_capacity(inputs.len() + 1);
+    parts.push(domain);
+    parts.extend_from_slice(inputs);
+    let bytes = backend.keccak256(&parts)?;
+    Ok(crate::field::fr_from_be_bytes_reduced(&bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,5 +304,48 @@ mod tests {
         h.finalize(&mut expected);
         fr::reduce_mod_r(&mut expected);
         assert_eq!(got, expected);
+    }
+
+    // ---- derive_fr_challenge ----
+
+    #[test]
+    fn derive_fr_challenge_is_deterministic() {
+        let backend = MockBackend;
+        let a = derive_fr_challenge(
+            &backend,
+            b"mosaic-test/v",
+            &[b"seed-1", b"seed-2"],
+        )
+        .unwrap();
+        let b = derive_fr_challenge(
+            &backend,
+            b"mosaic-test/v",
+            &[b"seed-1", b"seed-2"],
+        )
+        .unwrap();
+        assert_eq!(a, b, "same inputs must yield same challenge");
+    }
+
+    #[test]
+    fn derive_fr_challenge_differs_on_different_domains() {
+        // Domain-separation is the whole point of the prefix —
+        // changing the domain must re-roll the challenge even when
+        // the rest of the inputs are identical. Otherwise Halo2's
+        // `v` and `u` could collide in pathological inputs.
+        let backend = MockBackend;
+        let v = derive_fr_challenge(&backend, b"halo2/v", &[b"same"]).unwrap();
+        let u = derive_fr_challenge(&backend, b"halo2/u", &[b"same"]).unwrap();
+        assert_ne!(
+            v, u,
+            "distinct domains must yield distinct challenges"
+        );
+    }
+
+    #[test]
+    fn derive_fr_challenge_differs_on_different_inputs() {
+        let backend = MockBackend;
+        let a = derive_fr_challenge(&backend, b"d", &[b"a"]).unwrap();
+        let b = derive_fr_challenge(&backend, b"d", &[b"b"]).unwrap();
+        assert_ne!(a, b, "different inputs must yield different challenges");
     }
 }

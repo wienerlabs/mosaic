@@ -86,9 +86,8 @@ use mosaic_core::{
     syscall::SyscallBackend,
     OnChainError,
 };
-use mosaic_zk_primitives::field::{
-    fr_from_be_bytes_reduced, fr_from_canonical_bytes, fr_to_canonical_bytes,
-};
+use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
+use mosaic_zk_primitives::transcript::derive_fr_challenge;
 
 /// Nova-family folding verifier. Phase-3 scaffold.
 pub struct NovaFolding<'a, B: SyscallBackend + ?Sized> {
@@ -207,14 +206,16 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
         // want the legacy single-commit check can still reach it.
         // `verify_opening_scaffold` stays exported for unit tests in
         // `kzg::tests`; it's the session-≤18 single-commit opening.
-        let v_bytes = self.backend.keccak256(&[
+        let v = derive_fr_challenge(
+            self.backend,
             b"mosaic-nova/v",
-            &fr_to_canonical_bytes(&challenges.xi),
-            proof.hadamard_evals,
-            proof.w_comm,
-            proof.e_comm,
-        ])?;
-        let v = fr_from_be_bytes_reduced(&v_bytes);
+            &[
+                &fr_to_canonical_bytes(&challenges.xi),
+                proof.hadamard_evals,
+                proof.w_comm,
+                proof.e_comm,
+            ],
+        )?;
         verify_spartan_batched_opening(
             self.backend,
             &vk,

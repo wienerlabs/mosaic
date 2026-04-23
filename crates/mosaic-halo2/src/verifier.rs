@@ -72,9 +72,8 @@ use crate::{
 };
 use alloc::vec::Vec;
 use ark_bn254::Fr;
-use mosaic_zk_primitives::field::{
-    fr_from_be_bytes_reduced, fr_from_canonical_bytes, fr_to_canonical_bytes,
-};
+use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
+use mosaic_zk_primitives::transcript::derive_fr_challenge;
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
@@ -204,21 +203,22 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
         // `v` = multi-poly batching challenge; `u` = two-point
         // batching challenge. Both derived via domain-separated
         // keccak so tampering with any ingredient re-rolls them.
-        let v_bytes = self.backend.keccak256(&[
+        let v = derive_fr_challenge(
+            self.backend,
             b"mosaic-halo2/v",
-            &fr_to_canonical_bytes(&challenges.xi),
-            proof.evaluations,
-        ])?;
-        let v = fr_from_be_bytes_reduced(&v_bytes);
+            &[&fr_to_canonical_bytes(&challenges.xi), proof.evaluations],
+        )?;
 
-        let u_bytes = self.backend.keccak256(&[
+        let u = derive_fr_challenge(
+            self.backend,
             b"mosaic-halo2/u",
-            &fr_to_canonical_bytes(&challenges.xi),
-            &vk.omega_fr,
-            proof.w_xi,
-            proof.w_xiw,
-        ])?;
-        let u = fr_from_be_bytes_reduced(&u_bytes);
+            &[
+                &fr_to_canonical_bytes(&challenges.xi),
+                &vk.omega_fr,
+                proof.w_xi,
+                proof.w_xiw,
+            ],
+        )?;
 
         verify_two_point_opening_multipoly(
             self.backend,
