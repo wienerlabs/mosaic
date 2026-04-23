@@ -180,14 +180,19 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
         let xi_omega = challenges.xi * omega;
 
         // Canonical commit/eval ordering at ξ (matches the bundle
-        // layout that the vanishing identity consumed). Scaffold-
-        // level mapping — fixed/permutation VK commits are not
-        // included until the VK grows commit-side fields.
-        let commits_xi = collect_commits_at_xi(&proof)?;
+        // layout that the vanishing identity consumed). Session 20:
+        // VK-side preprocessed commits (selectors + σ polynomials)
+        // now join the proof-side commits in the batched MSM.
+        use crate::canonical::sizes::G1_LEN;
+        let n_fixed = vk.fixed_commits.len() / G1_LEN;
+        let n_permutation = vk.permutation_commits.len() / G1_LEN;
+        let commits_xi = collect_commits_at_xi(&proof, &vk)?;
         let evals_xi = collect_evals_at_xi(
             &bundle,
             proof.n_advice as usize,
             proof.n_lookups as usize,
+            n_fixed,
+            n_permutation,
         );
 
         // At ξω only the permutation grand-product shifts.
@@ -246,14 +251,23 @@ fn into_fr(b: [u8; 32]) -> Fr {
 /// until VK-side commit bytes are wired through.
 fn collect_commits_at_xi<'a>(
     proof: &'a Halo2KzgProof<'a>,
+    vk: &'a Halo2KzgVerifyingKey,
 ) -> Result<Vec<&'a [u8]>, OnChainError> {
+    use crate::canonical::sizes::G1_LEN;
+    let fixed_count = vk.fixed_commits.len() / G1_LEN;
+    let perm_count = vk.permutation_commits.len() / G1_LEN;
     let mut out: Vec<&'a [u8]> = Vec::with_capacity(
         proof.n_advice as usize
             + proof.n_lookups as usize
             + 1
-            + proof.n_quotient as usize,
+            + proof.n_quotient as usize
+            + fixed_count
+            + perm_count,
     );
-    use crate::canonical::sizes::G1_LEN;
+    // Proof-side commits first (advice + lookup + permutation_z +
+    // quotient chunks). This ordering keeps the pre-session-20 MSM
+    // behavior unchanged for VKs with empty fixed / permutation
+    // commit sets (e.g. the minimal test VKs).
     for a in proof.advice_iter() {
         out.push(a);
     }
@@ -263,6 +277,17 @@ fn collect_commits_at_xi<'a>(
     out.push(proof.permutation_z);
     for h in proof.quotient_iter() {
         out.push(h);
+    }
+    // Session 20: VK-side preprocessed commits (fixed selectors +
+    // permutation σ polynomials) now also enter the multi-poly MSM.
+    // Real PSE Halo2 treats these the same as proof-side commits
+    // for the batched opening; only the commitment bytes live in
+    // the VK instead of the proof.
+    for f in vk.fixed_commits.chunks_exact(G1_LEN) {
+        out.push(f);
+    }
+    for s in vk.permutation_commits.chunks_exact(G1_LEN) {
+        out.push(s);
     }
     Ok(out)
 }
@@ -275,14 +300,37 @@ fn collect_commits_at_xi<'a>(
 ///   (scaffold: bundle carries one combined lookup_m eval)
 /// - permutation_z ↔ Z
 /// - quotient chunks ↔ FIXED_SLOTS+i quotient evaluations
+/// - fixed_commits (session 20) ↔ selectors Q_M/Q_L/Q_R/Q_O/Q_C
+///   in order; extra fixed commits reuse Q_C as scaffold placeholder
+/// - permutation_commits (session 20) ↔ SIGMA_1/SIGMA_2/SIGMA_3 in
+///   order; extra σ commits reuse SIGMA_3 as scaffold placeholder
 fn collect_evals_at_xi(
     bundle: &EvaluationBundle,
     n_advice: usize,
     n_lookups: usize,
+    n_fixed: usize,
+    n_permutation: usize,
 ) -> Vec<Fr> {
     let wire_evals = [bundle.wires.a, bundle.wires.b, bundle.wires.c];
+    let selector_evals = [
+        bundle.selectors.q_m,
+        bundle.selectors.q_l,
+        bundle.selectors.q_r,
+        bundle.selectors.q_o,
+        bundle.selectors.q_c,
+    ];
+    let sigma_evals = [
+        bundle.permutation.sigma_1,
+        bundle.permutation.sigma_2,
+        bundle.permutation.sigma_3,
+    ];
     let mut out = Vec::with_capacity(
-        n_advice + n_lookups + 1 + bundle.quotient_chunks.len(),
+        n_advice
+            + n_lookups
+            + 1
+            + bundle.quotient_chunks.len()
+            + n_fixed
+            + n_permutation,
     );
     for i in 0..n_advice {
         out.push(wire_evals[i.min(idx::C)]);
@@ -293,6 +341,12 @@ fn collect_evals_at_xi(
     out.push(bundle.permutation.z);
     for q in &bundle.quotient_chunks {
         out.push(*q);
+    }
+    for i in 0..n_fixed {
+        out.push(selector_evals[i.min(selector_evals.len() - 1)]);
+    }
+    for i in 0..n_permutation {
+        out.push(sigma_evals[i.min(sigma_evals.len() - 1)]);
     }
     out
 }
@@ -434,6 +488,79 @@ mod tests {
         let pi = [0u8; FR_LEN];
         let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
         assert!(r.is_ok(), "identity-satisfying bundle should pass, got {r:?}");
+    }
+
+    /// Session-20 dedicated tamper test: swap the first 64 bytes of
+    /// `vk.fixed_commits` (the `q_M` selector commitment) from zero
+    /// to the G1 generator. The session-17 multi-poly MSM batched
+    /// only proof-side commits; session 20 folds in the VK's
+    /// preprocessed (selector + σ) commits too. A tampered VK
+    /// selector commit now breaks the batched pairing identity, same
+    /// as a proof-side tamper would.
+    #[test]
+    fn multipoly_rejects_tampered_vk_selector_commit() {
+        use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+
+        // Build a VK with the tampered q_M selector commit. Start
+        // from the zero-commit default, then overwrite the first
+        // fixed slot (corresponds to q_M in the selector ordering).
+        let mut vk_struct = Halo2KzgVerifyingKey {
+            k: 10,
+            n_instances: 1,
+            n_advice: 5,
+            n_fixed: 2,
+            x2_g2: mosaic_zk_primitives::g1_consts::g2_generator_bytes(),
+            omega_fr: [0u8; 32],
+            fixed_commits: vec![0; 2 * G1_LEN],
+            permutation_commits: vec![0; 5 * G1_LEN],
+        };
+        vk_struct.fixed_commits[..G1_LEN].copy_from_slice(&g1_generator_bytes());
+        let vk = vk_struct.to_bytes();
+
+        let proof = dummy_proof_bytes_typical();
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered VK selector commit should fail multi-poly \
+             batched pairing, got {r:?}",
+        );
+    }
+
+    /// Session-20 companion: swap the first `permutation_commits`
+    /// entry (the `σ_1` commitment) to the G1 generator. The σ
+    /// polynomials are the VK's permutation argument data — any
+    /// tampering of them must be caught by the batched opening.
+    #[test]
+    fn multipoly_rejects_tampered_vk_permutation_commit() {
+        use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+
+        let mut vk_struct = Halo2KzgVerifyingKey {
+            k: 10,
+            n_instances: 1,
+            n_advice: 5,
+            n_fixed: 2,
+            x2_g2: mosaic_zk_primitives::g1_consts::g2_generator_bytes(),
+            omega_fr: [0u8; 32],
+            fixed_commits: vec![0; 2 * G1_LEN],
+            permutation_commits: vec![0; 5 * G1_LEN],
+        };
+        vk_struct.permutation_commits[..G1_LEN]
+            .copy_from_slice(&g1_generator_bytes());
+        let vk = vk_struct.to_bytes();
+
+        let proof = dummy_proof_bytes_typical();
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered VK permutation-σ commit should fail multi-poly \
+             batched pairing, got {r:?}",
+        );
     }
 
     /// Session-17 dedicated tamper test: swap `advice_commits[0]`

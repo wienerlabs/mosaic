@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Halo2 VK-side commits in multi-poly MSM (session 20)** —
+  `collect_commits_at_xi` and `collect_evals_at_xi` now fold VK-side
+  preprocessed commits (`fixed_commits` = selector polynomials
+  Q_M..Q_C, `permutation_commits` = σ_1..σ_3) into the multi-poly
+  MSM alongside the session-17 proof-side commits (advice + lookup
+  + permutation_z + quotient). Any tampered VK selector or σ
+  commitment now breaks the batched pairing identity — sessions-≤17
+  silently tolerated VK-side tampering because those commits never
+  entered the MSM. Two new session-20 tamper tests cover the two
+  VK commit kinds:
+  `multipoly_rejects_tampered_vk_selector_commit` (swap q_M commit
+  to G1 generator) and `multipoly_rejects_tampered_vk_permutation_commit`
+  (swap σ_1 commit to G1 generator). Backward-compat preserved: VKs
+  with empty `fixed_commits` / `permutation_commits` produce the
+  exact same MSM as before session 20.
+
 - **Nova Spartan-batched multi-poly opening (session 19)** —
   `mosaic-nova::kzg::verify_spartan_batched_opening` replaces the
   single-commit scaffold (`verify_opening_scaffold`, which only

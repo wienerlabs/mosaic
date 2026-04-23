@@ -149,10 +149,22 @@ verifies tampering a single advice G1 byte (generator swap) hits
 verifies the symmetric path — non-zero wire eval with zero commit
 also fails.
 
+**VK-side preprocessed commits (session 20)** — the multi-poly
+MSM now folds in `vk.fixed_commits` (selector polynomials Q_M..Q_C)
+and `vk.permutation_commits` (σ_1..σ_3) alongside the proof-side
+commits. Each VK commit pairs 1:1 with its bundle evaluation
+(`collect_commits_at_xi`, `collect_evals_at_xi` in `verifier.rs`).
+Tampering any selector or permutation-σ commit in the VK now flips
+`C_batched` while leaving `y_batched` unchanged → pairing fails.
+
+Two new session-20 tamper tests:
+`multipoly_rejects_tampered_vk_selector_commit` swaps `q_M` in the
+VK to the G1 generator and expects `PairingCheckFailed`;
+`multipoly_rejects_tampered_vk_permutation_commit` does the same
+for `σ_1`. Both exercise the VK-side path that sessions-≤17
+silently tolerated.
+
 **Scaffold caveats (remaining):**
-- Fixed selector + permutation σ commits from the VK aren't yet
-  in the multi-poly batching; they live VK-side without matching
-  commit bytes in the scaffold canonical.
 - Hardcoded permutation cosets (same as HyperPlonk).
 - Scaffold evaluation-bundle layout.
 
@@ -280,6 +292,8 @@ the coverage surface.
 | Halo2 two-point opening (session 16) | `mosaic-halo2::kzg::two_point_rejects_tampered_z_next_eval` |
 | Halo2 multi-poly MSM (advice commit) | `mosaic-halo2::verifier::multipoly_rejects_tampered_advice_commit` |
 | Halo2 multi-poly MSM (wire evaluation) | `mosaic-halo2::verifier::multipoly_rejects_tampered_wire_a_evaluation` |
+| Halo2 multi-poly MSM (VK selector q_M) | `mosaic-halo2::verifier::multipoly_rejects_tampered_vk_selector_commit` |
+| Halo2 multi-poly MSM (VK permutation σ_1) | `mosaic-halo2::verifier::multipoly_rejects_tampered_vk_permutation_commit` |
 | HyperPlonk VK coset sensitivity | `mosaic-hyperplonk::verifier::permutation_term_depends_on_k_cosets` |
 | HyperPlonk VK k_1 tamper detection | `mosaic-hyperplonk::verifier::tampered_k_1_breaks_expected_claim` |
 | Nova Spartan batched opening (VK a_comm) | `mosaic-nova::verifier::spartan_rejects_tampered_vk_a_comm` |
