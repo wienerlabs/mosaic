@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nova Spartan-batched multi-poly opening (session 19)** —
+  `mosaic-nova::kzg::verify_spartan_batched_opening` replaces the
+  single-commit scaffold (`verify_opening_scaffold`, which only
+  opened `w_comm` at the first public input) with a 5-way batched
+  MSM spanning (A·z, B·z, C·z) from the VK + (E, W) from the proof.
+  A `v` challenge is domain-separated-keccak-derived from the
+  Spartan point + hadamard evals + w_comm + e_comm, then produces
+  v-powers `[1, v, v², v³, v⁴]` for the batched MSM; y_batched
+  combines `(a_eval, b_eval, c_eval, e_eval, w_eval)` with the
+  same weights. Tampering any of the five commits (in VK or proof)
+  or their paired evaluations now propagates into the batched
+  pairing identity → `PairingCheckFailed`. Two new session-19
+  tamper tests cover the VK-side (`spartan_rejects_tampered_vk_a_comm`
+  via G1-generator swap) and proof-side (`spartan_rejects_tampered_hadamard_a_eval`
+  via non-zero a_eval with consistent u=1, b=c=0 Hadamard residual).
+  The pre-session-19 `accepts_nonzero_hadamard_satisfying_bundle`
+  test is updated to expect `PairingCheckFailed` — the stricter
+  batched opening now catches Hadamard-only bundles without matching
+  commit openings. Nova is now at **3 gates** (Hadamard residual,
+  folded-commitment reconstruction, Spartan-batched opening),
+  bringing the project-wide gate count from 13 → 14.
+
 - **HyperPlonk VK-side permutation cosets (session 18)** —
   `HyperPlonkVerifyingKey` gained three canonical 32-byte Fr fields
   `k_1`, `k_2`, `k_3` replacing the sessions-≤17 hardcoded `(1, 2, 3)`
@@ -75,8 +97,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session-18 VK-side `k_i` cosets tighten the permutation argument;
   the multi-point → univariate reduction itself pins in a future
   session against Espresso's reference impl.
-- **Nova Spartan-batched multi-poly opening** — current scaffold
-  opens `w_comm` only; full version covers (A·z, B·z, C·z) + E + W.
 - **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
 
 ## [0.5.0-phase3-complete] — 2026-04-22

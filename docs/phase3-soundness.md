@@ -282,6 +282,8 @@ the coverage surface.
 | Halo2 multi-poly MSM (wire evaluation) | `mosaic-halo2::verifier::multipoly_rejects_tampered_wire_a_evaluation` |
 | HyperPlonk VK coset sensitivity | `mosaic-hyperplonk::verifier::permutation_term_depends_on_k_cosets` |
 | HyperPlonk VK k_1 tamper detection | `mosaic-hyperplonk::verifier::tampered_k_1_breaks_expected_claim` |
+| Nova Spartan batched opening (VK a_comm) | `mosaic-nova::verifier::spartan_rejects_tampered_vk_a_comm` |
+| Nova Spartan batched opening (a_eval) | `mosaic-nova::verifier::spartan_rejects_tampered_hadamard_a_eval` |
 | Hadamard residual | `mosaic-nova::verifier::rejects_tampered_hadamard_evals` |
 | Nova fold reconstruction | `mosaic-nova::verifier::rejects_tampered_base_e_commitment` |
 | Trace Merkle | `mosaic-stark::verifier::rejects_mismatched_trace_merkle_leaf` |

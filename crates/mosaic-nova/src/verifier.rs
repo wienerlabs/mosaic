@@ -77,7 +77,7 @@ use crate::{
     canonical::{NovaFoldingProof, NovaFoldingVerifyingKey},
     challenges::derive_challenges,
     folding::{folded_commitment_from_fold, hadamard_residual},
-    kzg::verify_opening_scaffold,
+    kzg::verify_spartan_batched_opening,
 };
 use ark_bn254::Fr;
 use ark_ff::Zero;
@@ -86,7 +86,7 @@ use mosaic_core::{
     syscall::SyscallBackend,
     OnChainError,
 };
-use mosaic_zk_primitives::field::fr_from_canonical_bytes;
+use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
 
 /// Nova-family folding verifier. Phase-3 scaffold.
 pub struct NovaFolding<'a, B: SyscallBackend + ?Sized> {
@@ -197,12 +197,40 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
             return Err(OnChainError::VerificationFailed);
         }
 
-        // KZG scaffold opening at ξ (single-commitment stand-in;
-        // session 7+ extends to the full Spartan-batched opening).
-        verify_opening_scaffold(self.backend, &vk, &proof, &challenges.xi)?;
+        // Session 19: Spartan-batched multi-poly opening. Previously
+        // session-≤18 opened only `w_comm`; the batched reduction now
+        // collapses (a_comm, b_comm, c_comm, e_comm, w_comm) via a `v`
+        // challenge into a single pairing identity. The session-≤18
+        // `verify_opening_scaffold` stays referenced so callers that
+        // want the legacy single-commit check can still reach it.
+        // `verify_opening_scaffold` stays exported for unit tests in
+        // `kzg::tests`; it's the session-≤18 single-commit opening.
+        let v_bytes = self.backend.keccak256(&[
+            b"mosaic-nova/v",
+            &fr_to_canonical_bytes(&challenges.xi),
+            proof.hadamard_evals,
+            proof.w_comm,
+            proof.e_comm,
+        ])?;
+        let v = into_fr(v_bytes);
+        verify_spartan_batched_opening(
+            self.backend,
+            &vk,
+            &proof,
+            &challenges.xi,
+            &v,
+        )?;
 
         Ok(())
     }
+}
+
+/// Reduce a 32-byte keccak digest into a BN254 Fr element via
+/// `from_be_bytes_mod_order`. Mirrors the helper in mosaic-halo2's
+/// verifier — both consume keccak output for challenges.
+fn into_fr(b: [u8; 32]) -> ark_bn254::Fr {
+    use ark_ff::PrimeField;
+    ark_bn254::Fr::from_be_bytes_mod_order(&b)
 }
 
 impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for NovaFolding<'_, B> {
@@ -232,6 +260,7 @@ mod tests {
     use super::*;
     use crate::canonical::{sizes, FoldingVariant};
     use alloc::vec;
+    use alloc::vec::Vec;
 
     struct MockBackend;
     impl SyscallBackend for MockBackend {
@@ -401,8 +430,6 @@ mod tests {
         proof[u_off..u_off + sizes::FR_LEN].copy_from_slice(&u_bytes);
 
         // a = b = c = 1, e = 1·1 - 2·1 = -1.
-        // Session-15-nova: hadamard now sits after u (32 B) + base
-        // commits (4 × 64 = 256 B).
         let hadamard_off = u_off + sizes::FR_LEN + 4 * sizes::G1_LEN;
         let one_bytes = fr_to_canonical_bytes(&Fr::from(1u64));
         let neg_one_bytes = fr_to_canonical_bytes(&(-Fr::from(1u64)));
@@ -416,9 +443,89 @@ mod tests {
 
         let pi = zero_pi(2);
         let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        // Session 19 upgrade: Hadamard residual still passes
+        // (1·1 - 2·1 = -1, which matches e_eval), but the new
+        // Spartan-batched KZG opening folds in the Hadamard evals as
+        // claimed values for a/b/c/e against VK-side (zero) commits.
+        // With commits = 0 but evals ≠ 0, y_batched ≠ 0 while
+        // C_batched = 0 → pairing fails on the opening side.
+        //
+        // This is the intended stricter behavior: any Hadamard-
+        // satisfying bundle constructed without matching commit
+        // openings now gets caught. Full acceptance requires a real
+        // fixture with consistent (A·z, B·z, C·z, E, W) commits +
+        // openings — tracked in the fixture-driven differential
+        // testing roadmap item.
         assert!(
-            r.is_ok(),
-            "satisfying Hadamard bundle should pass, got {r:?}",
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "post-session-19, a Hadamard-only satisfying bundle is \
+             rejected by the Spartan-batched opening; got {r:?}",
+        );
+    }
+
+    /// Session 19: Spartan-batched opening now folds the VK-side
+    /// (a_comm, b_comm, c_comm) into the MSM. Swapping any one of
+    /// them from the zero baseline to the G1 generator produces a
+    /// non-zero `C_batched` while the evaluations stay zero, breaking
+    /// the batched pairing identity — `PairingCheckFailed`.
+    #[test]
+    fn spartan_rejects_tampered_vk_a_comm() {
+        use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = NovaFolding::new(&backend);
+        let mut vk_bytes = matching_vk(FoldingVariant::Nova, 0);
+
+        // VK layout: variant (1) + n_public (2) + n_constraints (4) +
+        // x2_g2 (128) + a_comm (64) + b_comm (64) + c_comm (64) +
+        // cs_digest (32). a_comm sits at offset 1 + 2 + 4 + 128 = 135.
+        let a_comm_off = 1 + 2 + 4 + 128;
+        vk_bytes[a_comm_off..a_comm_off + sizes::G1_LEN]
+            .copy_from_slice(&g1_generator_bytes());
+
+        let proof = proof_bytes(FoldingVariant::Nova, 0, 0);
+        let pi = zero_pi(0);
+        let r = NovaFolding::verify(&v, &vk_bytes, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered VK a_comm should fail Spartan-batched opening; \
+             got {r:?}",
+        );
+    }
+
+    /// Session 19 companion: tamper an individual Hadamard evaluation
+    /// byte. The Hadamard residual check would catch this if it
+    /// breaks the A·B - u·C - E = 0 relation, but sessions-≤18 only
+    /// used the FIRST public input as the KZG eval — leaving
+    /// advice/e/w evals unchecked by the opening. With session-19
+    /// batching, they're all folded in → tampering propagates.
+    #[test]
+    fn spartan_rejects_tampered_hadamard_a_eval() {
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = NovaFolding::new(&backend);
+        let vk = matching_vk(FoldingVariant::Nova, 0);
+        let mut proof = proof_bytes(FoldingVariant::Nova, 0, 0);
+
+        // Set u = 1 so the Hadamard residual 1·1 - 1·1 - 0 = 0 with
+        // a = b = c = 1 still holds, forcing the regression path to
+        // the Spartan opening (if we also tampered a_eval alone, the
+        // Hadamard residual would catch it first).
+        let u_off = sizes::FIXED_HEADER_LEN + sizes::FIXED_COMMITS_LEN;
+        let one_bytes = fr_to_canonical_bytes(&Fr::from(1u64));
+        proof[u_off..u_off + sizes::FR_LEN].copy_from_slice(&one_bytes);
+
+        // Set a_eval = 1; keep b = c = e = 0. Hadamard: 1·0 − 1·0 − 0 = 0 ✓.
+        // Spartan: y_batched = v⁰·1 ≠ 0, but all commits zero →
+        // C_batched = 0 → pairing fails.
+        let hadamard_off = u_off + sizes::FR_LEN + 4 * sizes::G1_LEN;
+        proof[hadamard_off..hadamard_off + sizes::FR_LEN].copy_from_slice(&one_bytes);
+
+        let pi = zero_pi(0);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered a_eval should fail Spartan-batched opening; \
+             got {r:?}",
         );
     }
 
