@@ -2,14 +2,14 @@
 //!
 //! Shared BN254 cryptographic primitives for the Mosaic verifier
 //! family. This crate packages the primitive layer that every BN254-
-//! based Phase-3 verifier body (HyperPlonk, Halo2-KZG, Nova) builds on
+//! based Phase-3 verifier body (`HyperPlonk`, Halo2-KZG, Nova) builds on
 //! top of, and that the Phase-2 KZG-PLONK verifier also consumes.
 //!
 //! ## Why a separate crate
 //!
 //! Through Phase 2 the primitives lived inside `mosaic-plonk`, which
 //! made sense when PLONK was the only consumer. With four BN254
-//! verifiers (Phase-2 PLONK + Phase-3 HyperPlonk, Halo2, Nova) all
+//! verifiers (Phase-2 PLONK + Phase-3 `HyperPlonk`, Halo2, Nova) all
 //! depending on the same five modules, extraction into a dedicated
 //! crate:
 //!

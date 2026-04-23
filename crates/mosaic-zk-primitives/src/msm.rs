@@ -4,7 +4,7 @@
 //!
 //! PLONK's linearization polynomial [r]_1 is reconstructed as a big
 //! sum of `coeff_i · Commitment_i` terms. The same pattern shows up
-//! in Groth16's public-input MSM (IC[0] + Σ pi_i · IC[i+1]) and in
+//! in Groth16's public-input MSM (IC[0] + Σ `pi_i` · IC[i+1]) and in
 //! batched verification. This module provides a shared primitive.
 //!
 //! ## Algorithm
@@ -44,7 +44,7 @@ pub const G1_ZERO: [u8; 64] = [0u8; 64];
 /// mosaic-nova, and mosaic-hyperplonk.
 ///
 /// Internally: `scalar_mul_g1(g1, y)` → `negate_g1` → `add_g1(C, -y·G1)`.
-/// Three syscalls (G1Mul + G1Add; negation is a pure-byte flip of the
+/// Three syscalls (`G1Mul` + `G1Add`; negation is a pure-byte flip of the
 /// y-coordinate).
 ///
 /// ## Errors
@@ -78,11 +78,11 @@ pub fn commitment_minus_scalar_g1<B: SyscallBackend + ?Sized>(
     add_g1(backend, commitment, &neg_y_g1)
 }
 
-/// BN254 alt_bn128 2-pair pairing identity check: returns `Ok(())`
+/// BN254 `alt_bn128` 2-pair pairing identity check: returns `Ok(())`
 /// when `e(p1_g1, p1_g2) · e(p2_g1, p2_g2) == 1` in the Fq12 target,
 /// `Err(PairingCheckFailed)` otherwise.
 ///
-/// Wire encoding (big-endian, per Solana alt_bn128 convention):
+/// Wire encoding (big-endian, per Solana `alt_bn128` convention):
 /// - `p1_g1`, `p2_g1` — 64-byte G1 affine (x ‖ y)
 /// - `p1_g2`, `p2_g2` — 128-byte G2 affine (x.c1 ‖ x.c0 ‖ y.c1 ‖ y.c0)
 ///

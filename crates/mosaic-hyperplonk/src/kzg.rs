@@ -1,6 +1,6 @@
 //! KZG batched multipoint opening verifier (scaffold).
 //!
-//! The outer HyperPlonk verifier needs to confirm that the 12
+//! The outer `HyperPlonk` verifier needs to confirm that the 12
 //! evaluations in the proof's `final_evals` bundle are the correct
 //! values of the committed MLEs at the sumcheck challenge point. This
 //! module implements that check as a single pairing call:
@@ -12,8 +12,8 @@
 //!
 //! where:
 //! - `C_batched = Σ_{i=0}^{11} ν^i · C_i` — MSM over all 12 committed
-//!   polys (4 from proof: a, b, c, z; 8 from VK: q_M, q_L, q_R, q_O,
-//!   q_C, σ_1, σ_2, σ_3).
+//!   polys (4 from proof: a, b, c, z; 8 from VK: `q_M`, `q_L`, `q_R`, `q_O`,
+//!   `q_C`, `σ_1`, `σ_2`, `σ_3`).
 //! - `y_batched = Σ_{i=0}^{11} ν^i · e_i` — random linear combination
 //!   of the 12 claimed evaluations.
 //! - `ν` — batching challenge, squeezed from the transcript after
@@ -23,7 +23,7 @@
 //!
 //! ## Scaffold caveat: univariate reduction
 //!
-//! Real HyperPlonk uses a **multi-point** opening scheme that reduces
+//! Real `HyperPlonk` uses a **multi-point** opening scheme that reduces
 //! the claim over `(ξ_0, ..., ξ_{n-1}) ∈ F^n` to a univariate claim
 //! via a specific reduction (typically Zeromorph / Pst / Gemini). The
 //! canonical proof layout we ship (a single G1 opening) is sized for
@@ -33,7 +33,7 @@
 //! challenge** as the univariate evaluation point. The pairing check
 //! then becomes mathematically identical to a univariate KZG
 //! verification and runs the full syscall chain, but it does **not**
-//! enforce the full HyperPlonk soundness guarantee. Session 3f will
+//! enforce the full `HyperPlonk` soundness guarantee. Session 3f will
 //! pin the actual multi-point reduction against Espresso's reference
 //! implementation and revise this module accordingly.
 //!
@@ -54,7 +54,7 @@ use mosaic_core::{
 };
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
-    g1_consts::{g1_generator_bytes, g2_generator_bytes},
+    g1_consts::g2_generator_bytes,
     msm::{add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1},
     transcript::Transcript,
 };
@@ -71,7 +71,7 @@ use mosaic_zk_primitives::{
 /// opening. Session 28 wires this via a domain-separated keccak of
 /// the full sumcheck challenge vector (see the caller in
 /// `verifier.rs`); prior sessions used only the last challenge.
-/// Real HyperPlonk would produce this via a Zeromorph / PST /
+/// Real `HyperPlonk` would produce this via a Zeromorph / PST /
 /// Gemini reduction with accompanying consistency commitments —
 /// tracked as a scaffold caveat.
 ///
@@ -193,6 +193,7 @@ mod tests {
     use super::*;
     use crate::canonical::sizes::{FIXED_HEADER_LEN, SUMCHECK_POLY_LEN};
     use mosaic_core::syscall::host::HostBackend;
+    use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
     use mosaic_zk_primitives::transcript::Kind;
 
     /// VK with identity G1 commits (accepted as zero points) and the

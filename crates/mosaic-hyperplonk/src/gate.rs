@@ -1,6 +1,6 @@
 //! Gate constraint expression evaluation.
 //!
-//! HyperPlonk represents the circuit's gate as a multilinear polynomial
+//! `HyperPlonk` represents the circuit's gate as a multilinear polynomial
 //! over the boolean hypercube. At a sumcheck challenge point
 //! `ξ = (ξ_0, ..., ξ_{n-1})`, the verifier needs to evaluate the gate
 //! expression using the MLE evaluations of:
@@ -21,7 +21,7 @@
 //!      + q_C(ξ)
 //! ```
 //!
-//! This is the same gate family Espresso's HyperPlonk reference impl
+//! This is the same gate family Espresso's `HyperPlonk` reference impl
 //! uses. Custom gates beyond this shape (e.g. for RISC-V instruction
 //! encoding) would extend the evaluator with additional selector
 //! terms, without changing the basic structure.

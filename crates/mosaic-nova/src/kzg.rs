@@ -11,7 +11,7 @@
 //! ```
 //!
 //! where `w_eval` is the claimed evaluation of the witness polynomial
-//! at `ξ`. Structurally identical to the HyperPlonk and Halo2
+//! at `ξ`. Structurally identical to the `HyperPlonk` and Halo2
 //! scaffold openings — same bilinearity rewrite to avoid on-chain G2
 //! scalar mul.
 //!
@@ -29,15 +29,14 @@ use crate::canonical::{
     sizes::{FR_LEN, G1_LEN},
     NovaFoldingProof, NovaFoldingVerifyingKey,
 };
-use alloc::vec::Vec;
 use ark_bn254::Fr;
 use mosaic_core::{
-    syscall::{AltBn128Op, InputEndianness, SyscallBackend},
+    syscall::SyscallBackend,
     OnChainError,
 };
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
-    g1_consts::{g1_generator_bytes, g2_generator_bytes},
+    g1_consts::g2_generator_bytes,
     msm::{
         add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1,
         verify_two_pair_pairing,
@@ -53,7 +52,7 @@ use mosaic_zk_primitives::{
 ///
 /// ## Errors
 ///
-/// - [`OnChainError::InvalidPointEncoding`] if w_comm or w_xi is
+/// - [`OnChainError::InvalidPointEncoding`] if `w_comm` or `w_xi` is
 ///   malformed.
 /// - [`OnChainError::PublicInputOutOfRange`] if the claimed evaluation
 ///   Fr is out of range.
@@ -217,6 +216,7 @@ mod tests {
     use crate::canonical::{sizes, FoldingVariant};
     use alloc::vec;
     use mosaic_core::syscall::host::HostBackend;
+    use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
 
     fn valid_g2_vk() -> NovaFoldingVerifyingKey {
         NovaFoldingVerifyingKey {

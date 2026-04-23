@@ -1,4 +1,4 @@
-//! Fiat-Shamir challenge derivation for HyperPlonk.
+//! Fiat-Shamir challenge derivation for `HyperPlonk`.
 //!
 //! The verifier squeezes three pre-sumcheck challenges, then one per
 //! sumcheck round. This module handles only the pre-sumcheck

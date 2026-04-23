@@ -7,7 +7,7 @@
 //! ```
 //!
 //! to a single polynomial-evaluation claim at a random point
-//! `(ξ_0, ..., ξ_{n-1}) ∈ F^n`. This is HyperPlonk's core workhorse:
+//! `(ξ_0, ..., ξ_{n-1}) ∈ F^n`. This is `HyperPlonk`'s core workhorse:
 //! the zero-check over the combined gate + permutation polynomial
 //! becomes `n = log₂(domain)` sumcheck rounds.
 //!
@@ -16,7 +16,7 @@
 //! For each round `r ∈ 0..n`:
 //!
 //! 1. Prover sends round polynomial `p_r(X)` (degree `d` in `X`). For
-//!    the HyperPlonk zero-check variant, `d = 2` (one factor each of
+//!    the `HyperPlonk` zero-check variant, `d = 2` (one factor each of
 //!    degree 1 from the gate and permutation terms).
 //! 2. Verifier checks `p_r(0) + p_r(1) == C_r` where `C_r` is the
 //!    running claim.
@@ -38,7 +38,7 @@
 //!
 //! ## Why a separate module
 //!
-//! Sumcheck is a reusable primitive. HyperPlonk uses it; Spartan,
+//! Sumcheck is a reusable primitive. `HyperPlonk` uses it; Spartan,
 //! Jellyfish PLONK, and Halo2-with-IPA all use variants of the same
 //! protocol. Keeping sumcheck isolated from the outer verifier means
 //! we can test soundness independently and eventually move it into
@@ -56,12 +56,12 @@ use mosaic_zk_primitives::{
 
 /// Degree-2 univariate round polynomial `p(X) = c_0 + c_1·X + c_2·X²`.
 ///
-/// HyperPlonk's zero-check sumcheck sends degree-2 polynomials per
+/// `HyperPlonk`'s zero-check sumcheck sends degree-2 polynomials per
 /// round because the combined gate + permutation polynomial is
 /// degree 2 in the sumcheck variable.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct RoundPolynomial {
-    /// Coefficients [c_0, c_1, c_2].
+    /// Coefficients [`c_0`, `c_1`, `c_2`].
     pub coeffs: [Fr; 3],
 }
 
@@ -79,7 +79,7 @@ impl RoundPolynomial {
 
     /// Evaluate `p(0) = c_0`.
     #[must_use]
-    pub fn eval_at_zero(&self) -> Fr {
+    pub const fn eval_at_zero(&self) -> Fr {
         self.coeffs[0]
     }
 
@@ -215,7 +215,7 @@ pub const fn zero_round_polynomial_bytes() -> [u8; SUMCHECK_POLY_LEN] {
 }
 
 /// Construct the `Fr::zero()` claim — useful as the initial claim for
-/// zero-check sumchecks (HyperPlonk's gate constraint combined with
+/// zero-check sumchecks (`HyperPlonk`'s gate constraint combined with
 /// permutation argument should sum to zero on the boolean cube).
 #[must_use]
 pub fn zero_claim() -> Fr {

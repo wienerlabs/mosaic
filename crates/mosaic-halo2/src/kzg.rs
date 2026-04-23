@@ -2,7 +2,7 @@
 //!
 //! Halo2 ships a **two-point batched** opening `(W_ξ, W_ξω)` — one
 //! per evaluation site in the grand-product-style argument. This
-//! module's scaffold only exercises the single-point W_ξ path to keep
+//! module's scaffold only exercises the single-point `W_ξ` path to keep
 //! the wiring minimal while structurally correct; session 4e pins the
 //! full two-point batching against Espresso/PSE reference fixtures.
 //!
@@ -26,7 +26,7 @@
 //! - **Single-commitment opening** vs real Halo2's multi-poly batched
 //!   opening. Session 4e extends to the full MSM over advice +
 //!   permutation + quotient + VK preprocessing commits.
-//! - **No ξω second opening** — the canonical W_ξω field is parsed but
+//! - **No ξω second opening** — the canonical `W_ξω` field is parsed but
 //!   unused until session 4e.
 //! - No on-chain ω computation (needs domain generator from `k`).
 
@@ -37,12 +37,12 @@ use crate::canonical::{
 use alloc::vec::Vec;
 use ark_bn254::Fr;
 use mosaic_core::{
-    syscall::{AltBn128Op, InputEndianness, SyscallBackend},
+    syscall::SyscallBackend,
     OnChainError,
 };
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
-    g1_consts::{g1_generator_bytes, g2_generator_bytes},
+    g1_consts::g2_generator_bytes,
     msm::{
         add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1,
         verify_two_pair_pairing,
@@ -58,7 +58,7 @@ use mosaic_zk_primitives::{
 ///
 /// - [`OnChainError::ProofLengthMismatch`] if proof evaluations are
 ///   empty (need at least one Fr for the opening value).
-/// - [`OnChainError::InvalidPointEncoding`] if permutation_z or w_xi
+/// - [`OnChainError::InvalidPointEncoding`] if `permutation_z` or `w_xi`
 ///   is malformed.
 /// - [`OnChainError::PublicInputOutOfRange`] if the evaluation Fr is
 ///   out of range.
@@ -252,10 +252,10 @@ pub fn verify_two_point_opening_scaffold<B: SyscallBackend + ?Sized>(
 /// and picks the evaluation point. The typical Halo2 pairing is:
 ///
 /// - **At ξ**: advice commits ↔ wire evals, lookup commits ↔
-///   lookup evals, permutation_z ↔ `Z`, quotient chunks ↔
+///   lookup evals, `permutation_z` ↔ `Z`, quotient chunks ↔
 ///   quotient evals. Fixed/selector commits from the VK are
 ///   paired with their selector evals.
-/// - **At ξω**: permutation_z ↔ `Z_NEXT` (the only shifted
+/// - **At ξω**: `permutation_z` ↔ `Z_NEXT` (the only shifted
 ///   polynomial in vanilla Halo2).
 ///
 /// ## Errors
@@ -374,6 +374,7 @@ mod tests {
     use crate::canonical::sizes::FIXED_HEADER_LEN;
     use alloc::vec;
     use mosaic_core::syscall::host::HostBackend;
+    use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
 
     fn valid_g2_vk() -> Halo2KzgVerifyingKey {
         Halo2KzgVerifyingKey {

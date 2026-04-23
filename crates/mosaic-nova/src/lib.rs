@@ -20,8 +20,8 @@
 //! | Tag | Scheme | Paper | Constraint system |
 //! |---|---|---|---|
 //! | 0 | **Nova** | [eprint 2021/370](https://eprint.iacr.org/2021/370) | Relaxed R1CS |
-//! | 1 | **HyperNova** | [eprint 2023/573](https://eprint.iacr.org/2023/573) | Customizable CS |
-//! | 2 | **ProtoStar** | [eprint 2023/620](https://eprint.iacr.org/2023/620) | Relaxed special-sound |
+//! | 1 | **`HyperNova`** | [eprint 2023/573](https://eprint.iacr.org/2023/573) | Customizable CS |
+//! | 2 | **`ProtoStar`** | [eprint 2023/620](https://eprint.iacr.org/2023/620) | Relaxed special-sound |
 //!
 //! All three operate over BN254 — originally Pasta curves (Nova paper),
 //! but the PSE port ([`microsoft/Nova`](https://github.com/microsoft/Nova))
@@ -57,8 +57,8 @@
 //! | Final KZG opening pairing (if Spartan-wrapped) | 140 K |
 //! | **Total (Nova)** | **~885 K** |
 //!
-//! Under the 900 K CU cap with tight margin. HyperNova's higher-degree
-//! gates may push toward the cap; ProtoStar's special-sound protocols
+//! Under the 900 K CU cap with tight margin. `HyperNova`'s higher-degree
+//! gates may push toward the cap; `ProtoStar`'s special-sound protocols
 //! typically come in lower. Real fixtures from `sonobe` will tighten
 //! these numbers during Phase-3 implementation.
 //!

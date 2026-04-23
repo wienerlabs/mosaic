@@ -16,9 +16,9 @@
 //! | [3, 8) | Selector evaluations `q_M, q_L, q_R, q_O, q_C` | 5 |
 //! | [8, 13) | Permutation evaluations `z, z_next, σ_1, σ_2, σ_3` | 5 |
 //! | [13, 16) | Lookup evaluations `input, table, m` | 3 |
-//! | [16, 16+n_quotient) | Quotient chunk evaluations `h_0(ξ) … h_{m-1}(ξ)` | `n_quotient` |
+//! | [16, `16+n_quotient`) | Quotient chunk evaluations `h_0(ξ) … h_{m-1}(ξ)` | `n_quotient` |
 //!
-//! Required `n_evals = 16 + n_quotient`. For a typical n_quotient = 3
+//! Required `n_evals = 16 + n_quotient`. For a typical `n_quotient` = 3
 //! circuit the bundle is 19 × 32 = 608 bytes.
 //!
 //! ## Why a scaffold convention

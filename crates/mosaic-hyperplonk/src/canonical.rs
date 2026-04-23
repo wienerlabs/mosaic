@@ -1,7 +1,7 @@
-//! HyperPlonk canonical byte layout — **session-3d revision**.
+//! `HyperPlonk` canonical byte layout — **session-3d revision**.
 //!
 //! Expanded from the session-3 scaffold placeholder to a PLONK-style
-//! gate + permutation layout, which is what Espresso's HyperPlonk
+//! gate + permutation layout, which is what Espresso's `HyperPlonk`
 //! reference impl actually uses. The exact byte ordering still needs
 //! to be pinned against an upstream fixture in session 3e; this
 //! revision locks the *shape* so the verifier body can reference
@@ -9,7 +9,7 @@
 //!
 //! ## Reference impl survey
 //!
-//! Multiple HyperPlonk prover implementations exist today with divergent
+//! Multiple `HyperPlonk` prover implementations exist today with divergent
 //! wire formats:
 //!
 //! | Impl | Proof size (2^10 circuit) | Notes |
@@ -56,7 +56,7 @@
 use alloc::vec::Vec;
 use mosaic_core::OnChainError;
 
-/// Size constants for the HyperPlonk canonical layout.
+/// Size constants for the `HyperPlonk` canonical layout.
 pub mod sizes {
     /// G1 affine point (x || y, each 32-byte BE).
     pub const G1_LEN: usize = 64;
@@ -85,7 +85,7 @@ pub mod sizes {
     pub const MAX_SUMCHECK_ROUNDS: u32 = 28;
 }
 
-/// Zero-copy view into a HyperPlonk proof buffer.
+/// Zero-copy view into a `HyperPlonk` proof buffer.
 ///
 /// Because the sumcheck-polynomial count is dynamic (one per round), the
 /// `sumcheck_polys` and evaluation slices are raw byte windows rather
@@ -105,14 +105,14 @@ pub struct HyperPlonkProof<'a> {
     pub sumcheck_rounds: u32,
     /// All round polynomials concatenated. Length == `sumcheck_rounds * SUMCHECK_POLY_LEN`.
     pub sumcheck_polys: &'a [u8],
-    /// Final-round MLE evaluations: eval_a || eval_b || eval_c || eval_z.
+    /// Final-round MLE evaluations: `eval_a` || `eval_b` || `eval_c` || `eval_z`.
     pub final_evals: &'a [u8],
     /// KZG opening proof (G1) at the final sumcheck challenge point.
     pub kzg_opening: &'a [u8],
 }
 
 impl<'a> HyperPlonkProof<'a> {
-    /// Parse a canonical HyperPlonk proof. Length-only validation; the
+    /// Parse a canonical `HyperPlonk` proof. Length-only validation; the
     /// sumcheck polynomials are not checked for Fr-range validity (that
     /// happens inside the verifier during challenge derivation).
     pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, OnChainError> {
@@ -187,7 +187,7 @@ pub mod final_evals_index {
     pub const SIGMA_3: usize = 11;
 }
 
-/// HyperPlonk verifying key.
+/// `HyperPlonk` verifying key.
 ///
 /// Session-3d revision expands the VK from a single `gate_g1`
 /// placeholder to the full PLONK-style preprocessing:
@@ -281,7 +281,7 @@ impl HyperPlonkVerifyingKey {
         let sigma_2_g1 = take();
         let sigma_3_g1 = take();
         let k_start = off;
-        let mut take_fr = |i: usize| -> [u8; sizes::FR_LEN] {
+        let take_fr = |i: usize| -> [u8; sizes::FR_LEN] {
             let mut out = [0u8; sizes::FR_LEN];
             let from = k_start + i * sizes::FR_LEN;
             out.copy_from_slice(&bytes[from..from + sizes::FR_LEN]);

@@ -15,7 +15,7 @@
 //! This module provides a **single-gate scaffold** targeting the
 //! minimum circuit structure we can differential-test against:
 //!
-//! - One PLONK-style gate (q_M·a·b + q_L·a + q_R·b + q_O·c + q_C).
+//! - One PLONK-style gate (`q_M·a·b` + `q_L·a` + `q_R·b` + `q_O·c` + `q_C`).
 //! - One permutation argument over three wires.
 //! - One lookup argument (log-derivative form).
 //!

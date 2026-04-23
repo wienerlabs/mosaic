@@ -52,7 +52,7 @@
 //! - **β, γ before y**: permutation challenges are needed to construct
 //!   z(X); y is the outer linear combiner that folds all constraint
 //!   families into one vanishing check.
-//! - **ξ after quotient**: vanishing argument's h_pieces must be
+//! - **ξ after quotient**: vanishing argument's `h_pieces` must be
 //!   committed before the evaluation point is sampled (else the prover
 //!   could construct h post-hoc to satisfy the check at ξ).
 
@@ -173,7 +173,7 @@ pub fn derive_challenges<'b, B: SyscallBackend + ?Sized>(
 /// Compute a 32-byte VK digest by byte-concatenating all structural
 /// fields. This is the transcript seed for round 1.
 ///
-/// Real Halo2 computes a BLAKE2b digest per the PSE reference impl;
+/// Real Halo2 computes a `BLAKE2b` digest per the PSE reference impl;
 /// we use a flat byte concatenation here since the transcript's
 /// Keccak-256 backend will hash everything anyway — the VK digest
 /// acts as a domain separator, not a pre-hashed commitment.

@@ -240,7 +240,7 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
 }
 
 
-/// Commit ordering at ξ (scaffold): advice + lookup + permutation_z + quotient.
+/// Commit ordering at ξ (scaffold): advice + lookup + `permutation_z` + quotient.
 /// Fixed selector commits + permutation σ commits live in the VK and are
 /// paired only structurally; they aren't batched at the proof-side MSM
 /// until VK-side commit bytes are wired through.
@@ -291,14 +291,14 @@ fn collect_commits_at_xi<'a>(
 /// - advice[i] ↔ wires A/B/C (clamped to `min(i, 2)`; extra advice
 ///   columns reuse the last wire evaluation as a scaffold placeholder
 ///   — real Halo2 has a matching per-column eval)
-/// - lookup commits ↔ LOOKUP_M evaluation repeated per lookup
-///   (scaffold: bundle carries one combined lookup_m eval)
-/// - permutation_z ↔ Z
-/// - quotient chunks ↔ FIXED_SLOTS+i quotient evaluations
-/// - fixed_commits (session 20) ↔ selectors Q_M/Q_L/Q_R/Q_O/Q_C
-///   in order; extra fixed commits reuse Q_C as scaffold placeholder
-/// - permutation_commits (session 20) ↔ SIGMA_1/SIGMA_2/SIGMA_3 in
-///   order; extra σ commits reuse SIGMA_3 as scaffold placeholder
+/// - lookup commits ↔ `LOOKUP_M` evaluation repeated per lookup
+///   (scaffold: bundle carries one combined `lookup_m` eval)
+/// - `permutation_z` ↔ Z
+/// - quotient chunks ↔ `FIXED_SLOTS+i` quotient evaluations
+/// - `fixed_commits` (session 20) ↔ selectors `Q_M/Q_L/Q_R/Q_O/Q_C`
+///   in order; extra fixed commits reuse `Q_C` as scaffold placeholder
+/// - `permutation_commits` (session 20) ↔ `SIGMA_1/SIGMA_2/SIGMA_3` in
+///   order; extra σ commits reuse `SIGMA_3` as scaffold placeholder
 fn collect_evals_at_xi(
     bundle: &EvaluationBundle,
     n_advice: usize,

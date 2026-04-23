@@ -30,11 +30,11 @@
 //! | 4 | 4 | `n_lookups` (u32 LE) — lookup argument count |
 //! | 8 | 4 | `n_quotient` (u32 LE) — quotient polynomial chunk count |
 //! | 12 | 4 | `n_evals` (u32 LE) — evaluation count at ξ |
-//! | 16 | 64 × n_advice | advice column commitments (G1) |
-//! | … | 64 × n_lookups | lookup `m` polynomial commitments (G1) |
+//! | 16 | 64 × `n_advice` | advice column commitments (G1) |
+//! | … | 64 × `n_lookups` | lookup `m` polynomial commitments (G1) |
 //! | … | 64 | permutation grand-product commitment (G1) |
-//! | … | 64 × n_quotient | quotient chunks (G1) |
-//! | … | 32 × n_evals | polynomial evaluations at ξ (Fr) |
+//! | … | 64 × `n_quotient` | quotient chunks (G1) |
+//! | … | 32 × `n_evals` | polynomial evaluations at ξ (Fr) |
 //! | … | 64 | `W_ξ` opening (G1) |
 //! | … | 64 | `W_ξω` opening (G1) |
 //!

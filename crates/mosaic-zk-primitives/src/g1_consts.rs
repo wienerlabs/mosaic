@@ -31,7 +31,7 @@ pub fn g1_affine_to_canonical(p: &G1Affine) -> [u8; 64] {
     out
 }
 
-/// Encode a `G2Affine` into canonical 128-byte Solana alt_bn128 layout:
+/// Encode a `G2Affine` into canonical 128-byte Solana `alt_bn128` layout:
 /// `x.c1 ‖ x.c0 ‖ y.c1 ‖ y.c0`, each 32-byte BE.
 #[must_use]
 pub fn g2_affine_to_canonical(p: &G2Affine) -> [u8; 128] {

@@ -1,4 +1,4 @@
-//! Fiat-Shamir challenge derivation for Nova / HyperNova / ProtoStar.
+//! Fiat-Shamir challenge derivation for Nova / `HyperNova` / `ProtoStar`.
 //!
 //! Folding verification at the final accumulator uses a small transcript:
 //!
@@ -42,7 +42,7 @@
 //! - **r first**: the accumulator commitments `E, W, T` are the
 //!   inputs the folding challenge reduces — absorb-then-squeeze.
 //! - **ξ after r + u + aux**: evaluation point depends on the fold
-//!   scalar `u` and any HyperNova higher-degree aux commits.
+//!   scalar `u` and any `HyperNova` higher-degree aux commits.
 //! - **ν last**: opening batch is the final challenge before the
 //!   pairing check.
 

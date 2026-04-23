@@ -1,4 +1,4 @@
-//! Nova / HyperNova / ProtoStar canonical byte layout — **placeholder
+//! Nova / `HyperNova` / `ProtoStar` canonical byte layout — **placeholder
 //! shape** derived from `sonobe` folding-compiler output.
 //!
 //! ## Reference shape (Nova)
@@ -13,14 +13,14 @@
 //! - `E_comm` (G1): commitment to the folded error vector
 //! - `u` (Fr): folding scalar (=1 for a fresh instance)
 //! - `W_comm` (G1): commitment to the folded witness
-//! - `x[]` (Fr × n_public): public inputs
+//! - `x[]` (Fr × `n_public)`: public inputs
 //!
 //! The accompanying proof typically includes:
 //!
 //! - `T_comm` (G1): cross-term commitment from the last fold step
 //! - KZG opening witness(es) if the verifier is Spartan-wrapped
 //!
-//! HyperNova and ProtoStar add higher-degree terms but keep the same
+//! `HyperNova` and `ProtoStar` add higher-degree terms but keep the same
 //! high-level `(commitments, scalar, openings)` shape. Phase-3 ADR
 //! amendment pins the exact layout per variant.
 //!
@@ -34,7 +34,7 @@
 //! | 1 | 1 | `num_aux_commits` (u8) — variant-specific extra commits |
 //! | 2 | 2 | `n_public` (u16 LE) — public input count |
 //! | 4 | 4 | reserved (variant-specific flags) |
-//! | 8 | 8 | reserved (future: step_count / folding_height) |
+//! | 8 | 8 | reserved (future: `step_count` / `folding_height`) |
 //! | 16 | 64 | `e_comm` (G1) |
 //! | 80 | 64 | `w_comm` (G1) |
 //! | 144 | 64 | `t_comm` (G1) |
@@ -44,7 +44,7 @@
 //! | … | 64 | KZG opening `W_xi` (G1) |
 //! | … | 64 | KZG opening `W_xiw` (G1) |
 //!
-//! For a typical Nova proof with no HyperNova extras and 4 public
+//! For a typical Nova proof with no `HyperNova` extras and 4 public
 //! inputs: 16 + 3·64 + 32 + 4·32 + 2·64 = **496 B** — comfortably
 //! fits in a single Solana transaction.
 
@@ -78,9 +78,9 @@ pub mod sizes {
     /// via the pairing check. Sessions ≤22 derived `w_eval` from the
     /// first public input as a scaffold stand-in.
     pub const W_EVAL_LEN: usize = FR_LEN;
-    /// Two opening commitments (W_xi, W_xiw).
+    /// Two opening commitments (`W_xi`, `W_xiw`).
     pub const OPENING_LEN: usize = 2 * G1_LEN;
-    /// Max variant-specific aux commitments. HyperNova uses ~4 for
+    /// Max variant-specific aux commitments. `HyperNova` uses ~4 for
     /// higher-degree terms; cap liberally.
     pub const MAX_AUX_COMMITS: u8 = 16;
     /// Max public inputs.
@@ -93,17 +93,17 @@ pub mod sizes {
 pub enum FoldingVariant {
     /// Nova — relaxed R1CS folding, BN254 (PSE port).
     Nova = 0,
-    /// HyperNova — customizable constraint system with higher-degree
+    /// `HyperNova` — customizable constraint system with higher-degree
     /// gates. Supports non-uniform computation.
     HyperNova = 1,
-    /// ProtoStar — multi-folding via special-sound protocols, broader
+    /// `ProtoStar` — multi-folding via special-sound protocols, broader
     /// protocol family than Nova.
     ProtoStar = 2,
 }
 
 impl FoldingVariant {
     /// Decode from raw tag byte. Unknown tags rejected.
-    pub fn from_byte(b: u8) -> Result<Self, OnChainError> {
+    pub const fn from_byte(b: u8) -> Result<Self, OnChainError> {
         match b {
             0 => Ok(Self::Nova),
             1 => Ok(Self::HyperNova),
@@ -151,7 +151,7 @@ pub struct NovaFoldingProof<'a> {
     /// `w_eval` component. Sessions ≤22 used the first public input
     /// as a scaffold stand-in.
     pub w_eval: &'a [u8],
-    /// Variant-specific extras (e.g. HyperNova higher-degree commits).
+    /// Variant-specific extras (e.g. `HyperNova` higher-degree commits).
     pub aux_commits: &'a [u8],
     /// Public inputs concatenated (length = `n_public × 32`).
     pub public_inputs: &'a [u8],
@@ -295,14 +295,14 @@ impl<'a> NovaFoldingProof<'a> {
     }
 }
 
-/// Nova / HyperNova / ProtoStar verifying key.
+/// Nova / `HyperNova` / `ProtoStar` verifying key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NovaFoldingVerifyingKey {
     /// Folding scheme variant.
     pub variant: FoldingVariant,
     /// Declared number of public inputs for this constraint system.
     pub n_public: u16,
-    /// Number of R1CS constraints (or CCS rows for HyperNova).
+    /// Number of R1CS constraints (or CCS rows for `HyperNova`).
     pub n_constraints: u32,
     /// G2 SRS element for KZG pairing check.
     pub x2_g2: [u8; sizes::G2_LEN],

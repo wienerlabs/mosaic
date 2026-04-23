@@ -1,4 +1,4 @@
-//! Nova / HyperNova / ProtoStar folding verifier scaffold.
+//! Nova / `HyperNova` / `ProtoStar` folding verifier scaffold.
 //!
 //! Phase-2 freeze ships wire-format validation + a `ProofSystem` impl
 //! returning `UnimplementedProofSystem`. Phase 3 lands the actual
@@ -66,12 +66,12 @@
 //!   scalar shortcut in `msm_g1` would benefit Nova disproportionately
 //!   because `z = (w, u, x)` often has many 0/1 entries for boolean
 //!   R1CS wires.
-//! - HyperNova's higher-degree terms collapse to the same MSM shape,
+//! - `HyperNova`'s higher-degree terms collapse to the same MSM shape,
 //!   just with more aux commits; the variant-specific code path is
 //!   ~10 extra lines over vanilla Nova.
-//! - ProtoStar adds a protocol-generic special-sound reduction; the
-//!   first Phase-3 milestone targets Nova only, with HyperNova and
-//!   ProtoStar landing in follow-up commits (tracked on issue #4).
+//! - `ProtoStar` adds a protocol-generic special-sound reduction; the
+//!   first Phase-3 milestone targets Nova only, with `HyperNova` and
+//!   `ProtoStar` landing in follow-up commits (tracked on issue #4).
 
 use crate::{
     canonical::{NovaFoldingProof, NovaFoldingVerifyingKey},
@@ -79,7 +79,6 @@ use crate::{
     folding::{folded_commitment_from_fold, hadamard_residual},
     kzg::verify_spartan_batched_opening,
 };
-use ark_bn254::Fr;
 use ark_ff::Zero;
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
@@ -101,7 +100,7 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
         Self { backend }
     }
 
-    /// Verify a Nova / HyperNova / ProtoStar folding proof.
+    /// Verify a Nova / `HyperNova` / `ProtoStar` folding proof.
     ///
     /// Session 6-partial implementation: parse → challenges → Hadamard
     /// residual check (new in this commit) → KZG scaffold opening →
@@ -130,7 +129,7 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
     /// ## Errors
     ///
     /// - `VerifyingKeyLengthMismatch` / `ProofLengthMismatch` — wire.
-    /// - `VerifyingKeyProofMismatch` — variant or n_public disagree.
+    /// - `VerifyingKeyProofMismatch` — variant or `n_public` disagree.
     /// - `PublicInputCountMismatch` / `PublicInputOutOfRange` — PI
     ///   validation in challenges.
     /// - `SumcheckFailed` — Hadamard residual is non-zero or `u` is
@@ -274,6 +273,7 @@ mod tests {
     use crate::canonical::{sizes, FoldingVariant};
     use alloc::vec;
     use alloc::vec::Vec;
+    use ark_bn254::Fr;
 
     struct MockBackend;
     impl SyscallBackend for MockBackend {

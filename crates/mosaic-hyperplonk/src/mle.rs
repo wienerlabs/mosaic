@@ -2,7 +2,7 @@
 //!
 //! A multilinear polynomial `f : F^n → F` over `n` variables has `2^n`
 //! boolean-cube evaluations — one per point in `{0,1}^n` — and is the
-//! unique multilinear interpolation of those evaluations. HyperPlonk
+//! unique multilinear interpolation of those evaluations. `HyperPlonk`
 //! represents *all* committed polynomials (witness wires, selectors,
 //! permutation grand-product) as MLEs over the boolean hypercube.
 //!
@@ -106,7 +106,7 @@ pub fn mle_eval_from_cube(values: &[Fr], point: &[Fr]) -> Result<Fr, OnChainErro
     }
 
     let mut buf: Vec<Fr> = values.to_vec();
-    for y_k in point.iter() {
+    for y_k in point {
         let one_minus_y = Fr::one() - y_k;
         let half = buf.len() / 2;
         for i in 0..half {

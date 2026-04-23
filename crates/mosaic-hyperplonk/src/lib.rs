@@ -2,7 +2,7 @@
 //!
 //! HyperPlonk-KZG verifier over BN254 — **Phase 3 scaffold**.
 //!
-//! HyperPlonk (eprint [2022/1355](https://eprint.iacr.org/2022/1355))
+//! `HyperPlonk` (eprint [2022/1355](https://eprint.iacr.org/2022/1355))
 //! replaces PLONK's univariate polynomials with **multilinear extensions
 //! over the boolean hypercube** `{0, 1}^n`, where `n = log₂(circuit size)`.
 //! The consequences:
@@ -30,7 +30,7 @@
 //!   markers pointing at the exact fields that need to be pinned.
 //! - Shared cryptographic primitives (Fr arithmetic, MSM, Keccak
 //!   transcript, G1/G2 generator constants) come from `mosaic_plonk`
-//!   — HyperPlonk is adjacent to PLONK at the protocol layer, shares
+//!   — `HyperPlonk` is adjacent to PLONK at the protocol layer, shares
 //!   the whole lower layer.
 //!
 //! Tracking issue: [#2](https://github.com/wienerlabs/mosaic/issues/2).
@@ -38,7 +38,7 @@
 //! ## CU target
 //!
 //! ADR-0005 budget: ≤900 000 CU. Rough decomposition based on the
-//! reference Espresso HyperPlonk verifier for a 2^10-gate circuit:
+//! reference Espresso `HyperPlonk` verifier for a 2^10-gate circuit:
 //!
 //! | Step | Estimate |
 //! |---|---|

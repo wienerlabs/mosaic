@@ -1,4 +1,4 @@
-//! HyperPlonk verifier scaffold.
+//! `HyperPlonk` verifier scaffold.
 //!
 //! Phase-2 freeze ships wire-format validation + a `ProofSystem` impl
 //! returning `UnimplementedProofSystem`. Phase 3 lands the sumcheck +
@@ -96,7 +96,7 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
     /// uses a univariate reduction via the last sumcheck challenge
     /// (see [`crate::kzg`]). Both are structurally correct but
     /// **not** cryptographically equivalent to Espresso's reference
-    /// HyperPlonk. A successful return currently means "the proof
+    /// `HyperPlonk`. A successful return currently means "the proof
     /// passes every validation we've implemented" — session 3f will
     /// pin these against real fixtures and tighten the soundness
     /// guarantee.
@@ -203,14 +203,14 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
 ///               - (a + β·σ_1 + γ)(b + β·σ_2 + γ)(c + β·σ_3 + γ)]
 /// ```
 ///
-/// This is a close structural approximation of Espresso's HyperPlonk
+/// This is a close structural approximation of Espresso's `HyperPlonk`
 /// permutation reduction but uses `ξ`-independent identity factors
-/// (real HyperPlonk multiplies by `ξ, k_1·ξ, k_2·ξ` or circuit-
+/// (real `HyperPlonk` multiplies by `ξ, k_1·ξ, k_2·ξ` or circuit-
 /// specific cosets). Session 3f-full pins this against the reference
 /// impl.
 ///
 /// A zero-valued bundle (all evaluations zero) satisfies the combined
-/// expression trivially: gate_expr = 0, perm_expr = z·(0 - 0) = 0.
+/// expression trivially: `gate_expr` = 0, `perm_expr` = z·(0 - 0) = 0.
 ///
 /// ## Errors
 ///
@@ -281,7 +281,7 @@ fn compute_expected_final_claim(
 /// ```
 ///
 /// Zero on a well-behaved proof where `σ_i` encodes the correct
-/// permutation; non-zero when any σ_i is tampered.
+/// permutation; non-zero when any `σ_i` is tampered.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 fn permutation_term(
@@ -311,9 +311,9 @@ fn permutation_term(
     *z * (id_term - sigma_term)
 }
 
-/// Silence unused-helper warning when SUMCHECK_POLY_LEN is only used
+/// Silence unused-helper warning when `SUMCHECK_POLY_LEN` is only used
 /// in conditional test code. Inlined here to keep the constant
-/// import alongside FR_LEN at the top of the file.
+/// import alongside `FR_LEN` at the top of the file.
 #[allow(dead_code)]
 const _SUMCHECK_POLY_LEN: usize = SUMCHECK_POLY_LEN;
 
