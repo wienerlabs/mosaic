@@ -51,6 +51,21 @@ pub const G1_ZERO: [u8; 64] = [0u8; 64];
 ///
 /// Propagates any syscall / length errors from the underlying
 /// [`scalar_mul_g1`] and [`add_g1`] primitives.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mosaic_core::syscall::SyscallBackend;
+/// use mosaic_zk_primitives::msm::commitment_minus_scalar_g1;
+///
+/// fn opening_lhs_piece<B: SyscallBackend + ?Sized>(
+///     backend: &B,
+///     commitment: &[u8; 64],
+///     claimed_eval_be: &[u8; 32],
+/// ) -> Result<[u8; 64], mosaic_core::OnChainError> {
+///     commitment_minus_scalar_g1(backend, commitment, claimed_eval_be)
+/// }
+/// ```
 pub fn commitment_minus_scalar_g1<B: SyscallBackend + ?Sized>(
     backend: &B,
     commitment: &[u8; 64],
@@ -83,6 +98,29 @@ pub fn commitment_minus_scalar_g1<B: SyscallBackend + ?Sized>(
 ///   not 128 bytes.
 /// - Backend errors from [`SyscallBackend::alt_bn128_group_op`].
 /// - [`OnChainError::PairingCheckFailed`] on pairing ≠ 1.
+///
+/// # Examples
+///
+/// ```no_run
+/// use mosaic_core::syscall::SyscallBackend;
+/// use mosaic_zk_primitives::{
+///     g1_consts::{g1_generator_bytes, g2_generator_bytes},
+///     msm::{negate_g1, verify_two_pair_pairing},
+/// };
+///
+/// // Canonical KZG opening: e(A, G2) · e(-W, [x]·G2) == 1 where
+/// // A = C - y·G1 + ξ·W. The caller builds A and passes (-W, [x]G2)
+/// // as the second pair.
+/// fn check_kzg_opening<B: SyscallBackend + ?Sized>(
+///     backend: &B,
+///     a: &[u8; 64],
+///     w: &[u8; 64],
+///     x2_g2: &[u8; 128],
+/// ) -> Result<(), mosaic_core::OnChainError> {
+///     let neg_w = negate_g1(w);
+///     verify_two_pair_pairing(backend, a, &g2_generator_bytes(), &neg_w, x2_g2)
+/// }
+/// ```
 pub fn verify_two_pair_pairing<B: SyscallBackend + ?Sized>(
     backend: &B,
     p1_g1: &[u8; 64],

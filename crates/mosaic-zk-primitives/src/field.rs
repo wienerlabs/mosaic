@@ -43,6 +43,26 @@ pub fn fr_from_canonical_bytes(bytes: &[u8]) -> Result<Fr, OnChainError> {
 /// Naming mirrors `fr_from_canonical_bytes` but signals the
 /// reduction: callers that want strict canonical validation should
 /// use `fr_from_canonical_bytes` instead.
+///
+/// # Examples
+///
+/// ```
+/// use mosaic_zk_primitives::field::{
+///     fr_from_be_bytes_reduced, fr_from_canonical_bytes,
+/// };
+///
+/// // In-range input agrees with the strict canonical decoder.
+/// let in_range = [0u8; 32];
+/// let a = fr_from_be_bytes_reduced(&in_range);
+/// let b = fr_from_canonical_bytes(&in_range).unwrap();
+/// assert_eq!(a, b);
+///
+/// // Out-of-range input (all-ones is > BN254 r). The strict
+/// // decoder rejects; the reduced variant silently takes mod r.
+/// let all_ones = [0xFFu8; 32];
+/// assert!(fr_from_canonical_bytes(&all_ones).is_err());
+/// let _reduced = fr_from_be_bytes_reduced(&all_ones);
+/// ```
 #[must_use]
 pub fn fr_from_be_bytes_reduced(bytes: &[u8; 32]) -> Fr {
     Fr::from_be_bytes_mod_order(bytes)
@@ -55,6 +75,23 @@ pub fn fr_from_be_bytes_reduced(bytes: &[u8; 32]) -> Fr {
 /// default permutation-coset triple). For non-const callers,
 /// `fr_to_canonical_bytes(&Fr::from(n))` is equivalent and slightly
 /// shorter to type.
+///
+/// # Examples
+///
+/// ```
+/// use mosaic_zk_primitives::field::fr_be_from_u64;
+///
+/// // Fr(1) encodes as 31 zero bytes followed by 0x01.
+/// let one = fr_be_from_u64(1);
+/// assert_eq!(one[31], 1);
+/// assert!(one[..31].iter().all(|&b| b == 0));
+///
+/// // Const-evaluable — fine in `const` contexts, e.g. default
+/// // permutation cosets on a VK literal.
+/// const K_1: [u8; 32] = fr_be_from_u64(1);
+/// const K_2: [u8; 32] = fr_be_from_u64(2);
+/// assert_ne!(K_1, K_2);
+/// ```
 #[must_use]
 pub const fn fr_be_from_u64(n: u64) -> [u8; 32] {
     let mut out = [0u8; 32];

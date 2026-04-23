@@ -151,6 +151,23 @@ pub const FR_MINUS_ONE: [u8; 32] = {
 /// - Propagates any backend error from
 ///   [`SyscallBackend::keccak256`] (typically
 ///   [`OnChainError::Keccak256SyscallFailed`]).
+///
+/// # Examples
+///
+/// ```no_run
+/// use mosaic_core::syscall::SyscallBackend;
+/// use mosaic_zk_primitives::transcript::derive_fr_challenge;
+///
+/// // Halo2's `v` challenge for multi-poly batching: domain-separated
+/// // keccak over (ξ-bytes, evaluations bundle).
+/// fn halo2_v_challenge<B: SyscallBackend + ?Sized>(
+///     backend: &B,
+///     xi_bytes: &[u8; 32],
+///     evaluations: &[u8],
+/// ) -> Result<ark_bn254::Fr, mosaic_core::OnChainError> {
+///     derive_fr_challenge(backend, b"mosaic-halo2/v", &[xi_bytes, evaluations])
+/// }
+/// ```
 pub fn derive_fr_challenge<B: SyscallBackend + ?Sized>(
     backend: &B,
     domain: &[u8],
