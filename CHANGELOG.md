@@ -7,7 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.4.1-phase3-soundness
+### Planned beyond v0.5.0-phase3-complete
+
+- **Fixture-driven differential testing** across all four Phase-3
+  bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  Requires external prover tooling; closes cryptographic soundness
+  verification beyond in-tree scaffold construction.
+- **HyperPlonk multi-point KZG reduction** — pin Zeromorph / Pst /
+  Gemini convention; extend `compute_expected_final_claim` with real
+  `k_i` cosets from the VK.
+- **Halo2 multi-poly MSM in opening** — currently `C_ξ` / `C_ξω` use
+  single-commitment scaffold; real Halo2 batches all committed polys
+  via a `v` challenge.
+- **Nova Spartan-batched multi-poly opening** — current scaffold
+  opens `w_comm` only; full version covers (A·z, B·z, C·z) + E + W.
+- **CU re-measurement** across all six verifier targets under the
+  current size-optimized profile.
+- **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
+
+## [0.5.0-phase3-complete] — 2026-04-22
+
+**Phase-3 protocol-layer soundness is complete.** All four Phase-3
+verifier bodies (HyperPlonk-KZG, Halo2-KZG, Nova family, FRI-STARK)
+now run end-to-end with **12 independent cryptographic soundness
+gates** covering the primary attack surfaces of each protocol. In
+just 18 focused sessions post-v0.4.1, the library went from
+"structural validation with single gates" to "production-grade
+scaffolds at audit-ready depth for every body."
+
+### Soundness gate inventory
+
+| Verifier | Gates | Coverage |
+|---|---|---|
+| HyperPlonk-KZG | 2 | Sumcheck identity, permutation term at ξ |
+| Halo2-KZG | 1 + two-point opening | Vanishing identity, batched (ξ, ξω) |
+| Nova/HyperNova/ProtoStar | 2 | Hadamard residual, folded-commitment reconstruction |
+| FRI-STARK | 7 | Structural, trace Merkle, constraint Merkle, PoW, FRI fold chain, OOD quotient, per-layer Merkle |
+
+**FRI-STARK reached production parity** with Plonky3/Winterfell
+semantics (modulo real AIR-specific constraint evaluators). Nova
+gained a second soundness gate via `folded_commitment_from_fold`
+reconstruction. Halo2's opening upgraded from single-point (ξ) to
+PSE-compatible two-point batched (ξ, ξω). HyperPlonk's permutation
+term moved from zero-placeholder to structurally correct PLONK-
+style grand-product.
+
+### Added — primitive modules
+
+- `mosaic-stark::goldilocks` — `Goldilocks(u64)` field arithmetic
+  with `add`, `sub`, `mul`, `neg`, `inverse` (Fermat), `pow`,
+  `from_bytes_le`, `to_bytes_le`, and `eval_poly_le_bytes` for
+  coefficient-vector polynomial evaluation via Horner.
+- `mosaic-stark::fri` — `compute_next_layer_value`,
+  `fold_relation_holds`, `verify_fold_chain`. Standalone FRI
+  fold arithmetic; callable independent of canonical layout.
+- `mosaic-stark::merkle` — `verify_path` walks SHA-256 trees
+  already shipped in session 7; used by trace, constraint, and
+  per-FRI-layer path verification.
+
+### Added — soundness gate wirings (18 sessions)
+
+Commits in-order: `b025c44`, `ee9ed73`, `19a81f5`, `9b0ef58`,
+`82eb114`, `3a94839`, `d991079`, `fe642b7`, `0218d1d`, `4aba3b8`,
+`919c57f`, `44c182f`, `d9d2be6`, `ed9363c`, `c0e6280`.
+
+Each gate has a paired `rejects_tampered_*` test exercising the
+specific class of attack it defends against. Full map in
+`docs/phase3-soundness.md` (session 9b+).
+
+### Changed — canonical layouts (breaking vs v0.4.1)
+
+- **Nova `NovaFoldingProof`**: +128 B `hadamard_evals` (session 13b);
+  +256 B `base_e_1 / base_e_2 / base_w_1 / base_w_2` (session 15-nova).
+  Minimum proof: 368 → 624 → 880 B.
+- **Halo2 `Halo2KzgVerifyingKey`**: +32 B `omega_fr` domain
+  generator (session 16).
+- **FRI-STARK `FriStarkProof`**: +var-tail `fri_layer_openings`
+  (session 13b); +var-tail `fri_layer_auth_paths` (session 15);
+  removed deprecated `final_layer_value` slot (session 14b).
+  `MAX_TAIL_LEN` bumped 1 MiB → 32 MiB to accommodate realistic
+  auth-paths buffers.
+- **FRI-STARK `FriStarkVerifyingKey`**: +8 B `omega_g` Goldilocks
+  domain generator.
+
+Downstream provers must regenerate proofs against the new layouts.
+Phase-2 production verifiers (Groth16, KZG-PLONK) are unchanged and
+byte-compatible with `v0.2.0-phase2`.
+
+### Changed — workspace
+
+- Tests: 321 → **378** passing (+57).
+- SBF binary: 292 KB → **319 KB** (+27 KB for the full wired
+  cryptographic machinery). 30.4% of 1 MB Solana program limit with
+  ~730 KB headroom.
+- Per-crate test counts:
+  - mosaic-stark: 40 → **103** (+63; FRI-STARK went from scaffold
+    to production parity).
+  - mosaic-nova: 38 → **41** (+3 soundness).
+  - mosaic-halo2: 47 → **53** (+6 bundle + soundness).
+  - mosaic-hyperplonk: 61 → 62 (+1 perm tamper test; unchanged
+    this release).
+
+### Not changed
+
+- Phase-2 CU measurements (Groth16, Groth16 batch, KZG-PLONK)
+  retain their `v0.2.0-phase2` baselines pending CU re-measurement
+  follow-up.
+- Phase-2 canonical layouts (Groth16, KZG-PLONK) byte-compatible.
+
+## [0.4.1-phase3-soundness] — 2026-04-22
 
 - **Fixture-driven final tightening** across all four Phase-3 bodies:
   Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK.

@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.4.1-phase3-soundness](https://img.shields.io/badge/release-v0.4.1--phase3--soundness-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.4.1-phase3-soundness)
+[![Release: v0.5.0-phase3-complete](https://img.shields.io/badge/release-v0.5.0--phase3--complete-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.5.0-phase3-complete)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -54,7 +54,7 @@ frozen CU budgets.
 | `mosaic-serde` gnark / halo2 / plonky3 / risc0 | 🚧 Stub (Phase 3) | — |
 | `mosaic-chunked` data model | ✅ Implemented | — |
 | `mosaic-chunked` instruction handlers | ✅ Production | — |
-| Reference Solana program | ✅ 291 KB SBF ELF (27.8% of 1 MB cap; 72% reduction via `opt-level = "z"`) | — |
+| Reference Solana program | ✅ 319 KB SBF ELF (30.4% of 1 MB cap; 12 cryptographic gates wired) | — |
 | Differential test harness (arkworks + snarkjs fixture) | ✅ Production | — |
 | Fuzz harnesses (3) | ✅ Scaffolded | — |
 | External audit | 🔴 Not yet commissioned | — |
@@ -189,9 +189,15 @@ same locally.
   All four Phase-3 verifier bodies (HyperPlonk, Halo2, Nova, FRI-STARK)
   run end-to-end.
 - **Phase-3 soundness release:** [`v0.4.1-phase3-soundness`](https://github.com/wienerlabs/mosaic/releases/tag/v0.4.1-phase3-soundness).
-  All four bodies now have cryptographic soundness gates; SBF binary
+  All four bodies gained cryptographic soundness gates; SBF binary
   reduced 72% via `opt-level = "z"`; `mosaic-zk-primitives` crate
-  extracted. Fixture-driven tightening tracked under issues [#2](https://github.com/wienerlabs/mosaic/issues/2) / [#64](https://github.com/wienerlabs/mosaic/issues/64) / [#4](https://github.com/wienerlabs/mosaic/issues/4) / [#3](https://github.com/wienerlabs/mosaic/issues/3).
+  extracted.
+- **Phase-3 complete release:** [`v0.5.0-phase3-complete`](https://github.com/wienerlabs/mosaic/releases/tag/v0.5.0-phase3-complete).
+  **12 independent cryptographic soundness gates across 4 bodies.**
+  FRI-STARK at Plonky3/Winterfell production parity (7 gates); Nova,
+  Halo2, HyperPlonk extended to protocol-appropriate depth. Only
+  fixture-driven differential testing remains before external audit
+  engagement.
 - **Vulnerability reports:** see [SECURITY.md](SECURITY.md) and the
   [disclosure-timeline SLA](docs/responsible-disclosure-timeline.md).
 - **Audit history:** see [AUDIT.md](AUDIT.md).

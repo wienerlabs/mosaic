@@ -219,7 +219,7 @@
   <header>
     <h1>MOSAIC</h1>
     <div class="tag">
-      v0.4.1-phase3-soundness<br>
+      v0.5.0-phase3-complete<br>
       <span class="muted">2026-04-22</span>
     </div>
   </header>
@@ -252,19 +252,19 @@
       <div class="grid">
         <div class="cell">
           <div class="label">Workspace tests</div>
-          <div class="val">369 passing</div>
+          <div class="val">378 passing</div>
         </div>
         <div class="cell">
           <div class="label">SBF program size</div>
-          <div class="val">308 KB</div>
+          <div class="val">319 KB</div>
         </div>
         <div class="cell">
           <div class="label">Solana 1 MB cap</div>
-          <div class="val">29.4% used</div>
+          <div class="val">30.4% used</div>
         </div>
         <div class="cell">
-          <div class="label">Workspace crates</div>
-          <div class="val">15</div>
+          <div class="label">Soundness gates</div>
+          <div class="val">12 across 4 bodies</div>
         </div>
       </div>
     </div>
@@ -336,19 +336,19 @@
         <tbody>
           <tr>
             <td>HyperPlonk-KZG</td>
-            <td>Sumcheck identity, permutation term at ξ</td>
+            <td>Sumcheck identity, permutation term at ξ (2 gates)</td>
           </tr>
           <tr>
             <td>Halo2-KZG</td>
-            <td>Vanishing identity t(ξ)·Z_H = gate + y·perm + y²·lookup</td>
+            <td>Vanishing identity, two-point batched KZG opening at (ξ, ξω)</td>
           </tr>
           <tr>
-            <td>Nova</td>
-            <td>Hadamard residual a·b − u·c − e</td>
+            <td>Nova / HyperNova / ProtoStar</td>
+            <td>Hadamard residual, folded-commitment reconstruction (2 gates)</td>
           </tr>
           <tr>
             <td>FRI-STARK</td>
-            <td>Query indices, trace Merkle, constraint Merkle, PoW, FRI fold chain</td>
+            <td>Query indices, trace + constraint Merkle, PoW, FRI fold chain, OOD quotient, per-layer Merkle auth (7 gates)</td>
           </tr>
         </tbody>
       </table>
@@ -394,6 +394,8 @@
         <dd>Four verifier bodies end-to-end.</dd>
         <dt>v0.4.1-phase3-soundness</dt>
         <dd>Cryptographic soundness gates across all four families; SBF binary −72%.</dd>
+        <dt>v0.5.0-phase3-complete</dt>
+        <dd>12 independent soundness gates; FRI-STARK at Plonky3/Winterfell production parity; Halo2 two-point opening; Nova fold reconstruction.</dd>
       </dl>
     </div>
   </section>
