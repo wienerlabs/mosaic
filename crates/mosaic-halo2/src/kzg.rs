@@ -300,6 +300,71 @@ mod tests {
         assert!(r.is_ok(), "zero-proof pairing should pass, got {r:?}");
     }
 
+    /// Build a minimal proof with 10 Fr evaluations (enough to cover
+    /// `idx::Z` and `idx::Z_NEXT`) so `verify_two_point_opening_scaffold`
+    /// can parse its bundle.
+    fn two_point_proof_bytes() -> alloc::vec::Vec<u8> {
+        let n_advice: u32 = 1;
+        let n_lookups: u32 = 0;
+        let n_quotient: u32 = 1;
+        let n_evals: u32 = 10; // covers up through idx::Z_NEXT = 9
+        let total = FIXED_HEADER_LEN
+            + (n_advice as usize) * G1_LEN
+            + (n_lookups as usize) * G1_LEN
+            + G1_LEN
+            + (n_quotient as usize) * G1_LEN
+            + (n_evals as usize) * FR_LEN
+            + 2 * G1_LEN;
+        let mut buf = vec![0u8; total];
+        buf[0..4].copy_from_slice(&n_advice.to_le_bytes());
+        buf[4..8].copy_from_slice(&n_lookups.to_le_bytes());
+        buf[8..12].copy_from_slice(&n_quotient.to_le_bytes());
+        buf[12..16].copy_from_slice(&n_evals.to_le_bytes());
+        buf
+    }
+
+    /// Session-16 dedicated tamper test: set `z_next_eval` (the
+    /// y_xiω value consumed by the two-point opening) to 1 while
+    /// leaving everything else zero. With permutation_z = 0,
+    /// w_xi = 0, w_xiw = 0, z_eval = 0: the ξω-side of the pairing
+    /// produces `A2 = 0 - 1·G1 + ξω·0 = -G1`, so the batched
+    /// pairing becomes `e(u·(-G1), G2) · e(0, x·G2) = e(G1, G2)^(-u) ≠ 1`
+    /// for any non-zero `u` → `PairingCheckFailed`.
+    ///
+    /// This exercises the new two-point KZG path directly (session 16's
+    /// flagged coverage gap in `docs/phase3-soundness.md`).
+    #[test]
+    fn two_point_rejects_tampered_z_next_eval() {
+        use crate::bundle::idx;
+        let backend = HostBackend::new();
+        let vk = valid_g2_vk();
+        let mut proof_buf = two_point_proof_bytes();
+
+        // Set z_next evaluation = 1 (last byte of its Fr slot).
+        // Evaluations start at FIXED + n_advice·G1 + n_lookups·G1 +
+        //   perm_z_G1 + n_quotient·G1 = 16 + 64 + 0 + 64 + 64 = 208.
+        let eval_base = FIXED_HEADER_LEN
+            + 1 * G1_LEN
+            + 0 * G1_LEN
+            + G1_LEN
+            + 1 * G1_LEN;
+        let z_next_off = eval_base + idx::Z_NEXT * FR_LEN;
+        proof_buf[z_next_off + FR_LEN - 1] = 1;
+
+        let proof = Halo2KzgProof::from_bytes(&proof_buf).unwrap();
+
+        // Use non-zero ξ and u so the tamper propagates to the pairing.
+        let xi = Fr::from(7u64);
+        let xi_omega = Fr::from(11u64);
+        let u = Fr::from(3u64);
+        let r =
+            verify_two_point_opening_scaffold(&backend, &vk, &proof, &xi, &xi_omega, &u);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered z_next_eval should fail batched pairing, got {r:?}",
+        );
+    }
+
     #[test]
     fn rejects_short_evaluations() {
         let backend = HostBackend::new();
