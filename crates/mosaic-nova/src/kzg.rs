@@ -38,7 +38,7 @@ use mosaic_core::{
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
-    msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1},
+    msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1, verify_two_pair_pairing},
 };
 
 /// Scaffold single-commitment KZG opening check for a folded Nova
@@ -94,22 +94,7 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
 
     // Pair: (A1, G2) · (-W_ξ, x2_G2).
     let neg_wxi = negate_g1(&wxi_arr);
-    let g2_gen = g2_generator_bytes();
-    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
-    pairing_input.extend_from_slice(&a1);
-    pairing_input.extend_from_slice(&g2_gen);
-    pairing_input.extend_from_slice(&neg_wxi);
-    pairing_input.extend_from_slice(&vk.x2_g2);
-
-    let result = backend.alt_bn128_group_op(
-        AltBn128Op::Pairing,
-        InputEndianness::BigEndian,
-        &pairing_input,
-    )?;
-    if result.len() != 32 || result[31] != 0x01 {
-        return Err(OnChainError::PairingCheckFailed);
-    }
-    Ok(())
+    verify_two_pair_pairing(backend, &a1, &g2_generator_bytes(), &neg_wxi, &vk.x2_g2)
 }
 
 /// Session-19: Spartan-batched multi-poly opening for Nova.
@@ -223,23 +208,7 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
     let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &fr_to_canonical_bytes(xi))?;
     let a1 = add_g1(backend, &c_minus_y, &xi_wxi)?;
     let neg_wxi = negate_g1(&wxi_arr);
-
-    let g2_gen = g2_generator_bytes();
-    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
-    pairing_input.extend_from_slice(&a1);
-    pairing_input.extend_from_slice(&g2_gen);
-    pairing_input.extend_from_slice(&neg_wxi);
-    pairing_input.extend_from_slice(&vk.x2_g2);
-
-    let result = backend.alt_bn128_group_op(
-        AltBn128Op::Pairing,
-        InputEndianness::BigEndian,
-        &pairing_input,
-    )?;
-    if result.len() != 32 || result[31] != 0x01 {
-        return Err(OnChainError::PairingCheckFailed);
-    }
-    Ok(())
+    verify_two_pair_pairing(backend, &a1, &g2_generator_bytes(), &neg_wxi, &vk.x2_g2)
 }
 
 #[cfg(test)]

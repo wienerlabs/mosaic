@@ -43,7 +43,7 @@ use mosaic_core::{
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
-    msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1},
+    msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1, verify_two_pair_pairing},
 };
 
 /// Scaffold single-point KZG opening check.
@@ -101,25 +101,10 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
     // -W_ξ for the second pair.
     let neg_wxi = negate_g1(&wxi_arr);
 
-    // Pairing inputs:
+    // Pairing:
     //   Pair 1: (A1, [1]_G2)
     //   Pair 2: (-W_ξ, [x]_G2)
-    let g2_gen = g2_generator_bytes();
-    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
-    pairing_input.extend_from_slice(&a1);
-    pairing_input.extend_from_slice(&g2_gen);
-    pairing_input.extend_from_slice(&neg_wxi);
-    pairing_input.extend_from_slice(&vk.x2_g2);
-
-    let result = backend.alt_bn128_group_op(
-        AltBn128Op::Pairing,
-        InputEndianness::BigEndian,
-        &pairing_input,
-    )?;
-    if result.len() != 32 || result[31] != 0x01 {
-        return Err(OnChainError::PairingCheckFailed);
-    }
-    Ok(())
+    verify_two_pair_pairing(backend, &a1, &g2_generator_bytes(), &neg_wxi, &vk.x2_g2)
 }
 
 /// Session-16: two-point batched KZG opening.
@@ -228,22 +213,13 @@ pub fn verify_two_point_opening_scaffold<B: SyscallBackend + ?Sized>(
     let neg_w_batched = negate_g1(&w_batched);
 
     // Pairing: e(A_batched, [1]_2) · e(-W_batched, [x]_2) = 1.
-    let g2_gen = g2_generator_bytes();
-    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
-    pairing_input.extend_from_slice(&a_batched);
-    pairing_input.extend_from_slice(&g2_gen);
-    pairing_input.extend_from_slice(&neg_w_batched);
-    pairing_input.extend_from_slice(&vk.x2_g2);
-
-    let result = backend.alt_bn128_group_op(
-        AltBn128Op::Pairing,
-        InputEndianness::BigEndian,
-        &pairing_input,
-    )?;
-    if result.len() != 32 || result[31] != 0x01 {
-        return Err(OnChainError::PairingCheckFailed);
-    }
-    Ok(())
+    verify_two_pair_pairing(
+        backend,
+        &a_batched,
+        &g2_generator_bytes(),
+        &neg_w_batched,
+        &vk.x2_g2,
+    )
 }
 
 /// Session-17: multi-poly batched two-point KZG opening.
@@ -388,22 +364,13 @@ pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
     let w_batched = add_g1(backend, &wxi_arr, &u_wxiw)?;
     let neg_w_batched = negate_g1(&w_batched);
 
-    let g2_gen = g2_generator_bytes();
-    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
-    pairing_input.extend_from_slice(&a_batched);
-    pairing_input.extend_from_slice(&g2_gen);
-    pairing_input.extend_from_slice(&neg_w_batched);
-    pairing_input.extend_from_slice(&vk.x2_g2);
-
-    let result = backend.alt_bn128_group_op(
-        AltBn128Op::Pairing,
-        InputEndianness::BigEndian,
-        &pairing_input,
-    )?;
-    if result.len() != 32 || result[31] != 0x01 {
-        return Err(OnChainError::PairingCheckFailed);
-    }
-    Ok(())
+    verify_two_pair_pairing(
+        backend,
+        &a_batched,
+        &g2_generator_bytes(),
+        &neg_w_batched,
+        &vk.x2_g2,
+    )
 }
 
 #[cfg(test)]

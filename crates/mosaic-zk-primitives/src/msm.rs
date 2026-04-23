@@ -37,6 +37,53 @@ use mosaic_core::{
 /// curve. `alt_bn128_group_op` treats this as the additive neutral.
 pub const G1_ZERO: [u8; 64] = [0u8; 64];
 
+/// BN254 alt_bn128 2-pair pairing identity check: returns `Ok(())`
+/// when `e(p1_g1, p1_g2) · e(p2_g1, p2_g2) == 1` in the Fq12 target,
+/// `Err(PairingCheckFailed)` otherwise.
+///
+/// Wire encoding (big-endian, per Solana alt_bn128 convention):
+/// - `p1_g1`, `p2_g1` — 64-byte G1 affine (x ‖ y)
+/// - `p1_g2`, `p2_g2` — 128-byte G2 affine (x.c1 ‖ x.c0 ‖ y.c1 ‖ y.c0)
+///
+/// Session-25 hoist — the same fixed-shape 2-pair pairing pattern
+/// (build 384-byte input, call `AltBn128Op::Pairing`, inspect the
+/// returned 32-byte boolean) was repeated at 4+ sites across
+/// mosaic-halo2 and mosaic-nova. Factored here so the call-site
+/// delta is exactly the two G1 + two G2 argument slots.
+///
+/// ## Errors
+///
+/// - [`OnChainError::InvalidPointEncoding`] if either G2 slice is
+///   not 128 bytes.
+/// - Backend errors from [`SyscallBackend::alt_bn128_group_op`].
+/// - [`OnChainError::PairingCheckFailed`] on pairing ≠ 1.
+pub fn verify_two_pair_pairing<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    p1_g1: &[u8; 64],
+    p1_g2: &[u8],
+    p2_g1: &[u8; 64],
+    p2_g2: &[u8],
+) -> Result<(), OnChainError> {
+    const G2_LEN: usize = 128;
+    if p1_g2.len() != G2_LEN || p2_g2.len() != G2_LEN {
+        return Err(OnChainError::InvalidPointEncoding);
+    }
+    let mut input: Vec<u8> = Vec::with_capacity(2 * (64 + G2_LEN));
+    input.extend_from_slice(p1_g1);
+    input.extend_from_slice(p1_g2);
+    input.extend_from_slice(p2_g1);
+    input.extend_from_slice(p2_g2);
+    let result = backend.alt_bn128_group_op(
+        AltBn128Op::Pairing,
+        InputEndianness::BigEndian,
+        &input,
+    )?;
+    if result.len() != 32 || result[31] != 0x01 {
+        return Err(OnChainError::PairingCheckFailed);
+    }
+    Ok(())
+}
+
 /// Compute `Σ scalars_i · points_i` as a single G1 affine.
 ///
 /// - `points.len()` must equal `scalars.len()`; otherwise
@@ -302,5 +349,51 @@ mod tests {
             scalar_mul_g1(&backend, &short, &scalar),
             Err(OnChainError::InvalidPointEncoding),
         ));
+    }
+
+    // ---- verify_two_pair_pairing ----
+
+    #[test]
+    fn verify_two_pair_pairing_accepts_zero_points() {
+        // e(0, G2) · e(0, x2·G2) = 1 · 1 = 1. The zero G1 point
+        // pairs to identity with any G2 factor.
+        let backend = HostBackend::new();
+        let g2 = crate::g1_consts::g2_generator_bytes();
+        let r = verify_two_pair_pairing(&backend, &G1_ZERO, &g2, &G1_ZERO, &g2);
+        assert!(r.is_ok(), "zero-zero pairing should pass, got {r:?}");
+    }
+
+    #[test]
+    fn verify_two_pair_pairing_accepts_canceling_pair() {
+        // e(G1, G2) · e(-G1, G2) = e(G1 - G1, G2) = e(0, G2) = 1.
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let neg_g1 = negate_g1(&g1);
+        let g2 = crate::g1_consts::g2_generator_bytes();
+        let r = verify_two_pair_pairing(&backend, &g1, &g2, &neg_g1, &g2);
+        assert!(r.is_ok(), "canceling pair should pass, got {r:?}");
+    }
+
+    #[test]
+    fn verify_two_pair_pairing_rejects_nonzero_product() {
+        // e(G1, G2) · e(G1, G2) = e(G1, G2)² ≠ 1 in the Fq12 target.
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let g2 = crate::g1_consts::g2_generator_bytes();
+        let r = verify_two_pair_pairing(&backend, &g1, &g2, &g1, &g2);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "e(G1,G2)² ≠ 1 expected PairingCheckFailed, got {r:?}",
+        );
+    }
+
+    #[test]
+    fn verify_two_pair_pairing_rejects_wrong_g2_length() {
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let short_g2 = [0u8; 127];
+        let g2 = crate::g1_consts::g2_generator_bytes();
+        let r = verify_two_pair_pairing(&backend, &g1, &short_g2, &g1, &g2);
+        assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
     }
 }
