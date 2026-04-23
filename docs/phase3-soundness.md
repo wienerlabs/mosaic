@@ -301,6 +301,7 @@ the coverage surface.
 | HyperPlonk VK k_1 tamper detection | `mosaic-hyperplonk::verifier::tampered_k_1_breaks_expected_claim` |
 | Nova Spartan batched opening (VK a_comm) | `mosaic-nova::verifier::spartan_rejects_tampered_vk_a_comm` |
 | Nova Spartan batched opening (a_eval) | `mosaic-nova::verifier::spartan_rejects_tampered_hadamard_a_eval` |
+| Nova Spartan batched opening (w_eval slot) | `mosaic-nova::verifier::spartan_rejects_tampered_w_eval_slot` |
 | Hadamard residual | `mosaic-nova::verifier::rejects_tampered_hadamard_evals` |
 | Nova fold reconstruction | `mosaic-nova::verifier::rejects_tampered_base_e_commitment` |
 | Trace Merkle | `mosaic-stark::verifier::rejects_mismatched_trace_merkle_leaf` |

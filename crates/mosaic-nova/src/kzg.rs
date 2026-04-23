@@ -134,15 +134,14 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
 /// tampering of `a_comm / b_comm / c_comm / e_comm` and the Hadamard
 /// evaluations.
 ///
-/// ## Evaluation sources (scaffold)
+/// ## Evaluation sources
 ///
 /// - `a_eval`, `b_eval`, `c_eval`, `e_eval`: parsed from
 ///   `proof.hadamard_evals` (4 × 32 B).
-/// - `w_eval`: scaffold stand-in — first public input (or zero if
-///   empty), matching the session-≤18 single-commit behavior.
-///
-/// Real Nova derives `w_eval` from the sumcheck sub-protocol; that
-/// refinement tracks in a future session alongside Spartan fold-in.
+/// - `w_eval`: session-23 dedicated 32-byte slot `proof.w_eval`
+///   carrying `W̃(ξ)` — the prover's claimed evaluation of the
+///   witness polynomial at the Spartan point. Sessions ≤22 used
+///   the first public input as a scaffold stand-in.
 ///
 /// ## Errors
 ///
@@ -177,11 +176,12 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
         fr_from_canonical_bytes(&proof.hadamard_evals[2 * FR_LEN..3 * FR_LEN])?;
     let e_eval =
         fr_from_canonical_bytes(&proof.hadamard_evals[3 * FR_LEN..4 * FR_LEN])?;
-    let w_eval = if proof.public_inputs.len() >= FR_LEN {
-        fr_from_canonical_bytes(&proof.public_inputs[..FR_LEN])?
-    } else {
-        Fr::from(0u64)
-    };
+    // Session 23: w_eval now comes from a dedicated 32-byte slot
+    // rather than the first public input.
+    if proof.w_eval.len() != FR_LEN {
+        return Err(OnChainError::ProofLengthMismatch);
+    }
+    let w_eval = fr_from_canonical_bytes(proof.w_eval)?;
 
     // v-powers: [1, v, v², v³, v⁴].
     let one = Fr::from(1u64);
@@ -268,6 +268,7 @@ mod tests {
             + sizes::SCALAR_LEN
             + 4 * sizes::G1_LEN // session-15-nova base commits
             + sizes::HADAMARD_EVALS_LEN
+            + sizes::W_EVAL_LEN
             + sizes::OPENING_LEN;
         let mut buf = vec![0u8; total];
         buf[0] = FoldingVariant::Nova as u8;

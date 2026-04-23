@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Nova `w_eval` dedicated canonical slot (session 23)** —
+  `NovaFoldingProof` gained a dedicated 32-byte `w_eval` field
+  between `hadamard_evals` and `aux_commits`. Sessions ≤22 derived
+  the witness evaluation from the first public input as a scaffold
+  stand-in; session 23 lifts it into a first-class slot carrying
+  the prover's claimed `W̃(ξ)`. The Spartan-batched opening
+  consumes `fr_from_canonical_bytes(proof.w_eval)` instead of
+  reusing `public_inputs[..32]`. Proof canonical layout grows by
+  32 B (+`W_EVAL_LEN`). New session-23 tamper test
+  `spartan_rejects_tampered_w_eval_slot` flips the dedicated slot
+  with `u=1, a=b=c=e=0` Hadamard-satisfying setup → the tampered
+  w_eval alone now propagates into `y_batched ≠ 0` while
+  `C_batched = 0`, failing the batched pairing identity.
+
+- **Shared `derive_fr_challenge` primitive (session 22)** —
+  Halo2 (session 17/20) and Nova (session 19) had three inlined
+  copies of the `keccak256(domain || inputs) → Fr` one-shot
+  challenge pattern for auxiliary challenges outside the main
+  round-based `Transcript`. Lifted into
+  `mosaic-zk-primitives::transcript::derive_fr_challenge`; each
+  verifier passes its own domain separator string so challenges
+  can't collide across protocols. Internally wraps
+  `SyscallBackend::keccak256` + `fr_from_be_bytes_reduced`. Three
+  new unit tests exercise determinism, domain-separation, and
+  input-sensitivity.
+
+### Breaking changes (post-v0.6.0)
+
+- `NovaFoldingProof` canonical layout grows by 32 B (new `w_eval`
+  slot between `hadamard_evals` and `aux_commits`). Previously-
+  serialized proofs require re-encoding. Fixture helpers in
+  `canonical.rs`, `challenges.rs`, `kzg.rs`, and `verifier.rs`
+  tests have all been updated to include the slot.
+
 ### Planned beyond v0.6.0-phase3-extended
 
 - **Fixture-driven differential testing** across all four Phase-3
@@ -16,8 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **HyperPlonk multi-point → univariate reduction** — Zeromorph /
   Pst / Gemini pinning in `kzg.rs` still uses the scaffold shortcut
   of the last sumcheck challenge as the univariate evaluation point.
-- **Nova `w_eval` from sumcheck** — current scaffold takes the first
-  public input; real Spartan derives it from the sumcheck tail.
 - **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
 
 ## [0.6.0-phase3-extended] — 2026-04-23

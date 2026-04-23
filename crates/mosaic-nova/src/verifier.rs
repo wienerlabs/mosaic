@@ -299,6 +299,7 @@ mod tests {
             + sizes::SCALAR_LEN
             + 4 * sizes::G1_LEN // session-15-nova base commits
             + sizes::HADAMARD_EVALS_LEN
+            + sizes::W_EVAL_LEN
             + aux_len
             + pi_len
             + sizes::OPENING_LEN;
@@ -521,6 +522,45 @@ mod tests {
         assert!(
             matches!(r, Err(OnChainError::PairingCheckFailed)),
             "tampered a_eval should fail Spartan-batched opening; \
+             got {r:?}",
+        );
+    }
+
+    /// Session 23: `proof.w_eval` is now a dedicated 32-byte slot
+    /// rather than derived from the first public input. The Spartan-
+    /// batched opening folds `v⁴·w_eval` into `y_batched`, so a
+    /// tampered non-zero `w_eval` with zero witness commit must
+    /// fail the batched pairing. Exercises the new slot directly.
+    #[test]
+    fn spartan_rejects_tampered_w_eval_slot() {
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = NovaFolding::new(&backend);
+        let vk = matching_vk(FoldingVariant::Nova, 0);
+        let mut proof = proof_bytes(FoldingVariant::Nova, 0, 0);
+
+        // Set u = 1 so the Hadamard residual 0·0 − 1·0 − 0 = 0 holds
+        // with a = b = c = e = 0. Then the verifier progresses to
+        // the Spartan-batched opening, where a tampered w_eval
+        // produces y_batched ≠ 0 with C_batched = 0 → pairing fails.
+        let u_off = sizes::FIXED_HEADER_LEN + sizes::FIXED_COMMITS_LEN;
+        let one_bytes = fr_to_canonical_bytes(&Fr::from(1u64));
+        proof[u_off..u_off + sizes::FR_LEN].copy_from_slice(&one_bytes);
+
+        // w_eval slot sits immediately after the hadamard_evals block.
+        // Layout offset: FIXED_HEADER + FIXED_COMMITS + SCALAR +
+        //   4·G1 (base commits) + HADAMARD_EVALS.
+        let w_eval_off = u_off
+            + sizes::FR_LEN
+            + 4 * sizes::G1_LEN
+            + sizes::HADAMARD_EVALS_LEN;
+        proof[w_eval_off..w_eval_off + sizes::FR_LEN].copy_from_slice(&one_bytes);
+
+        let pi = zero_pi(0);
+        let r = NovaFolding::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered w_eval slot should fail Spartan-batched opening; \
              got {r:?}",
         );
     }

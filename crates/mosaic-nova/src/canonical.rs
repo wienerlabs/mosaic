@@ -71,6 +71,13 @@ pub mod sizes {
     /// `a_eval ‖ b_eval ‖ c_eval ‖ e_eval` (4 × 32 B). Used by the
     /// verifier's residual check `A(ξ)·B(ξ) - u·C(ξ) - E(ξ) == 0`.
     pub const HADAMARD_EVALS_LEN: usize = 4 * FR_LEN;
+    /// Session-23: dedicated witness-commitment evaluation slot
+    /// `w_eval = W̃(ξ)` used by the Spartan-batched KZG opening. The
+    /// prover supplies this; the verifier folds it into the v-weighted
+    /// `y_batched` sum alongside a/b/c/e evals and checks consistency
+    /// via the pairing check. Sessions ≤22 derived `w_eval` from the
+    /// first public input as a scaffold stand-in.
+    pub const W_EVAL_LEN: usize = FR_LEN;
     /// Two opening commitments (W_xi, W_xiw).
     pub const OPENING_LEN: usize = 2 * G1_LEN;
     /// Max variant-specific aux commitments. HyperNova uses ~4 for
@@ -139,6 +146,11 @@ pub struct NovaFoldingProof<'a> {
     /// `a_eval ‖ b_eval ‖ c_eval ‖ e_eval` (4 × 32 B). Used by the
     /// verifier's residual check.
     pub hadamard_evals: &'a [u8],
+    /// Session-23: claimed witness evaluation `W̃(ξ)` (32 B Fr BE).
+    /// Consumed by the Spartan-batched KZG opening as the opening's
+    /// `w_eval` component. Sessions ≤22 used the first public input
+    /// as a scaffold stand-in.
+    pub w_eval: &'a [u8],
     /// Variant-specific extras (e.g. HyperNova higher-degree commits).
     pub aux_commits: &'a [u8],
     /// Public inputs concatenated (length = `n_public × 32`).
@@ -154,7 +166,7 @@ impl<'a> NovaFoldingProof<'a> {
     pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, OnChainError> {
         use sizes::{
             FIXED_COMMITS_LEN, FIXED_HEADER_LEN, FR_LEN, G1_LEN, HADAMARD_EVALS_LEN,
-            MAX_AUX_COMMITS, MAX_PUBLIC_INPUTS, OPENING_LEN, SCALAR_LEN,
+            MAX_AUX_COMMITS, MAX_PUBLIC_INPUTS, OPENING_LEN, SCALAR_LEN, W_EVAL_LEN,
         };
 
         // Session-15-nova: +4 G1 for base_e_1, base_e_2, base_w_1,
@@ -166,6 +178,7 @@ impl<'a> NovaFoldingProof<'a> {
             + SCALAR_LEN
             + base_commits_len
             + HADAMARD_EVALS_LEN
+            + W_EVAL_LEN
             + OPENING_LEN;
         if bytes.len() < minimum {
             return Err(OnChainError::ProofLengthMismatch);
@@ -191,6 +204,7 @@ impl<'a> NovaFoldingProof<'a> {
             + SCALAR_LEN
             + base_commits_len
             + HADAMARD_EVALS_LEN
+            + W_EVAL_LEN
             + aux_len
             + pi_len
             + OPENING_LEN;
@@ -219,6 +233,9 @@ impl<'a> NovaFoldingProof<'a> {
         off += G1_LEN;
         let hadamard_evals = &bytes[off..off + HADAMARD_EVALS_LEN];
         off += HADAMARD_EVALS_LEN;
+        // Session-23: dedicated witness-commitment evaluation slot.
+        let w_eval = &bytes[off..off + W_EVAL_LEN];
+        off += W_EVAL_LEN;
         let aux_commits = &bytes[off..off + aux_len];
         off += aux_len;
         let public_inputs = &bytes[off..off + pi_len];
@@ -240,6 +257,7 @@ impl<'a> NovaFoldingProof<'a> {
             base_w_1,
             base_w_2,
             hadamard_evals,
+            w_eval,
             aux_commits,
             public_inputs,
             w_xi,
@@ -365,7 +383,7 @@ mod tests {
     use alloc::vec;
     use sizes::{
         FIXED_COMMITS_LEN, FIXED_HEADER_LEN, FR_LEN, G1_LEN, G2_LEN, HADAMARD_EVALS_LEN,
-        OPENING_LEN, SCALAR_LEN,
+        OPENING_LEN, SCALAR_LEN, W_EVAL_LEN,
     };
 
     fn proof_bytes(variant: FoldingVariant, num_aux: u8, n_public: u16) -> Vec<u8> {
@@ -376,6 +394,7 @@ mod tests {
             + SCALAR_LEN
             + 4 * G1_LEN // session-15-nova base commits
             + HADAMARD_EVALS_LEN
+            + W_EVAL_LEN
             + aux_len
             + pi_len
             + OPENING_LEN;
