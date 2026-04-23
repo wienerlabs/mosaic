@@ -33,6 +33,21 @@ pub fn fr_from_canonical_bytes(bytes: &[u8]) -> Result<Fr, OnChainError> {
     Ok(Fr::from_be_bytes_mod_order(&in_range))
 }
 
+/// Reduce an arbitrary 32-byte big-endian input modulo the BN254
+/// scalar-field order `r`. Unlike [`fr_from_canonical_bytes`], this
+/// never fails — any input is mapped to a well-defined `Fr` via
+/// `from_be_bytes_mod_order`. Intended for consuming keccak/sha256
+/// digests as Fiat-Shamir challenges where the hash output is
+/// guaranteed to be 32 bytes but isn't necessarily in-range.
+///
+/// Naming mirrors `fr_from_canonical_bytes` but signals the
+/// reduction: callers that want strict canonical validation should
+/// use `fr_from_canonical_bytes` instead.
+#[must_use]
+pub fn fr_from_be_bytes_reduced(bytes: &[u8; 32]) -> Fr {
+    Fr::from_be_bytes_mod_order(bytes)
+}
+
 /// Encode an arkworks `Fr` as 32 big-endian bytes (canonical Mosaic
 /// layout). Inverse of [`fr_from_canonical_bytes`].
 #[must_use]
@@ -295,5 +310,39 @@ mod tests {
         assert_eq!(n, 1 << k, "n must be a power of 2 for this helper");
         let extra = Fr::TWO_ADICITY - k;
         two_adic.pow([1_u64 << extra])
+    }
+
+    // ---- fr_from_be_bytes_reduced ----
+
+    #[test]
+    fn fr_from_be_bytes_reduced_matches_canonical_for_in_range_input() {
+        // For any in-range 32-byte Fr encoding, the reduced helper
+        // must agree with the strict canonical decoder.
+        let mut rng = seeded_rng(1);
+        for _ in 0..8 {
+            let f = Fr::rand(&mut rng);
+            let canonical = fr_to_canonical_bytes(&f);
+            let canonical_arr: [u8; 32] = canonical;
+            let strict = fr_from_canonical_bytes(&canonical).unwrap();
+            let reduced = fr_from_be_bytes_reduced(&canonical_arr);
+            assert_eq!(strict, reduced);
+        }
+    }
+
+    #[test]
+    fn fr_from_be_bytes_reduced_accepts_out_of_range_input() {
+        // All-ones 32-byte input is definitely above the BN254 Fr
+        // modulus (≈ 2^254). `fr_from_canonical_bytes` must reject,
+        // but the reduced helper must succeed by taking value mod r.
+        let all_ones = [0xFFu8; 32];
+        let strict = fr_from_canonical_bytes(&all_ones);
+        assert!(matches!(strict, Err(OnChainError::PublicInputOutOfRange)));
+        let reduced = fr_from_be_bytes_reduced(&all_ones);
+        // The reduced value must be strictly less than the field
+        // modulus. Re-encoding it as canonical bytes and decoding
+        // strictly must succeed.
+        let canonical = fr_to_canonical_bytes(&reduced);
+        let strict2 = fr_from_canonical_bytes(&canonical).unwrap();
+        assert_eq!(reduced, strict2);
     }
 }

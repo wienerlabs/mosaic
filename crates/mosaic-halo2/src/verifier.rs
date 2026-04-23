@@ -72,7 +72,9 @@ use crate::{
 };
 use alloc::vec::Vec;
 use ark_bn254::Fr;
-use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
+use mosaic_zk_primitives::field::{
+    fr_from_be_bytes_reduced, fr_from_canonical_bytes, fr_to_canonical_bytes,
+};
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
@@ -207,7 +209,7 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
             &fr_to_canonical_bytes(&challenges.xi),
             proof.evaluations,
         ])?;
-        let v = into_fr(v_bytes);
+        let v = fr_from_be_bytes_reduced(&v_bytes);
 
         let u_bytes = self.backend.keccak256(&[
             b"mosaic-halo2/u",
@@ -216,7 +218,7 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
             proof.w_xi,
             proof.w_xiw,
         ])?;
-        let u = into_fr(u_bytes);
+        let u = fr_from_be_bytes_reduced(&u_bytes);
 
         verify_two_point_opening_multipoly(
             self.backend,
@@ -237,13 +239,6 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
     }
 }
 
-/// Reduce a 32-byte keccak digest into a BN254 Fr element by taking
-/// `value mod r`. Uses `Fr::from_be_bytes_mod_order` directly so any
-/// 32-byte input maps to a well-defined Fr without retry loops.
-fn into_fr(b: [u8; 32]) -> Fr {
-    use ark_ff::PrimeField;
-    Fr::from_be_bytes_mod_order(&b)
-}
 
 /// Commit ordering at ξ (scaffold): advice + lookup + permutation_z + quotient.
 /// Fixed selector commits + permutation σ commits live in the VK and are

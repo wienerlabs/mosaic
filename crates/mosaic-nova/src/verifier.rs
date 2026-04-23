@@ -86,7 +86,9 @@ use mosaic_core::{
     syscall::SyscallBackend,
     OnChainError,
 };
-use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
+use mosaic_zk_primitives::field::{
+    fr_from_be_bytes_reduced, fr_from_canonical_bytes, fr_to_canonical_bytes,
+};
 
 /// Nova-family folding verifier. Phase-3 scaffold.
 pub struct NovaFolding<'a, B: SyscallBackend + ?Sized> {
@@ -212,7 +214,7 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
             proof.w_comm,
             proof.e_comm,
         ])?;
-        let v = into_fr(v_bytes);
+        let v = fr_from_be_bytes_reduced(&v_bytes);
         verify_spartan_batched_opening(
             self.backend,
             &vk,
@@ -225,13 +227,6 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
     }
 }
 
-/// Reduce a 32-byte keccak digest into a BN254 Fr element via
-/// `from_be_bytes_mod_order`. Mirrors the helper in mosaic-halo2's
-/// verifier — both consume keccak output for challenges.
-fn into_fr(b: [u8; 32]) -> ark_bn254::Fr {
-    use ark_ff::PrimeField;
-    ark_bn254::Fr::from_be_bytes_mod_order(&b)
-}
 
 impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for NovaFolding<'_, B> {
     fn proof_system_id(&self) -> ProofSystemId {
