@@ -48,6 +48,28 @@ pub fn fr_from_be_bytes_reduced(bytes: &[u8; 32]) -> Fr {
     Fr::from_be_bytes_mod_order(bytes)
 }
 
+/// Encode a `u64` as a canonical 32-byte big-endian Fr element.
+///
+/// Const-evaluable so it can seed `HyperPlonkVerifyingKey`-style VK
+/// fields from constants (e.g. the `(k_1, k_2, k_3) = (1, 2, 3)`
+/// default permutation-coset triple). For non-const callers,
+/// `fr_to_canonical_bytes(&Fr::from(n))` is equivalent and slightly
+/// shorter to type.
+#[must_use]
+pub const fn fr_be_from_u64(n: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let bytes = n.to_be_bytes();
+    out[24] = bytes[0];
+    out[25] = bytes[1];
+    out[26] = bytes[2];
+    out[27] = bytes[3];
+    out[28] = bytes[4];
+    out[29] = bytes[5];
+    out[30] = bytes[6];
+    out[31] = bytes[7];
+    out
+}
+
 /// Encode an arkworks `Fr` as 32 big-endian bytes (canonical Mosaic
 /// layout). Inverse of [`fr_from_canonical_bytes`].
 #[must_use]
@@ -326,6 +348,30 @@ mod tests {
             let strict = fr_from_canonical_bytes(&canonical).unwrap();
             let reduced = fr_from_be_bytes_reduced(&canonical_arr);
             assert_eq!(strict, reduced);
+        }
+    }
+
+    // ---- fr_be_from_u64 ----
+
+    #[test]
+    fn fr_be_from_u64_matches_arkworks_encoding() {
+        // For any u64, the const helper must produce the same
+        // canonical BE encoding as `fr_to_canonical_bytes(&Fr::from(n))`.
+        for &n in &[0u64, 1, 2, 3, 42, 255, 256, 1 << 32, u64::MAX] {
+            let via_const = fr_be_from_u64(n);
+            let via_arkworks = fr_to_canonical_bytes(&Fr::from(n));
+            assert_eq!(via_const, via_arkworks, "mismatch for n = {n}");
+        }
+    }
+
+    #[test]
+    fn fr_be_from_u64_round_trips_through_canonical_decoder() {
+        // A value produced by fr_be_from_u64 must round-trip through
+        // the strict decoder — the encoding is definitely in-range.
+        for &n in &[0u64, 1, 42, u64::MAX] {
+            let bytes = fr_be_from_u64(n);
+            let decoded = fr_from_canonical_bytes(&bytes).unwrap();
+            assert_eq!(decoded, Fr::from(n));
         }
     }
 

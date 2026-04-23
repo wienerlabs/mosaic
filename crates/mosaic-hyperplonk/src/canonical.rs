@@ -238,19 +238,15 @@ impl HyperPlonkVerifyingKey {
     /// Canonical BE-encoded Fr for the small integer `n`. Used to build
     /// the default `(k_1, k_2, k_3) = (1, 2, 3)` cosets in tests; real
     /// circuits pick distinct cosets via the VK ceremony.
+    ///
+    /// Session-24 forwards to the shared
+    /// [`mosaic_zk_primitives::field::fr_be_from_u64`] primitive. The
+    /// thin wrapper stays on this VK impl for discoverability —
+    /// callers reading the VK definition see the helper without
+    /// cross-referencing a different crate.
     #[must_use]
     pub const fn fr_be_from_u64(n: u64) -> [u8; sizes::FR_LEN] {
-        let mut out = [0u8; sizes::FR_LEN];
-        let bytes = n.to_be_bytes();
-        out[24] = bytes[0];
-        out[25] = bytes[1];
-        out[26] = bytes[2];
-        out[27] = bytes[3];
-        out[28] = bytes[4];
-        out[29] = bytes[5];
-        out[30] = bytes[6];
-        out[31] = bytes[7];
-        out
+        mosaic_zk_primitives::field::fr_be_from_u64(n)
     }
 
     /// Serialized VK length:
