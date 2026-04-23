@@ -38,7 +38,10 @@ use mosaic_core::{
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
-    msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1, verify_two_pair_pairing},
+    msm::{
+        add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1,
+        verify_two_pair_pairing,
+    },
 };
 
 /// Scaffold single-commitment KZG opening check for a folded Nova
@@ -76,14 +79,10 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
     };
 
     // Build LHS G1 arg: W - y·G1 + ξ·W_ξ.
-    let g1_gen = g1_generator_bytes();
     let y_bytes = fr_to_canonical_bytes(&y);
-    let y_g1 = scalar_mul_g1(backend, &g1_gen, &y_bytes)?;
-    let neg_y_g1 = negate_g1(&y_g1);
-
     let mut w_arr = [0u8; G1_LEN];
     w_arr.copy_from_slice(proof.w_comm);
-    let w_minus_y = add_g1(backend, &w_arr, &neg_y_g1)?;
+    let w_minus_y = commitment_minus_scalar_g1(backend, &w_arr, &y_bytes)?;
 
     let xi_bytes = fr_to_canonical_bytes(xi);
     let mut wxi_arr = [0u8; G1_LEN];
@@ -199,10 +198,11 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
 
     // Pairing reduction: e(C_batched - y_batched·G1 + ξ·W_ξ, G2)
     //                  · e(-W_ξ, x2_G2) ?= 1.
-    let g1_gen = g1_generator_bytes();
-    let y_g1 =
-        scalar_mul_g1(backend, &g1_gen, &fr_to_canonical_bytes(&y_batched))?;
-    let c_minus_y = add_g1(backend, &c_batched, &negate_g1(&y_g1))?;
+    let c_minus_y = commitment_minus_scalar_g1(
+        backend,
+        &c_batched,
+        &fr_to_canonical_bytes(&y_batched),
+    )?;
     let mut wxi_arr = [0u8; G1_LEN];
     wxi_arr.copy_from_slice(proof.w_xi);
     let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &fr_to_canonical_bytes(xi))?;

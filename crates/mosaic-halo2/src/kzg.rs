@@ -43,7 +43,10 @@ use mosaic_core::{
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
-    msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1, verify_two_pair_pairing},
+    msm::{
+        add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1,
+        verify_two_pair_pairing,
+    },
 };
 
 /// Scaffold single-point KZG opening check.
@@ -80,14 +83,9 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
     let y = fr_from_canonical_bytes(&proof.evaluations[..FR_LEN])?;
     let y_bytes = fr_to_canonical_bytes(&y);
 
-    // C - y·G1.
-    let g1_gen = g1_generator_bytes();
-    let y_g1 = scalar_mul_g1(backend, &g1_gen, &y_bytes)?;
-    let neg_y_g1 = negate_g1(&y_g1);
-
     let mut c_arr = [0u8; G1_LEN];
     c_arr.copy_from_slice(proof.permutation_z);
-    let c_minus_y = add_g1(backend, &c_arr, &neg_y_g1)?;
+    let c_minus_y = commitment_minus_scalar_g1(backend, &c_arr, &y_bytes)?;
 
     // ξ·W_ξ.
     let xi_bytes = fr_to_canonical_bytes(xi);
@@ -178,16 +176,15 @@ pub fn verify_two_point_opening_scaffold<B: SyscallBackend + ?Sized>(
     )?;
 
     // C - y·G1 for each opening point.
-    let g1_gen = g1_generator_bytes();
-    let y_xi_g1 = scalar_mul_g1(backend, &g1_gen, &fr_to_canonical_bytes(&y_xi))?;
-    let y_xi_omega_g1 =
-        scalar_mul_g1(backend, &g1_gen, &fr_to_canonical_bytes(&y_xi_omega))?;
-
     let mut c_arr = [0u8; G1_LEN];
     c_arr.copy_from_slice(proof.permutation_z);
-
-    let c_minus_y_xi = add_g1(backend, &c_arr, &negate_g1(&y_xi_g1))?;
-    let c_minus_y_xi_omega = add_g1(backend, &c_arr, &negate_g1(&y_xi_omega_g1))?;
+    let c_minus_y_xi =
+        commitment_minus_scalar_g1(backend, &c_arr, &fr_to_canonical_bytes(&y_xi))?;
+    let c_minus_y_xi_omega = commitment_minus_scalar_g1(
+        backend,
+        &c_arr,
+        &fr_to_canonical_bytes(&y_xi_omega),
+    )?;
 
     // ξ·W_ξ  +  ξω·W_ξω
     let mut wxi_arr = [0u8; G1_LEN];
@@ -332,18 +329,16 @@ pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
     // From here, the pairing reduction matches session-16 exactly,
     // substituting the batched (C, y) pairs for the single-commit
     // scaffold choice.
-    let g1_gen = g1_generator_bytes();
-    let y_xi_g1 =
-        scalar_mul_g1(backend, &g1_gen, &fr_to_canonical_bytes(&y_xi_batched))?;
-    let y_xi_omega_g1 = scalar_mul_g1(
+    let c_minus_y_xi = commitment_minus_scalar_g1(
         backend,
-        &g1_gen,
+        &c_xi_batched,
+        &fr_to_canonical_bytes(&y_xi_batched),
+    )?;
+    let c_minus_y_xi_omega = commitment_minus_scalar_g1(
+        backend,
+        &c_xi_omega_batched,
         &fr_to_canonical_bytes(&y_xi_omega_batched),
     )?;
-
-    let c_minus_y_xi = add_g1(backend, &c_xi_batched, &negate_g1(&y_xi_g1))?;
-    let c_minus_y_xi_omega =
-        add_g1(backend, &c_xi_omega_batched, &negate_g1(&y_xi_omega_g1))?;
 
     let mut wxi_arr = [0u8; G1_LEN];
     wxi_arr.copy_from_slice(w_xi);

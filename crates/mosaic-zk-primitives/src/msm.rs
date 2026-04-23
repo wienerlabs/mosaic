@@ -37,6 +37,32 @@ use mosaic_core::{
 /// curve. `alt_bn128_group_op` treats this as the additive neutral.
 pub const G1_ZERO: [u8; 64] = [0u8; 64];
 
+/// Compute `C - y·G1` — a commitment with the claimed evaluation
+/// scalar-multiplied out of its value. This is the KZG opening
+/// "C minus y times generator" step that appears identically in
+/// every multivariate / univariate opening across mosaic-halo2,
+/// mosaic-nova, and mosaic-hyperplonk.
+///
+/// Internally: `scalar_mul_g1(g1, y)` → `negate_g1` → `add_g1(C, -y·G1)`.
+/// Three syscalls (G1Mul + G1Add; negation is a pure-byte flip of the
+/// y-coordinate).
+///
+/// ## Errors
+///
+/// Propagates any syscall / length errors from the underlying
+/// [`scalar_mul_g1`] and [`add_g1`] primitives.
+pub fn commitment_minus_scalar_g1<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    commitment: &[u8; 64],
+    scalar_bytes: &[u8; 32],
+) -> Result<[u8; 64], OnChainError> {
+    use crate::g1_consts::g1_generator_bytes;
+    let g1 = g1_generator_bytes();
+    let y_g1 = scalar_mul_g1(backend, &g1, scalar_bytes)?;
+    let neg_y_g1 = negate_g1(&y_g1);
+    add_g1(backend, commitment, &neg_y_g1)
+}
+
 /// BN254 alt_bn128 2-pair pairing identity check: returns `Ok(())`
 /// when `e(p1_g1, p1_g2) · e(p2_g1, p2_g2) == 1` in the Fq12 target,
 /// `Err(PairingCheckFailed)` otherwise.
@@ -349,6 +375,35 @@ mod tests {
             scalar_mul_g1(&backend, &short, &scalar),
             Err(OnChainError::InvalidPointEncoding),
         ));
+    }
+
+    // ---- commitment_minus_scalar_g1 ----
+
+    #[test]
+    fn commitment_minus_zero_returns_commitment() {
+        // C - 0·G1 = C: subtracting zero is a no-op.
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let zero = [0u8; 32];
+        let r = commitment_minus_scalar_g1(&backend, &g1, &zero).unwrap();
+        assert_eq!(r, g1, "C - 0·G1 must equal C");
+    }
+
+    #[test]
+    fn commitment_minus_one_equals_negate() {
+        // G1 - 1·G1 = G1 - G1 = identity (zero point).
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let one_bytes = {
+            let mut b = [0u8; 32];
+            b[31] = 1;
+            b
+        };
+        let r = commitment_minus_scalar_g1(&backend, &g1, &one_bytes).unwrap();
+        assert_eq!(
+            r, G1_ZERO,
+            "G1 - 1·G1 must reduce to the identity point"
+        );
     }
 
     // ---- verify_two_pair_pairing ----
