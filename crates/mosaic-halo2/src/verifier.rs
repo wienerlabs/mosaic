@@ -360,11 +360,39 @@ impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for Halo2Kz
         Self::verify(self, vk_bytes, proof_bytes, public_inputs_bytes)
     }
 
-    fn estimated_compute_units(&self, _vk: &[u8], _proof: &[u8]) -> Option<u32> {
-        // ADR-0005 budget: ≤700 000 CU. Returning the upper bound so
-        // callers sizing compute_unit_limit have a safe default until
-        // the Phase 3 implementation provides a tight per-proof estimate.
-        Some(700_000)
+    fn estimated_compute_units(&self, vk: &[u8], proof: &[u8]) -> Option<u32> {
+        // Session 29: parse VK + proof to derive a proof-shape-aware
+        // estimate. Decomposition (ADR-0005 algorithmic model):
+        //   base (parse + vanishing + pairing) ≈ 90 000 CU
+        //   per commit in the multi-poly MSM    ≈  4 000 CU
+        //   per Fr evaluation in y_batched      ≈    250 CU
+        // Commits counted: advice + lookup + permutation_z + quotient
+        // (proof-side) + vk.fixed_commits + vk.permutation_commits
+        // (VK-side, session 20). Evals: proof.n_evals.
+        //
+        // Clamped to the ADR-0005 hard cap (700 000) on the high end
+        // and a conservative floor (120 000) on the low end to give
+        // callers meaningful headroom. Real per-proof CU drops in
+        // when fixture-driven bpf-bench targets land.
+        use crate::canonical::sizes::G1_LEN;
+        let vk_parsed = Halo2KzgVerifyingKey::from_bytes(vk).ok()?;
+        let proof_parsed = Halo2KzgProof::from_bytes(proof).ok()?;
+        let n_fixed = (vk_parsed.fixed_commits.len() / G1_LEN) as u32;
+        let n_perm = (vk_parsed.permutation_commits.len() / G1_LEN) as u32;
+        let commit_count = proof_parsed
+            .n_advice
+            .saturating_add(proof_parsed.n_lookups)
+            .saturating_add(1) // permutation_z
+            .saturating_add(proof_parsed.n_quotient)
+            .saturating_add(n_fixed)
+            .saturating_add(n_perm);
+        let base = 90_000_u32;
+        let per_commit = 4_000_u32;
+        let per_eval = 250_u32;
+        let est = base
+            .saturating_add(per_commit.saturating_mul(commit_count))
+            .saturating_add(per_eval.saturating_mul(proof_parsed.n_evals));
+        Some(est.clamp(120_000, 700_000))
     }
 }
 
@@ -675,12 +703,32 @@ mod tests {
     }
 
     #[test]
-    fn estimated_cu_returns_adr_target() {
+    fn estimated_cu_returns_none_for_unparseable_input() {
+        // Session 29: estimator parses VK + proof to derive a shape-
+        // aware estimate. Empty inputs fail canonical parsing → None.
+        // Callers sizing compute_unit_limit should either supply real
+        // bytes or fall back to the ADR-0005 hard cap (700 000).
         let backend = MockBackend;
         let v = Halo2KzgBn254::new(&backend);
         assert_eq!(
             ProofSystem::estimated_compute_units(&v, &[], &[]),
-            Some(700_000),
+            None,
+        );
+    }
+
+    #[test]
+    fn estimated_cu_clamps_within_session29_bounds() {
+        // For a realistic proof shape, the estimator must land in
+        // the [120_000, 700_000] clamp range.
+        let backend = MockBackend;
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let proof = dummy_proof_bytes_typical();
+        let est = ProofSystem::estimated_compute_units(&v, &vk, &proof);
+        let n = est.expect("parseable inputs should yield Some estimate");
+        assert!(
+            (120_000..=700_000).contains(&n),
+            "estimate {n} out of [120_000, 700_000] clamp range"
         );
     }
 

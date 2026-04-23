@@ -243,11 +243,28 @@ impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for NovaFol
         Self::verify(self, vk_bytes, proof_bytes, public_inputs_bytes)
     }
 
-    fn estimated_compute_units(&self, _vk: &[u8], _proof: &[u8]) -> Option<u32> {
-        // ADR-0005 budget: ≤900 000 CU. Returning the upper bound so
-        // callers sizing compute_unit_limit have a safe default until
-        // the Phase-3 implementation provides a tight estimate.
-        Some(900_000)
+    fn estimated_compute_units(&self, vk: &[u8], proof: &[u8]) -> Option<u32> {
+        // Session 29: parse VK + proof to derive a shape-aware
+        // estimate. Nova cost decomposition (Spartan-batched scheme):
+        //   base (parse + challenges + pairing)  ≈ 100 000 CU
+        //   Hadamard residual + fold check       ≈  25 000 CU
+        //   folded_commitment_from_fold (3 MSMs) ≈  15 000 CU
+        //   Spartan 5-way MSM (a/b/c/e/w)        ≈  20 000 CU
+        //   per aux commit (HyperNova extras)    ≈   4 000 CU
+        //   per public input in transcript       ≈     250 CU
+        //
+        // Clamped to [150_000, 900_000].
+        let _vk_parsed = NovaFoldingVerifyingKey::from_bytes(vk).ok()?;
+        let proof_parsed = NovaFoldingProof::from_bytes(proof).ok()?;
+        let base = 100_000_u32;
+        let core_arithmetic = 25_000_u32 + 15_000_u32 + 20_000_u32;
+        let aux_cost = 4_000_u32 * u32::from(proof_parsed.num_aux_commits);
+        let pi_cost = 250_u32 * u32::from(proof_parsed.n_public);
+        let est = base
+            .saturating_add(core_arithmetic)
+            .saturating_add(aux_cost)
+            .saturating_add(pi_cost);
+        Some(est.clamp(150_000, 900_000))
     }
 }
 
@@ -608,12 +625,28 @@ mod tests {
     }
 
     #[test]
-    fn estimated_cu_returns_adr_target() {
+    fn estimated_cu_returns_none_for_unparseable_input() {
+        // Session 29: estimator parses VK + proof to derive a shape-
+        // aware estimate. Empty inputs fail parsing → None.
         let backend = MockBackend;
         let v = NovaFolding::new(&backend);
         assert_eq!(
             ProofSystem::estimated_compute_units(&v, &[], &[]),
-            Some(900_000),
+            None,
+        );
+    }
+
+    #[test]
+    fn estimated_cu_clamps_within_session29_bounds() {
+        let backend = MockBackend;
+        let v = NovaFolding::new(&backend);
+        let vk = matching_vk(FoldingVariant::Nova, 2);
+        let proof = proof_bytes(FoldingVariant::Nova, 0, 2);
+        let est = ProofSystem::estimated_compute_units(&v, &vk, &proof);
+        let n = est.expect("parseable inputs should yield Some estimate");
+        assert!(
+            (150_000..=900_000).contains(&n),
+            "estimate {n} out of [150_000, 900_000] clamp range"
         );
     }
 

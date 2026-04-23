@@ -333,11 +333,32 @@ impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem
         Self::verify(self, vk_bytes, proof_bytes, public_inputs_bytes)
     }
 
-    fn estimated_compute_units(&self, _vk: &[u8], _proof: &[u8]) -> Option<u32> {
-        // ADR-0005 budget: ≤900 000 CU. Returning the upper bound so
-        // callers sizing compute_unit_limit have a safe default until
-        // the Phase 3 implementation provides a tight per-proof estimate.
-        Some(900_000)
+    fn estimated_compute_units(&self, vk: &[u8], proof: &[u8]) -> Option<u32> {
+        // Session 29: parse VK + proof to derive a shape-aware
+        // estimate. HyperPlonk cost dominated by the sumcheck rounds
+        // and the 12-way MSM over the fixed final_evals bundle:
+        //   base (parse + keccak + pairing)   ≈ 80 000 CU
+        //   per sumcheck round (absorb + sq)  ≈ 10 000 CU
+        //   per commit in the 12-commit MSM   ≈  4 000 CU (× 12 = 48K)
+        //   per eval in the 12-eval dot       ≈    250 CU (× 12 ≈ 3K)
+        // Number of sumcheck rounds = vk.num_variables.
+        //
+        // Clamped to [150_000, 900_000] — floor gives callers safe
+        // headroom for tiny circuits; cap matches the ADR-0005 hard
+        // cap until fixture-driven bpf-bench targets refine it.
+        let vk_parsed = HyperPlonkVerifyingKey::from_bytes(vk).ok()?;
+        let proof_parsed = HyperPlonkProof::from_bytes(proof).ok()?;
+        let _ = proof_parsed; // proof shape feeds transcript sizing
+        let rounds = vk_parsed.num_variables;
+        let base = 80_000_u32;
+        let per_round = 10_000_u32;
+        let msm_total = 4_000_u32 * 12;
+        let eval_total = 250_u32 * 12;
+        let est = base
+            .saturating_add(per_round.saturating_mul(rounds))
+            .saturating_add(msm_total)
+            .saturating_add(eval_total);
+        Some(est.clamp(150_000, 900_000))
     }
 }
 
@@ -551,12 +572,29 @@ mod tests {
     }
 
     #[test]
-    fn estimated_cu_returns_adr_target() {
+    fn estimated_cu_returns_none_for_unparseable_input() {
+        // Session 29: estimator parses VK + proof to derive a shape-
+        // aware estimate over sumcheck round count. Empty inputs
+        // fail parsing → None.
         let backend = NeverBackend;
         let v = HyperPlonkKzgBn254::new(&backend);
         assert_eq!(
             ProofSystem::estimated_compute_units(&v, &[], &[]),
-            Some(900_000),
+            None,
+        );
+    }
+
+    #[test]
+    fn estimated_cu_clamps_within_session29_bounds() {
+        let backend = NeverBackend;
+        let v = HyperPlonkKzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let proof = dummy_proof_bytes_10_rounds();
+        let est = ProofSystem::estimated_compute_units(&v, &vk, &proof);
+        let n = est.expect("parseable inputs should yield Some estimate");
+        assert!(
+            (150_000..=900_000).contains(&n),
+            "estimate {n} out of [150_000, 900_000] clamp range"
         );
     }
 
