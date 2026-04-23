@@ -16,6 +16,7 @@ surfaces before the final structural check.
 | HyperPlonk-KZG | Permutation term at ξ | `SumcheckFailed` | [`verifier.rs`](../crates/mosaic-hyperplonk/src/verifier.rs) — `permutation_term` |
 | Halo2-KZG | Vanishing identity `t(ξ)·Z_H(ξ) ?= combined_expr` | `SumcheckFailed` | [`verifier.rs`](../crates/mosaic-halo2/src/verifier.rs) |
 | Halo2-KZG | Two-point batched opening at `(ξ, ξω)` | `PairingCheckFailed` | [`kzg.rs`](../crates/mosaic-halo2/src/kzg.rs) — `verify_two_point_opening_scaffold` |
+| Halo2-KZG | Multi-poly `v`-weighted MSM batching (session 17) | `PairingCheckFailed` | [`kzg.rs`](../crates/mosaic-halo2/src/kzg.rs) — `verify_two_point_opening_multipoly` |
 | Nova / HyperNova / ProtoStar | Hadamard residual `a·b − u·c − e ?= 0` | `SumcheckFailed` | [`folding.rs`](../crates/mosaic-nova/src/folding.rs) — `hadamard_residual` |
 | Nova / HyperNova / ProtoStar | Folded-commitment reconstruction `E_1 + r·E_2 + r²·T ?= E_folded` | `VerificationFailed` | [`folding.rs`](../crates/mosaic-nova/src/folding.rs) — `folded_commitment_from_fold` |
 | FRI-STARK | Structural query-index derivation | `ProofLengthMismatch` | [`challenges.rs`](../crates/mosaic-stark/src/challenges.rs) — `derive_query_indices` |
@@ -121,10 +122,37 @@ W_ξω). A single 2-pair `alt_bn128_pairing` syscall covers both
 opening points. `ω = VK.omega_fr` — added to the canonical in
 session 16 as the BN254 Fr primitive `2^k`-th root of unity.
 
+**Multi-poly `v`-weighted MSM batching (session 17)** —
+`kzg::verify_two_point_opening_multipoly` replaces the session-16
+single-commitment scaffold with full multi-poly batching:
+
+```text
+v-powers:    [1, v, v^2, …, v^{m-1}]
+C_ξ_batched  = Σ_i v^i · commits_at_ξ[i]    // MSM
+y_ξ_batched  = Σ_i v^i · evals_at_ξ[i]      // Fr dot product
+C_ξω_batched = Σ_j v^j · commits_at_ξω[j]
+y_ξω_batched = Σ_j v^j · evals_at_ξω[j]
+// A1/A2/A_batched/W_batched as before with batched (C, y) pairs
+```
+
+`verifier.rs` collects commits_at_ξ = advice + lookup + permutation_z
++ quotient chunks; commits_at_ξω = [permutation_z] (only poly that
+evaluates at the shifted point in vanilla Halo2). Each commit is
+paired 1:1 with its matching bundle evaluation per the scaffold map
+in `collect_evals_at_xi`. `v` and `u` batching challenges are both
+derived via domain-separated keccak over the current transcript
+state + the respective opening-proof bytes.
+
+The session-17 test `multipoly_rejects_tampered_advice_commit`
+verifies tampering a single advice G1 byte (generator swap) hits
+`PairingCheckFailed`. `multipoly_rejects_tampered_wire_a_evaluation`
+verifies the symmetric path — non-zero wire eval with zero commit
+also fails.
+
 **Scaffold caveats (remaining):**
-- `C_ξ` and `C_ξω` use `proof.permutation_z` as single-commitment
-  stand-ins; real Halo2 batches all committed polys via a `v`
-  challenge.
+- Fixed selector + permutation σ commits from the VK aren't yet
+  in the multi-poly batching; they live VK-side without matching
+  commit bytes in the scaffold canonical.
 - Hardcoded permutation cosets (same as HyperPlonk).
 - Scaffold evaluation-bundle layout.
 
@@ -249,7 +277,9 @@ the coverage surface.
 | Sumcheck identity | `mosaic-hyperplonk::sumcheck::verify_sumcheck_rejects_tampered_first_round` |
 | Permutation term | `mosaic-hyperplonk::verifier::rejects_tampered_sigma_commitment` |
 | Halo2 vanishing | `mosaic-halo2::verifier::rejects_tampered_gate_coefficient` |
-| Halo2 two-point opening | (pending specific test; shares coverage with vanishing) |
+| Halo2 two-point opening (session 16) | `mosaic-halo2::kzg::two_point_rejects_tampered_z_next_eval` |
+| Halo2 multi-poly MSM (advice commit) | `mosaic-halo2::verifier::multipoly_rejects_tampered_advice_commit` |
+| Halo2 multi-poly MSM (wire evaluation) | `mosaic-halo2::verifier::multipoly_rejects_tampered_wire_a_evaluation` |
 | Hadamard residual | `mosaic-nova::verifier::rejects_tampered_hadamard_evals` |
 | Nova fold reconstruction | `mosaic-nova::verifier::rejects_tampered_base_e_commitment` |
 | Trace Merkle | `mosaic-stark::verifier::rejects_mismatched_trace_merkle_leaf` |

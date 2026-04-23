@@ -63,13 +63,15 @@
 //! - `mosaic_zk_primitives::g1_consts` — G1/G2 generator bytes for pairing
 
 use crate::{
-    bundle::EvaluationBundle,
+    bundle::{idx, EvaluationBundle},
     canonical::{Halo2KzgProof, Halo2KzgVerifyingKey},
     challenges::derive_challenges,
     circuit::combined_expr,
-    kzg::verify_two_point_opening_scaffold,
+    kzg::verify_two_point_opening_multipoly,
     vanishing::{compute_t_from_chunks, compute_z_h, vanishing_identity_holds},
 };
+use alloc::vec::Vec;
+use ark_bn254::Fr;
 use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
@@ -165,46 +167,134 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
             return Err(OnChainError::SumcheckFailed);
         }
 
-        // 5. Session-16: two-point batched KZG opening at (ξ, ξω).
-        //    The second opening point ξω is needed for polynomials
-        //    that evaluate at adjacent rows (e.g. the permutation
-        //    grand-product z(ξω) = z_next). We derive a `u` batching
-        //    challenge from the transcript after the σ (=ξ) phase,
-        //    using the VK's ω generator to compute ξω = ξ · ω.
+        // 5. Session-17: multi-poly two-point batched KZG opening.
+        //    The evolutionary upgrade over session-16 batches every
+        //    committed polynomial via a `v` challenge before the
+        //    two-point (ξ, ξω) reduction's second `u` challenge.
+        //
+        //    Tampering with any advice / lookup / quotient commit or
+        //    its paired evaluation now propagates into the batched
+        //    pairing → PairingCheckFailed (structurally matches PSE
+        //    `halo2_proofs::plonk::verify_proof`).
         let omega = fr_from_canonical_bytes(&vk.omega_fr)?;
         let xi_omega = challenges.xi * omega;
 
-        // Derive `u` batching challenge. Uses a deterministic keccak
-        // of (xi || omega || w_xi || w_xiw) — domain-separated from
-        // the other transcript rounds.
+        // Canonical commit/eval ordering at ξ (matches the bundle
+        // layout that the vanishing identity consumed). Scaffold-
+        // level mapping — fixed/permutation VK commits are not
+        // included until the VK grows commit-side fields.
+        let commits_xi = collect_commits_at_xi(&proof)?;
+        let evals_xi = collect_evals_at_xi(
+            &bundle,
+            proof.n_advice as usize,
+            proof.n_lookups as usize,
+        );
+
+        // At ξω only the permutation grand-product shifts.
+        let commits_xi_omega: [&[u8]; 1] = [proof.permutation_z];
+        let evals_xi_omega: [Fr; 1] = [bundle.permutation.z_next];
+
+        // `v` = multi-poly batching challenge; `u` = two-point
+        // batching challenge. Both derived via domain-separated
+        // keccak so tampering with any ingredient re-rolls them.
+        let v_bytes = self.backend.keccak256(&[
+            b"mosaic-halo2/v",
+            &fr_to_canonical_bytes(&challenges.xi),
+            proof.evaluations,
+        ])?;
+        let v = into_fr(v_bytes);
+
         let u_bytes = self.backend.keccak256(&[
+            b"mosaic-halo2/u",
             &fr_to_canonical_bytes(&challenges.xi),
             &vk.omega_fr,
             proof.w_xi,
             proof.w_xiw,
         ])?;
-        // Reduce into BN254 Fr range.
-        let u = fr_from_canonical_bytes(&u_bytes).unwrap_or(
-            fr_from_canonical_bytes(&{
-                let mut b = u_bytes;
-                // Clear top bit to force into-range for any pathological
-                // keccak output (BN254 Fr is slightly less than 2^254).
-                b[0] &= 0x3F;
-                b
-            })?,
-        );
+        let u = into_fr(u_bytes);
 
-        verify_two_point_opening_scaffold(
+        verify_two_point_opening_multipoly(
             self.backend,
             &vk,
-            &proof,
+            &commits_xi,
+            &evals_xi,
+            &commits_xi_omega,
+            &evals_xi_omega,
+            proof.w_xi,
+            proof.w_xiw,
             &challenges.xi,
             &xi_omega,
+            &v,
             &u,
         )?;
 
         Ok(())
     }
+}
+
+/// Reduce a 32-byte keccak digest into a BN254 Fr element by taking
+/// `value mod r`. Uses `Fr::from_be_bytes_mod_order` directly so any
+/// 32-byte input maps to a well-defined Fr without retry loops.
+fn into_fr(b: [u8; 32]) -> Fr {
+    use ark_ff::PrimeField;
+    Fr::from_be_bytes_mod_order(&b)
+}
+
+/// Commit ordering at ξ (scaffold): advice + lookup + permutation_z + quotient.
+/// Fixed selector commits + permutation σ commits live in the VK and are
+/// paired only structurally; they aren't batched at the proof-side MSM
+/// until VK-side commit bytes are wired through.
+fn collect_commits_at_xi<'a>(
+    proof: &'a Halo2KzgProof<'a>,
+) -> Result<Vec<&'a [u8]>, OnChainError> {
+    let mut out: Vec<&'a [u8]> = Vec::with_capacity(
+        proof.n_advice as usize
+            + proof.n_lookups as usize
+            + 1
+            + proof.n_quotient as usize,
+    );
+    use crate::canonical::sizes::G1_LEN;
+    for a in proof.advice_iter() {
+        out.push(a);
+    }
+    for l in proof.lookup_commits.chunks_exact(G1_LEN) {
+        out.push(l);
+    }
+    out.push(proof.permutation_z);
+    for h in proof.quotient_iter() {
+        out.push(h);
+    }
+    Ok(out)
+}
+
+/// Evaluation ordering at ξ paired 1:1 to `collect_commits_at_xi`:
+/// - advice[i] ↔ wires A/B/C (clamped to `min(i, 2)`; extra advice
+///   columns reuse the last wire evaluation as a scaffold placeholder
+///   — real Halo2 has a matching per-column eval)
+/// - lookup commits ↔ LOOKUP_M evaluation repeated per lookup
+///   (scaffold: bundle carries one combined lookup_m eval)
+/// - permutation_z ↔ Z
+/// - quotient chunks ↔ FIXED_SLOTS+i quotient evaluations
+fn collect_evals_at_xi(
+    bundle: &EvaluationBundle,
+    n_advice: usize,
+    n_lookups: usize,
+) -> Vec<Fr> {
+    let wire_evals = [bundle.wires.a, bundle.wires.b, bundle.wires.c];
+    let mut out = Vec::with_capacity(
+        n_advice + n_lookups + 1 + bundle.quotient_chunks.len(),
+    );
+    for i in 0..n_advice {
+        out.push(wire_evals[i.min(idx::C)]);
+    }
+    for _ in 0..n_lookups {
+        out.push(bundle.lookup.m);
+    }
+    out.push(bundle.permutation.z);
+    for q in &bundle.quotient_chunks {
+        out.push(*q);
+    }
+    out
 }
 
 impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for Halo2KzgBn254<'_, B> {
@@ -292,10 +382,16 @@ mod tests {
     ///
     /// With n_quotient = 3, bundle layout requires n_evals = 19
     /// (FIXED_SLOTS 16 + 3 quotient chunks).
+    ///
+    /// Session-17: `n_lookups = 0` keeps the multi-poly batched opening
+    /// skip-lookup-commits invariant from kicking in on the all-zero
+    /// proof. The vanishing identity still reads `LOOKUP_M = 1` from
+    /// the evaluation bundle (lookup_expr → 0 with m=1 & input=table=0),
+    /// so gate+perm+lookup combined_expr stays at 0 on the RHS.
     fn dummy_proof_bytes_typical() -> alloc::vec::Vec<u8> {
         use mosaic_zk_primitives::field::fr_to_canonical_bytes;
         let n_advice: u32 = 5;
-        let n_lookups: u32 = 1;
+        let n_lookups: u32 = 0;
         let n_quotient: u32 = 3;
         let n_evals: u32 = 19; // 16 + 3
         let total = FIXED_HEADER_LEN
@@ -338,6 +434,72 @@ mod tests {
         let pi = [0u8; FR_LEN];
         let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
         assert!(r.is_ok(), "identity-satisfying bundle should pass, got {r:?}");
+    }
+
+    /// Session-17 dedicated tamper test: swap `advice_commits[0]`
+    /// from the all-zero baseline to the G1 generator. Unlike the
+    /// session-16 `two_point_rejects_tampered_z_next_eval` test
+    /// which exercises only the permutation-z evaluation, this path
+    /// verifies the new multi-poly MSM actually batches all commits
+    /// — a valid-on-curve but non-zero advice commit with zero
+    /// opening evaluation must propagate through the v-weighted MSM
+    /// into the batched pairing identity.
+    #[test]
+    fn multipoly_rejects_tampered_advice_commit() {
+        use mosaic_zk_primitives::g1_consts::g1_generator_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let mut proof = dummy_proof_bytes_typical();
+
+        // Replace advice[0] with the G1 generator (valid-on-curve,
+        // non-zero). With zero evaluations across the bundle, the
+        // v-weighted MSM produces a non-zero `C_ξ_batched` while
+        // `y_ξ_batched = 0` — the two-point opening check fails.
+        let advice0_off = FIXED_HEADER_LEN;
+        proof[advice0_off..advice0_off + G1_LEN]
+            .copy_from_slice(&g1_generator_bytes());
+
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered advice commit should fail multi-poly batched \
+             pairing, got {r:?}",
+        );
+    }
+
+    /// Session-17 companion: flip the wire evaluation `a(ξ)`. With
+    /// zero commits + v-batched MSM, a non-zero wire eval makes
+    /// `y_ξ_batched = v^0·a + v^1·b + v^2·c = v^0·(tampered) ≠ 0`,
+    /// again breaking the batched opening.
+    #[test]
+    fn multipoly_rejects_tampered_wire_a_evaluation() {
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes();
+        let mut proof = dummy_proof_bytes_typical();
+
+        // Evaluations start after fixed + advice + lookup + perm_z + quotient.
+        // n_advice=5, n_lookups=0, n_quotient=3 → evals_off = 16 + 5·64 + 0 + 64 + 3·64 = 592.
+        let evals_off = FIXED_HEADER_LEN
+            + 5 * G1_LEN
+            + 0 * G1_LEN
+            + G1_LEN
+            + 3 * G1_LEN;
+        let a_off = evals_off + idx::A * FR_LEN;
+        // Set a(ξ) = 1 while leaving commits zero — breaks the opening.
+        proof[a_off..a_off + FR_LEN]
+            .copy_from_slice(&fr_to_canonical_bytes(&Fr::from(1u64)));
+
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "tampered wire-a evaluation should fail multi-poly batched \
+             pairing, got {r:?}",
+        );
     }
 
     /// Tampered gate: set q_c = 1 → gate_expr = 1 ≠ 0 =

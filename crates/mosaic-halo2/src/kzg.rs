@@ -43,7 +43,7 @@ use mosaic_core::{
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
-    msm::{add_g1, negate_g1, scalar_mul_g1},
+    msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1},
 };
 
 /// Scaffold single-point KZG opening check.
@@ -228,6 +228,166 @@ pub fn verify_two_point_opening_scaffold<B: SyscallBackend + ?Sized>(
     let neg_w_batched = negate_g1(&w_batched);
 
     // Pairing: e(A_batched, [1]_2) · e(-W_batched, [x]_2) = 1.
+    let g2_gen = g2_generator_bytes();
+    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
+    pairing_input.extend_from_slice(&a_batched);
+    pairing_input.extend_from_slice(&g2_gen);
+    pairing_input.extend_from_slice(&neg_w_batched);
+    pairing_input.extend_from_slice(&vk.x2_g2);
+
+    let result = backend.alt_bn128_group_op(
+        AltBn128Op::Pairing,
+        InputEndianness::BigEndian,
+        &pairing_input,
+    )?;
+    if result.len() != 32 || result[31] != 0x01 {
+        return Err(OnChainError::PairingCheckFailed);
+    }
+    Ok(())
+}
+
+/// Session-17: multi-poly batched two-point KZG opening.
+///
+/// Upgrades the session-16 scaffold from single-commitment batching
+/// (`C_ξ = C_ξω = permutation_z`) to the real Halo2 convention where
+/// a `v` batching challenge collapses the full set of committed
+/// polynomials into two batched commitments — one per opening point.
+///
+/// ```text
+/// // v-powers: [1, v, v^2, …, v^{m-1}]
+/// C_ξ_batched   = Σ_i v^i · commits_at_ξ[i]
+/// y_ξ_batched   = Σ_i v^i · evals_at_ξ[i]
+/// C_ξω_batched  = Σ_j v^j · commits_at_ξω[j]
+/// y_ξω_batched  = Σ_j v^j · evals_at_ξω[j]
+///
+/// A1 = C_ξ_batched  - y_ξ_batched·G1  + ξ ·W_ξ
+/// A2 = C_ξω_batched - y_ξω_batched·G1 + ξω·W_ξω
+/// A_batched = A1 + u·A2
+/// W_batched = W_ξ + u·W_ξω
+/// e(A_batched, [1]_2) · e(-W_batched, [x]_2) ?= 1
+/// ```
+///
+/// Matches PSE `halo2_proofs::plonk::verifier::verify_proof`
+/// semantics: any committed poly evaluated at the given point
+/// contributes at the MSM step, so tampering with *any* commit or
+/// evaluation propagates to the batched point → pairing check.
+///
+/// ## Scaffold mapping
+///
+/// This function accepts pre-collected commit/eval slices; the
+/// caller pairs each commit to its corresponding evaluation value
+/// and picks the evaluation point. The typical Halo2 pairing is:
+///
+/// - **At ξ**: advice commits ↔ wire evals, lookup commits ↔
+///   lookup evals, permutation_z ↔ `Z`, quotient chunks ↔
+///   quotient evals. Fixed/selector commits from the VK are
+///   paired with their selector evals.
+/// - **At ξω**: permutation_z ↔ `Z_NEXT` (the only shifted
+///   polynomial in vanilla Halo2).
+///
+/// ## Errors
+///
+/// - [`OnChainError::PublicInputCountMismatch`]: commit/eval slice
+///   length disagreement at either opening point, or empty xi slice.
+/// - [`OnChainError::InvalidPointEncoding`]: any commit, `w_xi`, or
+///   `w_xiw` is not 64 bytes.
+/// - [`OnChainError::PairingCheckFailed`]: batched pairing fails.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    vk: &Halo2KzgVerifyingKey,
+    commits_xi: &[&[u8]],
+    evals_xi: &[Fr],
+    commits_xi_omega: &[&[u8]],
+    evals_xi_omega: &[Fr],
+    w_xi: &[u8],
+    w_xi_omega: &[u8],
+    xi: &Fr,
+    xi_omega: &Fr,
+    v: &Fr,
+    u: &Fr,
+) -> Result<(), OnChainError> {
+    if commits_xi.len() != evals_xi.len() || commits_xi.is_empty() {
+        return Err(OnChainError::PublicInputCountMismatch);
+    }
+    if commits_xi_omega.len() != evals_xi_omega.len() || commits_xi_omega.is_empty() {
+        return Err(OnChainError::PublicInputCountMismatch);
+    }
+    if w_xi.len() != G1_LEN || w_xi_omega.len() != G1_LEN {
+        return Err(OnChainError::InvalidPointEncoding);
+    }
+    for c in commits_xi.iter().chain(commits_xi_omega.iter()) {
+        if c.len() != G1_LEN {
+            return Err(OnChainError::InvalidPointEncoding);
+        }
+    }
+
+    // v-powers: [1, v, v^2, …, v^{m-1}] for the longer side.
+    let max_len = commits_xi.len().max(commits_xi_omega.len());
+    let mut v_powers = Vec::with_capacity(max_len);
+    let mut acc = Fr::from(1u64);
+    for _ in 0..max_len {
+        v_powers.push(acc);
+        acc *= v;
+    }
+
+    // MSM at ξ: C_batched = Σ v^i · commits_xi[i]; y_batched = Σ v^i · evals_xi[i].
+    let scalars_xi: Vec<[u8; FR_LEN]> = v_powers[..commits_xi.len()]
+        .iter()
+        .map(fr_to_canonical_bytes)
+        .collect();
+    let c_xi_batched = msm_g1(backend, commits_xi, &scalars_xi)?;
+    let mut y_xi_batched = Fr::from(0u64);
+    for (i, e) in evals_xi.iter().enumerate() {
+        y_xi_batched += v_powers[i] * e;
+    }
+
+    // MSM at ξω.
+    let scalars_xi_omega: Vec<[u8; FR_LEN]> = v_powers[..commits_xi_omega.len()]
+        .iter()
+        .map(fr_to_canonical_bytes)
+        .collect();
+    let c_xi_omega_batched = msm_g1(backend, commits_xi_omega, &scalars_xi_omega)?;
+    let mut y_xi_omega_batched = Fr::from(0u64);
+    for (i, e) in evals_xi_omega.iter().enumerate() {
+        y_xi_omega_batched += v_powers[i] * e;
+    }
+
+    // From here, the pairing reduction matches session-16 exactly,
+    // substituting the batched (C, y) pairs for the single-commit
+    // scaffold choice.
+    let g1_gen = g1_generator_bytes();
+    let y_xi_g1 =
+        scalar_mul_g1(backend, &g1_gen, &fr_to_canonical_bytes(&y_xi_batched))?;
+    let y_xi_omega_g1 = scalar_mul_g1(
+        backend,
+        &g1_gen,
+        &fr_to_canonical_bytes(&y_xi_omega_batched),
+    )?;
+
+    let c_minus_y_xi = add_g1(backend, &c_xi_batched, &negate_g1(&y_xi_g1))?;
+    let c_minus_y_xi_omega =
+        add_g1(backend, &c_xi_omega_batched, &negate_g1(&y_xi_omega_g1))?;
+
+    let mut wxi_arr = [0u8; G1_LEN];
+    wxi_arr.copy_from_slice(w_xi);
+    let mut wxiw_arr = [0u8; G1_LEN];
+    wxiw_arr.copy_from_slice(w_xi_omega);
+
+    let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &fr_to_canonical_bytes(xi))?;
+    let xi_omega_wxiw =
+        scalar_mul_g1(backend, &wxiw_arr, &fr_to_canonical_bytes(xi_omega))?;
+
+    let a1 = add_g1(backend, &c_minus_y_xi, &xi_wxi)?;
+    let a2 = add_g1(backend, &c_minus_y_xi_omega, &xi_omega_wxiw)?;
+
+    let u_bytes = fr_to_canonical_bytes(u);
+    let u_a2 = scalar_mul_g1(backend, &a2, &u_bytes)?;
+    let a_batched = add_g1(backend, &a1, &u_a2)?;
+    let u_wxiw = scalar_mul_g1(backend, &wxiw_arr, &u_bytes)?;
+    let w_batched = add_g1(backend, &wxi_arr, &u_wxiw)?;
+    let neg_w_batched = negate_g1(&w_batched);
+
     let g2_gen = g2_generator_bytes();
     let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
     pairing_input.extend_from_slice(&a_batched);

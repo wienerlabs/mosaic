@@ -13,6 +13,8 @@
 //! node). The hash concatenation order depends on this bit.
 
 use crate::canonical::sizes::DIGEST_LEN;
+#[cfg(test)]
+use alloc::vec::Vec;
 use mosaic_core::{syscall::SyscallBackend, OnChainError};
 
 // Note: `Vec` is imported within `#[cfg(test)]` helpers below where

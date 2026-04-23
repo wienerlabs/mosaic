@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Halo2 multi-poly MSM opening (session 17)** —
+  `mosaic-halo2::kzg::verify_two_point_opening_multipoly` replaces
+  the session-16 single-commitment scaffold with full v-weighted
+  multi-poly batching matching PSE `halo2_proofs::plonk::verify_proof`
+  semantics. Advice commits + lookup commits + permutation_z +
+  quotient chunks all enter the MSM at ξ; permutation_z alone enters
+  at ξω (the only shifted poly in vanilla Halo2). Tampering any
+  commit or paired evaluation at either point now propagates into
+  the batched pairing identity. Two new dedicated tamper tests:
+  `multipoly_rejects_tampered_advice_commit` (swap advice[0] to the
+  G1 generator → `PairingCheckFailed`) and
+  `multipoly_rejects_tampered_wire_a_evaluation` (non-zero `a(ξ)`
+  with zero commit → `PairingCheckFailed`). `v` and `u` batching
+  challenges derive via domain-separated keccak over current
+  transcript state + opening-proof bytes. `docs/phase3-soundness.md`
+  extended with session-17 primitive + tamper-test map. Halo2 is
+  now at **2 gates** (vanishing identity + multi-poly batched
+  opening), bringing the project-wide gate count from 12 → 13.
+
 ### Changed
 
 - **CU baselines re-measured** across Phase-2 production systems under
@@ -34,9 +55,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **HyperPlonk multi-point KZG reduction** — pin Zeromorph / Pst /
   Gemini convention; extend `compute_expected_final_claim` with real
   `k_i` cosets from the VK.
-- **Halo2 multi-poly MSM in opening** — currently `C_ξ` / `C_ξω` use
-  single-commitment scaffold; real Halo2 batches all committed polys
-  via a `v` challenge.
 - **Nova Spartan-batched multi-poly opening** — current scaffold
   opens `w_comm` only; full version covers (A·z, B·z, C·z) + E + W.
 - **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
