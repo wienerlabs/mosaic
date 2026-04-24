@@ -247,22 +247,19 @@ pub fn negate_g1(point: &[u8; 64]) -> [u8; 64] {
     if y_slice.iter().all(|b| *b == 0) {
         return out;
     }
-    // (q - y) mod q via big-endian borrow-subtraction.
-    let mut borrow: i16 = 0;
+    // Session-31 cast-safety rewrite: (q - y) mod q via big-endian
+    // overflowing_sub borrow chain. Mirrors the mosaic-zk-primitives::
+    // fr::sub_r rewrite — same correctness contract, no i16 widening,
+    // no `as u8` truncation casts that clippy flagged.
+    let mut borrow_in: u8 = 0;
     for i in (0..32).rev() {
-        let q_b = i16::from(BN254_FQ_MODULUS_BE[i]);
-        let y_b = i16::from(y_slice[i]);
-        let diff = q_b - y_b - borrow;
-        if diff < 0 {
-            y_slice[i] = (diff + 256) as u8;
-            borrow = 1;
-        } else {
-            y_slice[i] = diff as u8;
-            borrow = 0;
-        }
+        let (partial, b1) = BN254_FQ_MODULUS_BE[i].overflowing_sub(y_slice[i]);
+        let (result, b2) = partial.overflowing_sub(borrow_in);
+        y_slice[i] = result;
+        borrow_in = u8::from(b1) | u8::from(b2);
     }
     // q > y by construction for any valid point, so borrow must be 0.
-    debug_assert_eq!(borrow, 0, "negate_g1 saw y > q");
+    debug_assert_eq!(borrow_in, 0, "negate_g1 saw y > q");
     out
 }
 

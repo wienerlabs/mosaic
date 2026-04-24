@@ -59,20 +59,26 @@ pub fn reduce_mod_r(x: &mut [u8; FR_LEN]) {
 
 /// In-place big-endian subtraction `x ← x - r`. Panics in debug builds if
 /// `x < r` (the caller should have already returned in that case).
+///
+/// Session-31 cast-safety rewrite: the previous implementation used
+/// `i16` arithmetic with `as u8` truncation which flagged 4 clippy
+/// `cast_possible_truncation` / `cast_sign_loss` warnings. Every branch
+/// was provably in u8 range, but the casts were opaque to static
+/// analysis. Replaced with the canonical `overflowing_sub` borrow-
+/// chain pattern — no intermediate `i16` widening, no `as` casts,
+/// and the borrow flag arithmetic is pure `bool` → `u8`.
 fn sub_r(x: &mut [u8; FR_LEN]) {
     let r = &BN254_FR_MODULUS_BE;
-    let mut borrow: i16 = 0;
+    let mut borrow_in: u8 = 0;
     for i in (0..FR_LEN).rev() {
-        let diff = i16::from(x[i]) - i16::from(r[i]) - borrow;
-        if diff < 0 {
-            x[i] = (diff + 256) as u8;
-            borrow = 1;
-        } else {
-            x[i] = diff as u8;
-            borrow = 0;
-        }
+        let (partial, b1) = x[i].overflowing_sub(r[i]);
+        let (result, b2) = partial.overflowing_sub(borrow_in);
+        x[i] = result;
+        // borrow_out is set if either step wrapped. Both bools
+        // promote to 0 / 1; bit-OR collapses to a single borrow flag.
+        borrow_in = u8::from(b1) | u8::from(b2);
     }
-    debug_assert_eq!(borrow, 0, "sub_r called when x < r");
+    debug_assert_eq!(borrow_in, 0, "sub_r called when x < r");
 }
 
 /// Parse a big-endian byte slice into an exactly-FR_LEN array, checking
