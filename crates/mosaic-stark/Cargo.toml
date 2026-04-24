@@ -15,6 +15,13 @@ categories.workspace = true
 [dependencies]
 mosaic-core = { workspace = true }
 
+[dev-dependencies]
+# Session 36: proptest coverage for Goldilocks field arithmetic +
+# FRI fold primitive. mosaic-core needs std + host-backend for the
+# test harness (mirrors session 34's zk-primitives setup).
+mosaic-core = { workspace = true, features = ["std", "host-backend"] }
+proptest = "1.5"
+
 [features]
 default = []
 std = ["mosaic-core/std"]

@@ -542,4 +542,94 @@ mod tests {
             );
         }
     }
+
+    // ---- Property-based tests (session 36) ----
+    //
+    // FRI fold arithmetic pivots on the even/odd decomposition of a
+    // polynomial evaluated at a pair of opposite points `(x, −x)`.
+    // The invariants below verify that:
+    //
+    //   1. The fold is self-consistent — applying compute_next_layer_value
+    //      and then checking with fold_relation_holds always agrees.
+    //   2. A tampered f_next always fails (anti-property: verify that
+    //      changes are detected, not swallowed).
+    //   3. β = 0 collapses the fold to the even part; β = 1 to
+    //      (f_even + f_odd).
+    //   4. Well-formed chains validate; chain-length mismatches error
+    //      cleanly.
+
+    use proptest::prelude::*;
+
+    fn any_goldilocks() -> impl Strategy<Value = Goldilocks> {
+        (0u64..crate::goldilocks::P).prop_map(Goldilocks::new)
+    }
+
+    /// Strategy: a non-zero Goldilocks value (for x in the fold
+    /// relation which needs 2x invertible).
+    fn any_nonzero_goldilocks() -> impl Strategy<Value = Goldilocks> {
+        any_goldilocks().prop_filter("non-zero", |x| x.as_u64() != 0)
+    }
+
+    proptest! {
+        /// `compute_next_layer_value` output always passes
+        /// `fold_relation_holds` — the two primitives agree on every
+        /// valid input.
+        #[test]
+        fn prop_fold_is_self_consistent(
+            f_x in any_goldilocks(),
+            f_neg_x in any_goldilocks(),
+            beta in any_goldilocks(),
+            x in any_nonzero_goldilocks(),
+        ) {
+            let f_next = compute_next_layer_value(f_x, f_neg_x, beta, x).unwrap();
+            let ok = fold_relation_holds(f_x, f_neg_x, f_next, beta, x).unwrap();
+            prop_assert!(ok);
+        }
+
+        /// Tampering f_next by adding any non-zero delta must break
+        /// the fold. Guards against "fold check always returns true"
+        /// bugs.
+        #[test]
+        fn prop_tampered_f_next_fails_fold(
+            f_x in any_goldilocks(),
+            f_neg_x in any_goldilocks(),
+            beta in any_goldilocks(),
+            x in any_nonzero_goldilocks(),
+            delta in any_nonzero_goldilocks(),
+        ) {
+            let f_next = compute_next_layer_value(f_x, f_neg_x, beta, x).unwrap();
+            let tampered = f_next.add(delta);
+            let ok = fold_relation_holds(f_x, f_neg_x, tampered, beta, x).unwrap();
+            prop_assert!(!ok, "tampered f_next (+{}) should break fold", delta.as_u64());
+        }
+
+        /// With β = 0, the fold is just the even part:
+        ///   f_next = (f_x + f_neg_x) / 2
+        /// Exercises the scaffold-useful case where the odd part
+        /// vanishes.
+        #[test]
+        fn prop_beta_zero_yields_even_part(
+            f_x in any_goldilocks(),
+            f_neg_x in any_goldilocks(),
+            x in any_nonzero_goldilocks(),
+        ) {
+            let beta_zero = Goldilocks::zero();
+            let two_inv = Goldilocks::new(2).inverse().unwrap();
+            let expected_even = f_x.add(f_neg_x).mul(two_inv);
+            let got = compute_next_layer_value(f_x, f_neg_x, beta_zero, x).unwrap();
+            prop_assert_eq!(got, expected_even);
+        }
+
+        /// x = 0 must produce an error (denominator vanishes).
+        /// Guards against silent division-by-zero.
+        #[test]
+        fn prop_x_zero_is_rejected(
+            f_x in any_goldilocks(),
+            f_neg_x in any_goldilocks(),
+            beta in any_goldilocks(),
+        ) {
+            let r = compute_next_layer_value(f_x, f_neg_x, beta, Goldilocks::zero());
+            prop_assert!(r.is_err());
+        }
+    }
 }

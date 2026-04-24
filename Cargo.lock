@@ -3242,6 +3242,7 @@ name = "mosaic-stark"
 version = "0.7.0-phase3-primitives"
 dependencies = [
  "mosaic-core",
+ "proptest",
 ]
 
 [[package]]

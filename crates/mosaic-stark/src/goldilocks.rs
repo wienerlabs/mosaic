@@ -487,4 +487,95 @@ mod tests {
             assert_eq!(neg_x_inv, neg_inv, "v={v}");
         }
     }
+
+    // ---- Property-based tests (session 36) ----
+    //
+    // Goldilocks field arithmetic is hand-rolled (const fn where
+    // possible for SBF compile-time evaluation). The invariants
+    // under test cover the field axioms + the serialization round-
+    // trip that backs `from_bytes_le` / `to_bytes_le`.
+
+    use proptest::prelude::*;
+
+    /// Strategy: any canonical Goldilocks value via u64 ∈ [0, P).
+    fn any_goldilocks() -> impl Strategy<Value = Goldilocks> {
+        (0u64..P).prop_map(Goldilocks::new)
+    }
+
+    proptest! {
+        /// Field axiom: addition is commutative.
+        #[test]
+        fn prop_add_commutative(a in any_goldilocks(), b in any_goldilocks()) {
+            prop_assert_eq!(a.add(b), b.add(a));
+        }
+
+        /// Field axiom: multiplication is commutative.
+        #[test]
+        fn prop_mul_commutative(a in any_goldilocks(), b in any_goldilocks()) {
+            prop_assert_eq!(a.mul(b), b.mul(a));
+        }
+
+        /// Field axiom: additive identity `0 + x = x`.
+        #[test]
+        fn prop_add_zero_identity(a in any_goldilocks()) {
+            prop_assert_eq!(a.add(Goldilocks::zero()), a);
+        }
+
+        /// Field axiom: multiplicative identity `1 · x = x`.
+        #[test]
+        fn prop_mul_one_identity(a in any_goldilocks()) {
+            prop_assert_eq!(a.mul(Goldilocks::one()), a);
+        }
+
+        /// Field axiom: distributive `a · (b + c) = a·b + a·c`.
+        #[test]
+        fn prop_mul_distributive(
+            a in any_goldilocks(),
+            b in any_goldilocks(),
+            c in any_goldilocks(),
+        ) {
+            let lhs = a.mul(b.add(c));
+            let rhs = a.mul(b).add(a.mul(c));
+            prop_assert_eq!(lhs, rhs);
+        }
+
+        /// Subtraction inverse: `(a + b) - b = a`.
+        #[test]
+        fn prop_add_then_sub_recovers(a in any_goldilocks(), b in any_goldilocks()) {
+            prop_assert_eq!(a.add(b).sub(b), a);
+        }
+
+        /// Additive inverse: `x + (-x) = 0`.
+        #[test]
+        fn prop_neg_cancels(a in any_goldilocks()) {
+            prop_assert_eq!(a.add(a.neg()), Goldilocks::zero());
+        }
+
+        /// Multiplicative inverse via Fermat: `x · x^(p-2) = 1` for
+        /// any non-zero x. Also tests `inverse()` agrees with `pow(p-2)`.
+        #[test]
+        fn prop_fermat_inverse(a in any_goldilocks().prop_filter("non-zero", |x| *x != Goldilocks::zero())) {
+            let fermat_inv = a.pow(P - 2);
+            prop_assert_eq!(a.mul(fermat_inv), Goldilocks::one());
+            let direct_inv = a.inverse().unwrap();
+            prop_assert_eq!(direct_inv, fermat_inv);
+        }
+
+        /// Serialization round-trip: to_bytes_le ∘ from_bytes_le is
+        /// the identity for any canonical value.
+        #[test]
+        fn prop_bytes_le_round_trip(a in any_goldilocks()) {
+            let bytes = a.to_bytes_le();
+            let decoded = Goldilocks::from_bytes_le(&bytes).unwrap();
+            prop_assert_eq!(decoded, a);
+        }
+
+        /// `pow(1)` is identity; `pow(0)` is always 1 (including
+        /// zero-base edge case which is 0^0 = 1 by convention).
+        #[test]
+        fn prop_pow_edge_cases(a in any_goldilocks()) {
+            prop_assert_eq!(a.pow(1), a);
+            prop_assert_eq!(a.pow(0), Goldilocks::one());
+        }
+    }
 }
