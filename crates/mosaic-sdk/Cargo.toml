@@ -18,6 +18,16 @@ mosaic-groth16 = { workspace = true, features = ["std", "host-backend"] }
 mosaic-serde = { workspace = true, features = ["std", "host-backend"] }
 mosaic-chunked = { workspace = true, features = ["std"] }
 
+# Session 33: Phase-3 verifier crates gated behind per-system
+# features so downstream SDK consumers only pay the compile-time
+# cost of the systems they actually preflight. `groth16` is the
+# baseline — always compiled, no feature gate needed.
+mosaic-plonk = { workspace = true, features = ["std"], optional = true }
+mosaic-hyperplonk = { workspace = true, features = ["std"], optional = true }
+mosaic-halo2 = { workspace = true, features = ["std"], optional = true }
+mosaic-nova = { workspace = true, features = ["std"], optional = true }
+mosaic-stark = { workspace = true, features = ["std", "host-backend"], optional = true }
+
 solana-sdk = { workspace = true }
 solana-client = { workspace = true }
 borsh = { workspace = true, features = ["std"] }
@@ -27,6 +37,23 @@ hex = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[features]
+# Default ships Groth16 preflight only (baseline behavior pre-
+# session-33). Phase-3 systems opt in individually.
+default = []
+# Enable client-side preflight for KZG-PLONK BN254.
+plonk = ["dep:mosaic-plonk"]
+# Enable client-side preflight for HyperPlonk-KZG BN254.
+hyperplonk = ["dep:mosaic-hyperplonk"]
+# Enable client-side preflight for Halo2-KZG BN254 (PSE fork).
+halo2 = ["dep:mosaic-halo2"]
+# Enable client-side preflight for Nova / HyperNova / ProtoStar.
+nova = ["dep:mosaic-nova"]
+# Enable client-side preflight for FRI-STARK.
+stark = ["dep:mosaic-stark"]
+# Convenience: all Phase-3 preflight paths at once.
+all-phase3 = ["plonk", "hyperplonk", "halo2", "nova", "stark"]
 
 [lints]
 workspace = true
