@@ -44,8 +44,8 @@ use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
     msm::{
-        add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1,
-        verify_two_pair_pairing,
+        add_g1, commitment_minus_scalar_g1, compute_kzg_opening_lhs, msm_g1,
+        negate_g1, scalar_mul_g1, verify_two_pair_pairing,
     },
 };
 
@@ -85,16 +85,17 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
 
     let mut c_arr = [0u8; G1_LEN];
     c_arr.copy_from_slice(proof.permutation_z);
-    let c_minus_y = commitment_minus_scalar_g1(backend, &c_arr, &y_bytes)?;
-
-    // ξ·W_ξ.
-    let xi_bytes = fr_to_canonical_bytes(xi);
     let mut wxi_arr = [0u8; G1_LEN];
     wxi_arr.copy_from_slice(proof.w_xi);
-    let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &xi_bytes)?;
 
-    // A1 = C - y·G1 + ξ·W_ξ.
-    let a1 = add_g1(backend, &c_minus_y, &xi_wxi)?;
+    // A1 = C - y·G1 + ξ·W_ξ (session-35 consolidated).
+    let a1 = compute_kzg_opening_lhs(
+        backend,
+        &c_arr,
+        &y_bytes,
+        &fr_to_canonical_bytes(xi),
+        &wxi_arr,
+    )?;
 
     // -W_ξ for the second pair.
     let neg_wxi = negate_g1(&wxi_arr);
@@ -175,29 +176,30 @@ pub fn verify_two_point_opening_scaffold<B: SyscallBackend + ?Sized>(
         &proof.evaluations[idx::Z_NEXT * FR_LEN..(idx::Z_NEXT + 1) * FR_LEN],
     )?;
 
-    // C - y·G1 for each opening point.
+    // A1/A2 = C - y·G1 + ξ·W (session-35 consolidated) for each
+    // opening point. Same C (permutation_z) but different y / ξ / W
+    // per opening site.
     let mut c_arr = [0u8; G1_LEN];
     c_arr.copy_from_slice(proof.permutation_z);
-    let c_minus_y_xi =
-        commitment_minus_scalar_g1(backend, &c_arr, &fr_to_canonical_bytes(&y_xi))?;
-    let c_minus_y_xi_omega = commitment_minus_scalar_g1(
-        backend,
-        &c_arr,
-        &fr_to_canonical_bytes(&y_xi_omega),
-    )?;
-
-    // ξ·W_ξ  +  ξω·W_ξω
     let mut wxi_arr = [0u8; G1_LEN];
     wxi_arr.copy_from_slice(proof.w_xi);
     let mut wxiw_arr = [0u8; G1_LEN];
     wxiw_arr.copy_from_slice(proof.w_xiw);
 
-    let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &fr_to_canonical_bytes(xi))?;
-    let xi_omega_wxiw =
-        scalar_mul_g1(backend, &wxiw_arr, &fr_to_canonical_bytes(xi_omega))?;
-
-    let a1 = add_g1(backend, &c_minus_y_xi, &xi_wxi)?;
-    let a2 = add_g1(backend, &c_minus_y_xi_omega, &xi_omega_wxiw)?;
+    let a1 = compute_kzg_opening_lhs(
+        backend,
+        &c_arr,
+        &fr_to_canonical_bytes(&y_xi),
+        &fr_to_canonical_bytes(xi),
+        &wxi_arr,
+    )?;
+    let a2 = compute_kzg_opening_lhs(
+        backend,
+        &c_arr,
+        &fr_to_canonical_bytes(&y_xi_omega),
+        &fr_to_canonical_bytes(xi_omega),
+        &wxiw_arr,
+    )?;
 
     // Batch: A_batched = A1 + u·A2.
     let u_bytes = fr_to_canonical_bytes(u);

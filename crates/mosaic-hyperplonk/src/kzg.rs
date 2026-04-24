@@ -55,7 +55,7 @@ use mosaic_core::{
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
-    msm::{add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1},
+    msm::{compute_kzg_opening_lhs, msm_g1, negate_g1},
     transcript::Transcript,
 };
 
@@ -155,15 +155,19 @@ pub fn verify_batched_opening<B: SyscallBackend + ?Sized>(
     //    bilinearity:
     //        e(C - y·G1 + ξ·opening, G2) · e(-opening, x·G2) == 1
     //    The LHS G1 arg is (C - y·G1 + ξ·opening).
+    // Session-35: consolidated LHS construction.
+    //   A1 = C_batched - y_batched·G1 + ξ·opening
     let y_bytes = fr_to_canonical_bytes(&y_batched);
-    let c_minus_y = commitment_minus_scalar_g1(backend, &c_batched, &y_bytes)?;
-
     let xi_bytes = fr_to_canonical_bytes(univ_eval_point);
     let mut opening_arr = [0u8; G1_LEN];
     opening_arr.copy_from_slice(proof.kzg_opening);
-    let xi_opening = scalar_mul_g1(backend, &opening_arr, &xi_bytes)?;
-
-    let a1 = add_g1(backend, &c_minus_y, &xi_opening)?;
+    let a1 = compute_kzg_opening_lhs(
+        backend,
+        &c_batched,
+        &y_bytes,
+        &xi_bytes,
+        &opening_arr,
+    )?;
 
     // 6. Pairing check with 2 pairs:
     //    Pair 1: (A1, [1]_G2)

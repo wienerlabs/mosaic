@@ -38,8 +38,7 @@ use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
     msm::{
-        add_g1, commitment_minus_scalar_g1, msm_g1, negate_g1, scalar_mul_g1,
-        verify_two_pair_pairing,
+        compute_kzg_opening_lhs, msm_g1, negate_g1, verify_two_pair_pairing,
     },
 };
 
@@ -77,18 +76,21 @@ pub fn verify_opening_scaffold<B: SyscallBackend + ?Sized>(
         Fr::from(0u64)
     };
 
-    // Build LHS G1 arg: W - y·G1 + ξ·W_ξ.
+    // Session-35: consolidated LHS construction.
+    //   A1 = W_comm - y·G1 + ξ·W_ξ
     let y_bytes = fr_to_canonical_bytes(&y);
     let mut w_arr = [0u8; G1_LEN];
     w_arr.copy_from_slice(proof.w_comm);
-    let w_minus_y = commitment_minus_scalar_g1(backend, &w_arr, &y_bytes)?;
-
-    let xi_bytes = fr_to_canonical_bytes(xi);
     let mut wxi_arr = [0u8; G1_LEN];
     wxi_arr.copy_from_slice(proof.w_xi);
-    let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &xi_bytes)?;
 
-    let a1 = add_g1(backend, &w_minus_y, &xi_wxi)?;
+    let a1 = compute_kzg_opening_lhs(
+        backend,
+        &w_arr,
+        &y_bytes,
+        &fr_to_canonical_bytes(xi),
+        &wxi_arr,
+    )?;
 
     // Pair: (A1, G2) · (-W_ξ, x2_G2).
     let neg_wxi = negate_g1(&wxi_arr);
@@ -195,17 +197,17 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
         + v_powers[3] * e_eval
         + v_powers[4] * w_eval;
 
-    // Pairing reduction: e(C_batched - y_batched·G1 + ξ·W_ξ, G2)
-    //                  · e(-W_ξ, x2_G2) ?= 1.
-    let c_minus_y = commitment_minus_scalar_g1(
+    // Session-35: consolidated LHS construction.
+    //   A1 = C_batched - y_batched·G1 + ξ·W_ξ
+    let mut wxi_arr = [0u8; G1_LEN];
+    wxi_arr.copy_from_slice(proof.w_xi);
+    let a1 = compute_kzg_opening_lhs(
         backend,
         &c_batched,
         &fr_to_canonical_bytes(&y_batched),
+        &fr_to_canonical_bytes(xi),
+        &wxi_arr,
     )?;
-    let mut wxi_arr = [0u8; G1_LEN];
-    wxi_arr.copy_from_slice(proof.w_xi);
-    let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &fr_to_canonical_bytes(xi))?;
-    let a1 = add_g1(backend, &c_minus_y, &xi_wxi)?;
     let neg_wxi = negate_g1(&wxi_arr);
     verify_two_pair_pairing(backend, &a1, &g2_generator_bytes(), &neg_wxi, &vk.x2_g2)
 }

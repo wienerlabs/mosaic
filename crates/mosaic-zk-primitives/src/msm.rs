@@ -37,6 +37,53 @@ use mosaic_core::{
 /// curve. `alt_bn128_group_op` treats this as the additive neutral.
 pub const G1_ZERO: [u8; 64] = [0u8; 64];
 
+/// Compute `A = C - y·G1 + ξ·W` — the canonical left-hand side of a
+/// KZG opening pairing check. Every KZG-based verifier in the
+/// workspace builds this same G1 expression before pairing against
+/// (-W, [x]_G2).
+///
+/// Internally: `commitment_minus_scalar_g1(C, y)` → `scalar_mul_g1(W, ξ)`
+/// → `add_g1`. Five syscalls total (one G1Mul + one G1Add + the
+/// three inside `commitment_minus_scalar_g1`).
+///
+/// Session-35 hoist — sessions 25/26 extracted the two sub-steps
+/// (`verify_two_pair_pairing` + `commitment_minus_scalar_g1`); this
+/// session closes the loop by combining the LHS construction into a
+/// single primitive so the caller just supplies `(C, y, ξ, W)`.
+///
+/// # Errors
+///
+/// Propagates length/syscall errors from the underlying primitives
+/// ([`commitment_minus_scalar_g1`], [`scalar_mul_g1`], [`add_g1`]).
+///
+/// # Examples
+///
+/// ```no_run
+/// use mosaic_core::syscall::SyscallBackend;
+/// use mosaic_zk_primitives::msm::compute_kzg_opening_lhs;
+///
+/// fn build_lhs<B: SyscallBackend + ?Sized>(
+///     backend: &B,
+///     c: &[u8; 64],
+///     y_be: &[u8; 32],
+///     xi_be: &[u8; 32],
+///     w: &[u8; 64],
+/// ) -> Result<[u8; 64], mosaic_core::OnChainError> {
+///     compute_kzg_opening_lhs(backend, c, y_be, xi_be, w)
+/// }
+/// ```
+pub fn compute_kzg_opening_lhs<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    commitment: &[u8; 64],
+    claimed_eval_be: &[u8; 32],
+    xi_be: &[u8; 32],
+    opening_commitment: &[u8; 64],
+) -> Result<[u8; 64], OnChainError> {
+    let c_minus_y = commitment_minus_scalar_g1(backend, commitment, claimed_eval_be)?;
+    let xi_w = scalar_mul_g1(backend, opening_commitment, xi_be)?;
+    add_g1(backend, &c_minus_y, &xi_w)
+}
+
 /// Compute `C - y·G1` — a commitment with the claimed evaluation
 /// scalar-multiplied out of its value. This is the KZG opening
 /// "C minus y times generator" step that appears identically in
@@ -463,6 +510,44 @@ mod tests {
             r, G1_ZERO,
             "G1 - 1·G1 must reduce to the identity point"
         );
+    }
+
+    // ---- compute_kzg_opening_lhs ----
+
+    #[test]
+    fn kzg_opening_lhs_equals_composed_primitives() {
+        // Session 35 sanity: compute_kzg_opening_lhs must produce
+        // the same G1 point as composing commitment_minus_scalar_g1 +
+        // scalar_mul_g1 + add_g1 manually. If these ever diverge,
+        // downstream verifiers silently pass proofs they shouldn't.
+        let backend = HostBackend::new();
+        let mut rng = seeded_rng(42);
+        let c = ark_g1_to_canonical(&G1Projective::rand(&mut rng).into_affine());
+        let w = ark_g1_to_canonical(&G1Projective::rand(&mut rng).into_affine());
+        let y_fr = Fr::rand(&mut rng);
+        let xi_fr = Fr::rand(&mut rng);
+        let y_bytes = fr_to_bytes_be(&y_fr);
+        let xi_bytes = fr_to_bytes_be(&xi_fr);
+
+        let via_primitive = compute_kzg_opening_lhs(&backend, &c, &y_bytes, &xi_bytes, &w)
+            .unwrap();
+
+        // Manual composition.
+        let c_minus_y = commitment_minus_scalar_g1(&backend, &c, &y_bytes).unwrap();
+        let xi_w = scalar_mul_g1(&backend, &w, &xi_bytes).unwrap();
+        let manual = add_g1(&backend, &c_minus_y, &xi_w).unwrap();
+
+        assert_eq!(via_primitive, manual);
+    }
+
+    /// Helper: encode an `Fr` as 32 big-endian bytes.
+    fn fr_to_bytes_be(fr: &Fr) -> [u8; 32] {
+        let mut le = fr.into_bigint().to_bytes_le();
+        le.resize(32, 0);
+        le.reverse();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&le);
+        out
     }
 
     // ---- verify_two_pair_pairing ----
