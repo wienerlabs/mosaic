@@ -27,6 +27,13 @@ use mosaic_core::OnChainError;
 /// Decode a big-endian 32-byte canonical Fr encoding, validating that the
 /// value is in [0, r). Returns the arkworks `Fr` for subsequent
 /// arithmetic.
+///
+/// # Errors
+///
+/// - [`OnChainError::InvalidFieldEncoding`] — input slice length is not
+///   exactly 32 bytes (propagated from [`crate::fr::parse_fr_be`]).
+/// - [`OnChainError::PublicInputOutOfRange`] — decoded value is `>= r`
+///   (BN254 scalar-field modulus).
 pub fn fr_from_canonical_bytes(bytes: &[u8]) -> Result<Fr, OnChainError> {
     let in_range = parse_fr_be(bytes)?;
     // Safe because `parse_fr_be` already rejected out-of-range inputs.
@@ -135,6 +142,13 @@ pub fn fr_pow_u64(fr: &Fr, exp: u64) -> Fr {
 /// Panics-free: returns `Err(InternalInvariantViolation)` if the
 /// denominator is zero (i.e. `ξ = 1`, probability `~1/r` for a random
 /// challenge).
+///
+/// # Errors
+///
+/// - [`OnChainError::InternalInvariantViolation`] — `ξ = 1`, which
+///   makes the denominator zero and L_1 ill-defined at that point.
+///   Fiat-Shamir challenges are random Fr elements, so this hits with
+///   probability `~1/r`; non-adversarial callers never trigger it.
 pub fn lagrange_basis_one(xi: &Fr, n: u64) -> Result<Fr, OnChainError> {
     let xi_n = fr_pow_u64(xi, n);
     let numerator = xi_n - Fr::one();
@@ -152,6 +166,13 @@ pub fn lagrange_basis_one(xi: &Fr, n: u64) -> Result<Fr, OnChainError> {
 /// ```
 ///
 /// Called during public-input polynomial evaluation.
+///
+/// # Errors
+///
+/// - [`OnChainError::InternalInvariantViolation`] — `ξ = ω^i`, which
+///   makes the denominator zero at that specific root of unity. For a
+///   random Fiat-Shamir challenge this hits with probability `~n/r`
+///   (at most `n` roots over a field of size `~2^254`).
 pub fn lagrange_basis_at(
     xi: &Fr,
     i: u64,
@@ -182,6 +203,12 @@ pub fn lagrange_basis_at(
 /// each must be `< r` (caller's
 /// [`crate::challenges::RoundChallenges::derive`] already validates
 /// this).
+///
+/// # Errors
+///
+/// - [`OnChainError::InternalInvariantViolation`] — `n` is zero mod r
+///   (impossible for valid domain sizes) or `ξ = ω^i` for some i
+///   (denominator vanishes in a Lagrange basis term).
 pub fn evaluate_public_input_poly(
     xi: &Fr,
     omega: &Fr,
@@ -218,6 +245,14 @@ pub fn evaluate_public_input_poly(
 /// Convenience: decode a sequence of canonical BE public inputs into
 /// arkworks `Fr` elements for use with
 /// [`evaluate_public_input_poly`].
+///
+/// # Errors
+///
+/// - [`OnChainError::PublicInputCountMismatch`] — byte length is not a
+///   multiple of 32.
+/// - [`OnChainError::PublicInputOutOfRange`] — any decoded Fr element
+///   is not reduced mod r (propagated from
+///   [`fr_from_canonical_bytes`]).
 pub fn decode_public_inputs(bytes: &[u8]) -> Result<Vec<Fr>, OnChainError> {
     if bytes.len() % 32 != 0 {
         return Err(OnChainError::PublicInputCountMismatch);

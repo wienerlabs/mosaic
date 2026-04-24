@@ -83,6 +83,13 @@ fn sub_r(x: &mut [u8; FR_LEN]) {
 
 /// Parse a big-endian byte slice into an exactly-FR_LEN array, checking
 /// the value is a valid Fr element. Returns the parsed array or an error.
+///
+/// # Errors
+///
+/// - [`mosaic_core::OnChainError::InvalidFieldEncoding`] — input slice
+///   length is not exactly `FR_LEN` (32) bytes.
+/// - [`mosaic_core::OnChainError::PublicInputOutOfRange`] — decoded
+///   value is `>= r` (BN254 scalar-field modulus).
 pub fn parse_fr_be(bytes: &[u8]) -> Result<[u8; FR_LEN], mosaic_core::OnChainError> {
     if bytes.len() != FR_LEN {
         return Err(mosaic_core::OnChainError::InvalidFieldEncoding);

@@ -156,6 +156,17 @@ pub fn verify_two_pair_pairing<B: SyscallBackend + ?Sized>(
 ///
 /// Each scalar is applied via one `G1Mul` syscall; results accumulate
 /// via repeated `G1Add` syscalls.
+///
+/// # Errors
+///
+/// - [`OnChainError::PublicInputCountMismatch`] — `points.len() !=
+///   scalars.len()`.
+/// - [`OnChainError::InvalidPointEncoding`] — any point is not 64 bytes
+///   (propagated from [`scalar_mul_g1`]).
+/// - [`OnChainError::InternalInvariantViolation`] — the `alt_bn128`
+///   syscall returned a non-64-byte result (propagated from
+///   [`scalar_mul_g1`] / [`add_g1`]).
+/// - Syscall errors from the backend.
 pub fn msm_g1<B: SyscallBackend + ?Sized>(
     backend: &B,
     points: &[&[u8]],
@@ -182,6 +193,13 @@ pub fn msm_g1<B: SyscallBackend + ?Sized>(
 
 /// One G1 scalar multiplication: `k · P`. Wraps the syscall with wire-
 /// format length checks.
+///
+/// # Errors
+///
+/// - [`OnChainError::InvalidPointEncoding`] — `point.len() != 64`.
+/// - [`OnChainError::InternalInvariantViolation`] — the `alt_bn128`
+///   syscall returned a result whose length wasn't 64 bytes.
+/// - Syscall errors from the backend.
 pub fn scalar_mul_g1<B: SyscallBackend + ?Sized>(
     backend: &B,
     point: &[u8],
@@ -208,6 +226,12 @@ pub fn scalar_mul_g1<B: SyscallBackend + ?Sized>(
 
 /// G1 point addition: `P + Q`. Wraps the syscall with wire-format
 /// length checks.
+///
+/// # Errors
+///
+/// - [`OnChainError::InternalInvariantViolation`] — the `alt_bn128`
+///   syscall returned a result whose length wasn't 64 bytes.
+/// - Syscall errors from the backend.
 pub fn add_g1<B: SyscallBackend + ?Sized>(
     backend: &B,
     a: &[u8; 64],

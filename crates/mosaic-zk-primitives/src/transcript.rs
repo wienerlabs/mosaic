@@ -78,6 +78,10 @@ impl<'b, B: SyscallBackend + ?Sized> Transcript<'b, B> {
     }
 
     /// Convenience: absorb a G1 affine point's 64-byte canonical form.
+    ///
+    /// # Errors
+    ///
+    /// - [`OnChainError::InvalidPointEncoding`] — `point.len() != 64`.
     pub fn absorb_g1(&mut self, point: &[u8]) -> Result<(), OnChainError> {
         if point.len() != 64 {
             return Err(OnChainError::InvalidPointEncoding);
@@ -88,6 +92,10 @@ impl<'b, B: SyscallBackend + ?Sized> Transcript<'b, B> {
 
     /// Convenience: absorb a 32-byte Fr element. Caller is responsible
     /// for ensuring it's actually in range.
+    ///
+    /// # Errors
+    ///
+    /// - [`OnChainError::InvalidFieldEncoding`] — `fr_be.len() != 32`.
     pub fn absorb_fr(&mut self, fr_be: &[u8]) -> Result<(), OnChainError> {
         if fr_be.len() != 32 {
             return Err(OnChainError::InvalidFieldEncoding);
@@ -101,6 +109,15 @@ impl<'b, B: SyscallBackend + ?Sized> Transcript<'b, B> {
     /// Does **not** reset the accumulator — the challenge is derived from
     /// the full accumulator, and the caller decides whether to continue
     /// absorbing into the same transcript or start fresh.
+    ///
+    /// # Errors
+    ///
+    /// - [`OnChainError::UnimplementedProofSystem`] — transcript was
+    ///   constructed with `Kind::PoseidonBn254X5`; Poseidon squeezing
+    ///   is deferred (see issue #1).
+    /// - Backend hash syscall errors (typically
+    ///   [`OnChainError::Keccak256SyscallFailed`]) when the Keccak-256
+    ///   backend underlying this syscall fails.
     pub fn get_challenge(&self) -> Result<[u8; 32], OnChainError> {
         let raw = match self.kind {
             Kind::Keccak256 => self.backend.keccak256(&[&self.accumulated])?,
