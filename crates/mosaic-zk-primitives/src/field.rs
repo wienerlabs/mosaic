@@ -463,4 +463,63 @@ mod tests {
         let strict2 = fr_from_canonical_bytes(&canonical).unwrap();
         assert_eq!(reduced, strict2);
     }
+
+    // ---- Property-based tests (session 34) ----
+    //
+    // Canonical encode/decode is the most-hit code path: every
+    // challenge derivation and every proof parse runs through
+    // `fr_to_canonical_bytes` ↔ `fr_from_canonical_bytes`. Tight
+    // round-trip invariants under proptest guard against subtle
+    // endianness / byte-order regressions.
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// `fr_to_canonical_bytes → fr_from_canonical_bytes` is
+        /// the identity for any Fr element.
+        #[test]
+        fn prop_canonical_round_trip(seed in any::<u64>()) {
+            let mut rng = seeded_rng(seed);
+            let original = Fr::rand(&mut rng);
+            let bytes = fr_to_canonical_bytes(&original);
+            let decoded = fr_from_canonical_bytes(&bytes).unwrap();
+            prop_assert_eq!(original, decoded);
+        }
+
+        /// `fr_be_from_u64 → fr_from_canonical_bytes` matches
+        /// `Fr::from(n)` for any u64. Confirms the const helper
+        /// produces canonical BE encodings identical to the
+        /// arkworks round-trip.
+        #[test]
+        fn prop_fr_be_from_u64_matches_arkworks(n in any::<u64>()) {
+            let via_const = fr_be_from_u64(n);
+            let decoded = fr_from_canonical_bytes(&via_const).unwrap();
+            prop_assert_eq!(decoded, Fr::from(n));
+        }
+
+        /// `fr_from_be_bytes_reduced` agrees with
+        /// `fr_from_canonical_bytes` for every in-range input. The
+        /// reduced variant's behavior diverges only for out-of-range
+        /// inputs, which this test deliberately excludes.
+        #[test]
+        fn prop_reduced_matches_strict_in_range(seed in any::<u64>()) {
+            let mut rng = seeded_rng(seed);
+            let fr = Fr::rand(&mut rng);
+            let bytes = fr_to_canonical_bytes(&fr);
+            let strict = fr_from_canonical_bytes(&bytes).unwrap();
+            let reduced = fr_from_be_bytes_reduced(&bytes);
+            prop_assert_eq!(strict, reduced);
+        }
+
+        /// `fr_from_be_bytes_reduced` always produces an Fr element
+        /// whose canonical round-trip equals itself. Guarantees that
+        /// the reduced value is strictly less than r.
+        #[test]
+        fn prop_reduced_output_is_in_range(bytes in proptest::array::uniform32(any::<u8>())) {
+            let reduced = fr_from_be_bytes_reduced(&bytes);
+            let encoded = fr_to_canonical_bytes(&reduced);
+            let decoded = fr_from_canonical_bytes(&encoded).unwrap();
+            prop_assert_eq!(reduced, decoded);
+        }
+    }
 }

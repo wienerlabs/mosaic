@@ -29,6 +29,12 @@ ark-ec = { workspace = true, features = ["std"] }
 ark-ff = { workspace = true, features = ["std"] }
 ark-serialize = { workspace = true, features = ["std"] }
 ark-std = { workspace = true, features = ["std"] }
+# Session 34: property-based testing for the hand-rolled borrow-
+# chain arithmetic in fr::sub_r and msm::negate_g1, plus round-trip
+# invariants for Fr canonical encode/decode. 1.5 is the current
+# stable series; no std feature split needed here since everything
+# runs as dev-dep on std.
+proptest = "1.5"
 
 [features]
 default = []

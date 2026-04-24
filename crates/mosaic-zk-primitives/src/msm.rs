@@ -510,4 +510,91 @@ mod tests {
         let r = verify_two_pair_pairing(&backend, &g1, &short_g2, &g1, &g2);
         assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
     }
+
+    // ---- Property-based tests (session 34) ----
+    //
+    // `negate_g1` hand-rolls `(q − y) mod q` with the session-31
+    // overflowing_sub borrow chain; scalar_mul_g1 + add_g1 round-
+    // trips delegate to the syscall. The invariants under test:
+    //
+    //   1. Double-negation is the identity (up to the y=0 edge case
+    //      where negate is defined as identity).
+    //   2. P + (-P) = identity, for any valid on-curve P.
+    //   3. MSM of one term: `msm_g1([P], [k]) = scalar_mul_g1(P, k)`.
+    //   4. MSM-scalar-zero collapses to zero: any point × 0 = 0.
+
+    use proptest::prelude::*;
+
+    /// Strategy: random scalars for the arkworks `Fr` group. Seeded
+    /// via a u64; we derive the Fr on demand so proptest's shrinking
+    /// can bisect failing seeds without needing to shrink through
+    /// 32-byte arrays (which doesn't compose well with field
+    /// arithmetic invariants).
+    fn fr_from_seed(seed: u64) -> ark_bn254::Fr {
+        let mut rng = seeded_rng(seed);
+        Fr::rand(&mut rng)
+    }
+
+    /// Strategy: a random on-curve G1 point, encoded as our canonical
+    /// 64-byte BE form. Same seed-driven pattern as fr_from_seed.
+    fn g1_from_seed(seed: u64) -> [u8; 64] {
+        let mut rng = seeded_rng(seed);
+        let p = G1Projective::rand(&mut rng).into_affine();
+        ark_g1_to_canonical(&p)
+    }
+
+    proptest! {
+        /// `negate_g1(negate_g1(P)) == P` for any on-curve P.
+        /// Exercises the session-31 overflowing_sub borrow chain
+        /// across every byte position.
+        #[test]
+        fn prop_negate_g1_is_involutive(seed in any::<u64>()) {
+            let p = g1_from_seed(seed);
+            let twice = negate_g1(&negate_g1(&p));
+            prop_assert_eq!(twice, p);
+        }
+
+        /// `P + (-P) = identity (zero G1)` for any on-curve P.
+        /// Cross-verifies negate_g1 against the `alt_bn128` G1Add
+        /// syscall path.
+        #[test]
+        fn prop_p_plus_neg_p_is_identity(seed in any::<u64>()) {
+            let backend = HostBackend::new();
+            let p = g1_from_seed(seed);
+            let neg_p = negate_g1(&p);
+            let sum = add_g1(&backend, &p, &neg_p).unwrap();
+            prop_assert_eq!(sum, G1_ZERO);
+        }
+
+        /// Single-term MSM collapses to the underlying scalar_mul.
+        #[test]
+        fn prop_msm_one_term_equals_scalar_mul(point_seed in any::<u64>(), scalar_seed in any::<u64>()) {
+            let backend = HostBackend::new();
+            let p = g1_from_seed(point_seed);
+            let k = fr_from_seed(scalar_seed);
+            let k_bytes = {
+                let mut le = k.into_bigint().to_bytes_le();
+                le.resize(32, 0);
+                le.reverse();
+                let mut out = [0u8; 32];
+                out.copy_from_slice(&le);
+                out
+            };
+
+            let direct = scalar_mul_g1(&backend, &p, &k_bytes).unwrap();
+            let via_msm = msm_g1(&backend, &[&p], &[k_bytes]).unwrap();
+            prop_assert_eq!(direct, via_msm);
+        }
+
+        /// Any point × 0 = identity. Tests the scalar_mul edge case
+        /// that sometimes surprises syscall implementations.
+        #[test]
+        fn prop_scalar_mul_by_zero_is_identity(seed in any::<u64>()) {
+            let backend = HostBackend::new();
+            let p = g1_from_seed(seed);
+            let zero_scalar = [0u8; 32];
+            let product = scalar_mul_g1(&backend, &p, &zero_scalar).unwrap();
+            prop_assert_eq!(product, G1_ZERO);
+        }
+    }
 }

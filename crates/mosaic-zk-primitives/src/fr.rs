@@ -201,4 +201,98 @@ mod tests {
         let parsed = parse_fr_be(&v).unwrap();
         assert_eq!(parsed, v);
     }
+
+    // ---- Property-based tests (session 34) ----
+    //
+    // The hand-rolled borrow-chain arithmetic in `sub_r` and
+    // `reduce_mod_r` resists ordinary unit tests — correctness
+    // depends on cross-byte borrow propagation, which is easy to
+    // get wrong at boundary values. `proptest` samples across the
+    // entire 32-byte input space and shrinks failing cases so a
+    // regression gets a minimal repro automatically.
+
+    use proptest::prelude::*;
+
+    /// Strategy: any 32-byte value (not necessarily in field range).
+    fn any_32_bytes() -> impl Strategy<Value = [u8; FR_LEN]> {
+        proptest::array::uniform32(any::<u8>())
+    }
+
+    /// Strategy: a 32-byte value guaranteed to be strictly less than
+    /// the BN254 Fr modulus. We pick arbitrary bytes and then reduce
+    /// once — reduce is the operation under test, but lt_r is an
+    /// independent primitive (table comparison) we trust.
+    fn in_range_32_bytes() -> impl Strategy<Value = [u8; FR_LEN]> {
+        any_32_bytes().prop_map(|mut b| {
+            reduce_mod_r(&mut b);
+            b
+        })
+    }
+
+    proptest! {
+        /// After `reduce_mod_r`, the result must be strictly less
+        /// than `r`. Holds for any 32-byte input (including the
+        /// all-ones upper bound at `2^256 − 1`).
+        #[test]
+        fn prop_reduce_mod_r_lands_in_range(bytes in any_32_bytes()) {
+            let mut x = bytes;
+            reduce_mod_r(&mut x);
+            prop_assert!(lt_r(&x), "reduce_mod_r produced out-of-range value: {x:?}");
+        }
+
+        /// Reducing a value that's already in range must be the
+        /// identity operation — no mutation beyond the initial lt_r
+        /// short-circuit.
+        #[test]
+        fn prop_reduce_mod_r_is_idempotent(bytes in in_range_32_bytes()) {
+            let mut once = bytes;
+            reduce_mod_r(&mut once);
+            let mut twice = once;
+            reduce_mod_r(&mut twice);
+            prop_assert_eq!(once, twice);
+            // Also: reducing an in-range value doesn't mutate it.
+            prop_assert_eq!(bytes, once);
+        }
+
+        /// `parse_fr_be` accepts any in-range 32-byte input and
+        /// round-trips the bytes verbatim.
+        #[test]
+        fn prop_parse_fr_be_round_trips_in_range(bytes in in_range_32_bytes()) {
+            let parsed = parse_fr_be(&bytes).expect("in-range input must parse");
+            prop_assert_eq!(parsed, bytes);
+        }
+
+        /// Session-31 borrow-chain invariant: `sub_r(r + delta) =
+        /// delta` for any in-range `delta`. We construct `x = r +
+        /// delta` by adding delta to r byte-by-byte with carry (also
+        /// hand-rolled), then call sub_r and check the result equals
+        /// delta. Catches any off-by-one in the borrow propagation.
+        ///
+        /// Scope: delta ∈ [0, 2^64 − 1] (u64 fits in the low 8 bytes,
+        /// avoids complex carry cases in the addition helper while
+        /// still exercising sub_r's full 32-byte sweep).
+        #[test]
+        fn prop_sub_r_recovers_delta(delta_lo in any::<u64>()) {
+            let mut delta_be = [0u8; FR_LEN];
+            delta_be[24..32].copy_from_slice(&delta_lo.to_be_bytes());
+            if !lt_r(&delta_be) {
+                // Skip the u64 value wrapping above r (very rare
+                // because r ≈ 2^253, but proptest will still try it
+                // occasionally).
+                return Ok(());
+            }
+            let mut x = BN254_FR_MODULUS_BE;
+            // x += delta_be (add with carry, big-endian).
+            let mut carry: u16 = 0;
+            for i in (0..FR_LEN).rev() {
+                let sum = u16::from(x[i]) + u16::from(delta_be[i]) + carry;
+                x[i] = (sum & 0xff) as u8;
+                carry = sum >> 8;
+            }
+            prop_assert_eq!(carry, 0, "r + delta (delta < r) must not overflow 32 bytes");
+            // Now sub_r(x) must recover delta_be exactly.
+            sub_r(&mut x);
+            prop_assert_eq!(x, delta_be);
+        }
+    }
 }
