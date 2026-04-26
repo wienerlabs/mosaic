@@ -7,7 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Added — audit-coverage sweep (sessions 37-42, post-v0.8.0)
+
+Workspace-wide property-based test sweep brings every Phase-1,
+Phase-2, Phase-3, adapter, state-machine, SDK, and on-chain program
+crate under audit-grade proptest coverage. **+111 proptest tests**
+across nine crates:
+
+| Crate | Δ proptest | Total tests |
+|---|---:|---:|
+| `mosaic-halo2` | +16 | 75 |
+| `mosaic-hyperplonk` | +17 | 82 |
+| `mosaic-nova` | +14 | 59 |
+| `mosaic-plonk` | +15 | 32 |
+| `mosaic-groth16` | +15 | 26 |
+| `mosaic-serde` | +9 | 12 |
+| `mosaic-chunked` | +11 | 20 |
+| `mosaic-sdk` | +7 | 11 |
+| `mosaic-program` | +7 | 7 |
+
+Property categories pinned:
+
+- **Canonical byte layout invariants** — proof / VK round-trip,
+  trailing-garbage rejection, truncation rejection, oversized-counter
+  rejection (cap enforced before `checked_mul`), variant-tag rejection
+  for systems with enum discriminants (Nova folding variant).
+- **Fiat-Shamir avalanche** — round-by-round cascade properties for
+  Halo2 (4 rounds), HyperPlonk (3 rounds), Nova (3 rounds), and PLONK
+  (6 rounds). The PLONK sweep includes an audit-grade pin on the
+  snarkjs-compatibility bit "u absorbs only `W_xi` and `W_xiω`,
+  NOT `v`" — a past subtle bug rediscovered as a property.
+- **Single-byte tamper rejection** — random byte flip in any commit
+  or opening witness must fail verification. Scope was narrowed away
+  from selector-eval slots after a documented false positive surfaced
+  (see "Documented false positives" below).
+- **State-machine monotonicity** — chunked-upload session: no append
+  after finalize, no double-finalize, no out-of-order chunk index,
+  no oversized chunk, no total-len overflow.
+- **Borsh wire-format round-trip** — `VerifyProofData`,
+  `VerifyProofBatchData`, and the SDK payload pin the four-field
+  order against silent reorderings that would swap proof and
+  public_inputs on the wire.
+- **BE-comparison + Fr arithmetic primitives** — `lt_be` is
+  anti-reflexive, asymmetric, and decided by the first differing
+  byte; `add_mod_r` is commutative, has 0 as identity, preserves Fr
+  range; `reduce_mod_r` lands in [0, r), is idempotent, and identity
+  on already-reduced inputs.
+- **snarkjs adapter byte ordering** — the Solana c1 ‖ c0 G2 layout
+  swap (different from snarkjs's native c0 ‖ c1) is pinned, as is
+  the `decimal_to_be_32` envelope (rejects `≥ 2^256`, pads small
+  u128 values to 32 bytes with leading zeros).
+- **Builder/setter independence + idempotence** — `with_vk(x)` only
+  mutates `vk`; calling a setter twice equals calling it once with
+  the second value (pure replacement, not append).
+- **Instruction-tag dispatch routing** — exhaustive byte-space check
+  for `process_instruction` returning `InvalidInstructionData` on
+  unknown tags, plus a wrong-program-id rejection invariant.
+
+#### Documented false positives (audit-grade trace)
+
+Three internal false positives surfaced and were resolved with
+inline rationale comments rather than silent suppressions:
+
+1. **Halo2 verifier random-byte-flip in selector slots** — the
+   trivially-zero dummy fixture has `b = 0` for every wire, so
+   flipping a `Q_R` byte preserves `gate_expr = Q_R · b = 0`. Scope
+   narrowed to commit + opening byte regions; the selector-slot
+   property is deferred to the fixture-driven differential harness.
+
+2. **HyperPlonk verifier `anchor + XOR` cancellation** — the pattern
+   `proof[off] = anchor; proof[off] ^= bit_mask;` collapses to a
+   no-op when `bit_mask == anchor`. Surfaced by proptest shrinking
+   on the first run; rewritten as direct `proof[off] = new_val`
+   with `new_val ∈ [1, 255]`. Same anti-pattern audited and avoided
+   across the rest of the sweep.
+
+3. **`is_multiple_of` MSRV warning** _(pre-existing, not introduced
+   by this sweep)_ — challenges modules use `usize::is_multiple_of`,
+   stable since Rust 1.87. Workspace MSRV is 1.85. CI passes because
+   the lint is in the pedantic group; documented in `AUDIT.md`.
+
+### Added — earlier in v0.8.0
 
 - **HyperPlonk univariate-point full-vector binding (session 28)** —
   The KZG opening's univariate evaluation point is now derived via
@@ -21,18 +101,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one. The reduction itself (intermediate commitments + fold
   consistency) stays on the roadmap.
 
-### Planned beyond v0.7.0-phase3-primitives
+### Planned beyond the audit-coverage sweep
 
 - **Fixture-driven differential testing** across all four Phase-3
   bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
   Requires external prover tooling; closes cryptographic soundness
-  verification beyond in-tree scaffold construction.
+  verification beyond in-tree scaffold construction. **This is now
+  the last named pre-audit gap** (see `README.md § Security`).
 - **HyperPlonk full Zeromorph / Pst / Gemini reduction** —
   intermediate commitment fields + fold-consistency pairing checks
   against the Espresso reference impl. Session 28 tightened the
   univariate-point binding; the actual multi-point → univariate
   reduction proof (with its per-fold commitments) remains a
   substantial canonical-layout change.
+- **`mosaic-program::chunked::dispatch` integration tests.** The
+  current SBF integration test under `tests/verify_proof_sbf.rs`
+  exercises the verify-proof path; the chunked dispatch path needs
+  a parallel `solana-program-test` harness with synthesized
+  `AccountInfo`.
+- **Arkworks adapter property tests.** Random valid `ArkProof` /
+  `ArkVk` fixture generation requires a small inline circuit; this
+  was deferred from session 40.
 - **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
 
 ## [0.7.0-phase3-primitives] — 2026-04-23
