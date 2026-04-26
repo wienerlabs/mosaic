@@ -244,7 +244,12 @@ async fn append_chunk_advances_state() {
     let (session_pda, _bump) = derive_session_pda(&session_id, &payer.pubkey());
 
     let init_ix = build_initialize_session_ix(
-        &payer.pubkey(), &session_pda, &session_id, total_len, PROOF_SYSTEM_GROTH16, &h_0,
+        &payer.pubkey(),
+        &session_pda,
+        &session_id,
+        total_len,
+        PROOF_SYSTEM_GROTH16,
+        &h_0,
     );
     let chunk1 = [1u8, 2];
     let append1_ix = build_append_chunk_ix(&payer.pubkey(), &session_pda, 0, &chunk1);
@@ -281,11 +286,8 @@ async fn wrong_payer_rejected() {
     let (session_pda, _bump) = derive_session_pda(&session_id, &alice.pubkey());
 
     // Fund Bob so he can sign tx (but not pay rent for someone else's account).
-    let fund_bob_ix = solana_sdk::system_instruction::transfer(
-        &alice.pubkey(),
-        &bob.pubkey(),
-        10_000_000,
-    );
+    let fund_bob_ix =
+        solana_sdk::system_instruction::transfer(&alice.pubkey(), &bob.pubkey(), 10_000_000);
     let init_ix = build_initialize_session_ix(
         &alice.pubkey(),
         &session_pda,
@@ -305,12 +307,8 @@ async fn wrong_payer_rejected() {
     // Bob tries to append to Alice's session.
     let blockhash2 = banks.get_latest_blockhash().await.unwrap();
     let bad_ix = build_append_chunk_ix(&bob.pubkey(), &session_pda, 0, &[7, 7]);
-    let tx = Transaction::new_signed_with_payer(
-        &[bad_ix],
-        Some(&bob.pubkey()),
-        &[&bob],
-        blockhash2,
-    );
+    let tx =
+        Transaction::new_signed_with_payer(&[bad_ix], Some(&bob.pubkey()), &[&bob], blockhash2);
     let err = banks.process_transaction(tx).await.unwrap_err();
     let s = format!("{err:?}");
     assert!(
@@ -328,7 +326,12 @@ async fn out_of_order_chunk_rejected() {
     let (session_pda, _bump) = derive_session_pda(&session_id, &payer.pubkey());
 
     let init_ix = build_initialize_session_ix(
-        &payer.pubkey(), &session_pda, &session_id, total_len, PROOF_SYSTEM_GROTH16, &h_0,
+        &payer.pubkey(),
+        &session_pda,
+        &session_id,
+        total_len,
+        PROOF_SYSTEM_GROTH16,
+        &h_0,
     );
     // Skip index 0; supply index 2.
     let bad_ix = build_append_chunk_ix(&payer.pubkey(), &session_pda, 2, &[1, 2]);
@@ -366,13 +369,22 @@ async fn commit_with_wrong_hash_rejected() {
     );
 
     let init_ix = build_initialize_session_ix(
-        &payer.pubkey(), &session_pda, &session_id, total_len, PROOF_SYSTEM_GROTH16, &h_0,
+        &payer.pubkey(),
+        &session_pda,
+        &session_id,
+        total_len,
+        PROOF_SYSTEM_GROTH16,
+        &h_0,
     );
     let chunk = [9u8, 9];
     let append_ix = build_append_chunk_ix(&payer.pubkey(), &session_pda, 0, &chunk);
     let wrong_hash = [0xFF; 32];
     let bad_commit = build_commit_and_verify_ix(
-        &payer.pubkey(), &session_pda, &vk_keypair.pubkey(), &wrong_hash, &[],
+        &payer.pubkey(),
+        &session_pda,
+        &vk_keypair.pubkey(),
+        &wrong_hash,
+        &[],
     );
 
     let tx = Transaction::new_signed_with_payer(
@@ -398,7 +410,12 @@ async fn cancel_expired_before_expiry_rejected() {
     let (session_pda, _bump) = derive_session_pda(&session_id, &payer.pubkey());
 
     let init_ix = build_initialize_session_ix(
-        &payer.pubkey(), &session_pda, &session_id, total_len, PROOF_SYSTEM_GROTH16, &h_0,
+        &payer.pubkey(),
+        &session_pda,
+        &session_id,
+        total_len,
+        PROOF_SYSTEM_GROTH16,
+        &h_0,
     );
     // Try permissionless GC immediately (caller is also payer here, just for simplicity).
     let bad_gc = build_cancel_expired_ix(&payer.pubkey(), &session_pda, &payer.pubkey());
@@ -426,7 +443,12 @@ async fn double_init_rejected() {
     let (session_pda, _bump) = derive_session_pda(&session_id, &payer.pubkey());
 
     let init_ix = build_initialize_session_ix(
-        &payer.pubkey(), &session_pda, &session_id, total_len, PROOF_SYSTEM_GROTH16, &h_0,
+        &payer.pubkey(),
+        &session_pda,
+        &session_id,
+        total_len,
+        PROOF_SYSTEM_GROTH16,
+        &h_0,
     );
     let init_ix_again = init_ix.clone();
 

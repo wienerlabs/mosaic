@@ -3194,6 +3194,7 @@ dependencies = [
  "mosaic-nova",
  "mosaic-plonk",
  "mosaic-stark",
+ "proptest",
  "solana-program",
  "solana-program-test",
  "solana-sdk",

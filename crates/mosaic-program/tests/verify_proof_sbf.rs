@@ -31,8 +31,7 @@ use solana_sdk::{
 };
 use std::{fs, path::PathBuf};
 
-const PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("MosA1cVer1f1er11111111111111111111111111111");
+const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("MosA1cVer1f1er11111111111111111111111111111");
 
 #[derive(BorshSerialize)]
 struct VerifyProofData {
@@ -87,7 +86,11 @@ fn build_verify_ix(vk: &[u8], proof: &[u8], public_inputs: &[u8]) -> Instruction
     let mut data = Vec::with_capacity(1 + 1 + vk.len() + proof.len() + public_inputs.len() + 16);
     data.push(0x01); // InstructionTag::VerifyProof
     borsh::to_writer(&mut data, &payload).unwrap();
-    Instruction { program_id: PROGRAM_ID, accounts: Vec::<AccountMeta>::new(), data }
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: Vec::<AccountMeta>::new(),
+        data,
+    }
 }
 
 fn extract_cu(logs: &[String]) -> Option<u64> {
@@ -152,7 +155,8 @@ async fn sbf_verify_proof_succeeds_on_valid_groth16() {
 
     // Program log dispatch line should appear.
     assert!(
-        logs.iter().any(|l| l.contains("mosaic: dispatch groth16_bn254")),
+        logs.iter()
+            .any(|l| l.contains("mosaic: dispatch groth16_bn254")),
         "expected dispatch log line, got:\n{}",
         logs.join("\n"),
     );
@@ -187,9 +191,12 @@ async fn sbf_rejects_tampered_proof() {
     let err = banks.process_transaction(tx).await.unwrap_err();
     let s = format!("{err:?}");
     assert!(
-        s.contains("Custom(32)") || s.contains("0x20")
-            || s.contains("Custom(64)") || s.contains("0x40")
-            || s.contains("Custom(6)")  || s.contains("0x6"),
+        s.contains("Custom(32)")
+            || s.contains("0x20")
+            || s.contains("Custom(64)")
+            || s.contains("0x40")
+            || s.contains("Custom(6)")
+            || s.contains("0x6"),
         "expected PairingCheckFailed / AltBn128SyscallFailed / PointNotOnCurve, got: {s}",
     );
 }

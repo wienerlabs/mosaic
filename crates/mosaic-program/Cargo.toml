@@ -33,6 +33,7 @@ solana-program-test = { workspace = true }
 solana-sdk = { workspace = true }
 borsh = { workspace = true, features = ["std"] }
 tokio = { workspace = true }
+proptest = { workspace = true }
 
 [features]
 default = []

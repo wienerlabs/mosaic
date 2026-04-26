@@ -20,16 +20,9 @@ use mosaic_chunked::{
 };
 use mosaic_core::{proof_system::ProofSystemId, OnChainError};
 use solana_program::{
-    account_info::AccountInfo,
-    clock::Clock,
-    entrypoint::ProgramResult,
-    msg,
-    program::invoke_signed,
-    program_error::ProgramError,
-    pubkey::Pubkey,
-    rent::Rent,
-    system_instruction, system_program,
-    sysvar::Sysvar,
+    account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, msg,
+    program::invoke_signed, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
+    system_instruction, system_program, sysvar::Sysvar,
 };
 
 use crate::dispatch_verify;
@@ -43,8 +36,7 @@ pub fn dispatch(
     let (tag, rest) = instruction_data
         .split_first()
         .ok_or(ProgramError::InvalidInstructionData)?;
-    let tag = ChunkedInstructionTag::from_byte(*tag)
-        .ok_or(ProgramError::InvalidInstructionData)?;
+    let tag = ChunkedInstructionTag::from_byte(*tag).ok_or(ProgramError::InvalidInstructionData)?;
     match tag {
         ChunkedInstructionTag::InitializeSession => initialize_session(program_id, accounts, rest),
         ChunkedInstructionTag::AppendChunk => append_chunk(program_id, accounts, rest),
@@ -61,8 +53,12 @@ pub fn dispatch(
 /// Manual parser for a fixed-size byte slice; produces a clearer error than
 /// borsh's `Io` for our specific failure mode.
 fn read_array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], ProgramError> {
-    let end = offset.checked_add(N).ok_or(ProgramError::InvalidInstructionData)?;
-    let slice = buf.get(offset..end).ok_or(ProgramError::InvalidInstructionData)?;
+    let end = offset
+        .checked_add(N)
+        .ok_or(ProgramError::InvalidInstructionData)?;
+    let slice = buf
+        .get(offset..end)
+        .ok_or(ProgramError::InvalidInstructionData)?;
     let mut out = [0u8; N];
     out.copy_from_slice(slice);
     Ok(out)
@@ -95,7 +91,9 @@ fn load_session(
         .map_err(|_| ProgramError::InvalidAccountData)?;
     if session.payer != payer_key.to_bytes() {
         msg!("mosaic: session payer mismatch");
-        return Err(ProgramError::Custom(OnChainError::SessionContextMismatch.code()));
+        return Err(ProgramError::Custom(
+            OnChainError::SessionContextMismatch.code(),
+        ));
     }
     Ok(session)
 }
@@ -173,11 +171,15 @@ fn initialize_session(
     }
     let session_id = read_array::<32>(payload, 0)?;
     let total_len = read_u32_le(payload, 32)?;
-    let proof_system_id = *payload.get(36).ok_or(ProgramError::InvalidInstructionData)?;
+    let proof_system_id = *payload
+        .get(36)
+        .ok_or(ProgramError::InvalidInstructionData)?;
     let h_0 = read_array::<32>(payload, 37)?;
 
     if total_len == 0 {
-        return Err(ProgramError::Custom(OnChainError::ProofLengthMismatch.code()));
+        return Err(ProgramError::Custom(
+            OnChainError::ProofLengthMismatch.code(),
+        ));
     }
     if total_len > MAX_PROOF_LEN {
         return Err(ProgramError::Custom(OnChainError::ChunkOverflow.code()));
@@ -268,7 +270,11 @@ fn append_chunk(
         return Err(ProgramError::Custom(OnChainError::ChunkOverflow.code()));
     }
     let chunk = payload
-        .get(4..4_usize.checked_add(chunk_len).ok_or(ProgramError::InvalidInstructionData)?)
+        .get(
+            4..4_usize
+                .checked_add(chunk_len)
+                .ok_or(ProgramError::InvalidInstructionData)?,
+        )
         .ok_or(ProgramError::InvalidInstructionData)?;
 
     let payer = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
@@ -322,11 +328,13 @@ fn commit_and_verify(
     let mut session = load_session(program_id, session_pda, payer.key)?;
     assert_session_pda(program_id, &session, session_pda.key)?;
 
-    session.finalize(expected_hash).map_err(ProgramError::from)?;
+    session
+        .finalize(expected_hash)
+        .map_err(ProgramError::from)?;
     write_session(session_pda, &session)?; // persist `finalized = true` defence-in-depth
 
-    let proof_system_id = ProofSystemId::from_byte(session.proof_system_id)
-        .map_err(ProgramError::from)?;
+    let proof_system_id =
+        ProofSystemId::from_byte(session.proof_system_id).map_err(ProgramError::from)?;
     let vk_data = vk_account.try_borrow_data()?;
 
     match dispatch_verify(proof_system_id, &vk_data, &session.assembled, public_inputs) {
@@ -407,4 +415,3 @@ fn cancel_expired_session(
     msg!("mosaic: expired session GC'd, rent refunded to payer");
     Ok(())
 }
-
