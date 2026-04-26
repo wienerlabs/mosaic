@@ -38,6 +38,10 @@ criterion = { workspace = true }
 name = "groth16_host"
 harness = false
 
+[[bench]]
+name = "phase3_host"
+harness = false
+
 [[bin]]
 name = "bpf-bench"
 path = "src/bin/bpf_bench.rs"
