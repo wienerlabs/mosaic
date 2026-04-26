@@ -147,11 +147,7 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
         //    the proof's final_evals bundle, and compare to the
         //    sumcheck's final claim. Session 18: permutation cosets
         //    come from the VK rather than being hardcoded (1, 2, 3).
-        let expected_claim = compute_expected_final_claim(
-            proof.final_evals,
-            &challenges,
-            &vk,
-        )?;
+        let expected_claim = compute_expected_final_claim(proof.final_evals, &challenges, &vk)?;
         if expected_claim != sumcheck_out.final_claim {
             return Err(OnChainError::SumcheckFailed);
         }
@@ -317,9 +313,7 @@ fn permutation_term(
 #[allow(dead_code)]
 const _SUMCHECK_POLY_LEN: usize = SUMCHECK_POLY_LEN;
 
-impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem
-    for HyperPlonkKzgBn254<'_, B>
-{
+impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for HyperPlonkKzgBn254<'_, B> {
     fn proof_system_id(&self) -> ProofSystemId {
         ProofSystemId::HyperPlonkKzgBn254
     }
@@ -456,7 +450,10 @@ mod tests {
         let proof = dummy_proof_bytes_10_rounds();
         let pi = [0u8; FR_LEN];
         let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
-        assert!(r.is_ok(), "zero-proof pipeline should pass trivially, got {r:?}");
+        assert!(
+            r.is_ok(),
+            "zero-proof pipeline should pass trivially, got {r:?}"
+        );
     }
 
     #[test]
@@ -489,7 +486,7 @@ mod tests {
         let backend = NeverBackend;
         let v = HyperPlonkKzgBn254::new(&backend);
         let vk = dummy_vk_bytes(); // declares num_variables = 10
-        // Build a proof claiming 8 rounds.
+                                   // Build a proof claiming 8 rounds.
         let polys_len = 8 * SUMCHECK_POLY_LEN;
         let total = FIXED_HEADER_LEN + polys_len + FINAL_EVALS * FR_LEN + G1_LEN;
         let mut proof = alloc::vec![0u8; total];
@@ -529,8 +526,7 @@ mod tests {
         // Set q_c final_eval to 1. All other final_evals are 0. With
         // a=b=c=0, q_m=q_l=q_r=q_o=0, gate = q_c = 1 ≠ 0.
         // Offset: FIXED_HEADER + 10·SUMCHECK_POLY_LEN + Q_C * FR_LEN.
-        let q_c_offset =
-            FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::Q_C * FR_LEN;
+        let q_c_offset = FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::Q_C * FR_LEN;
         proof[q_c_offset + 31] = 1; // last byte of BE Fr = 1 → Fr::one()
         let pi = [0u8; FR_LEN];
         let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
@@ -554,13 +550,11 @@ mod tests {
         let mut proof = dummy_proof_bytes_10_rounds();
 
         // Set z final_eval = 1.
-        let z_offset =
-            FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::Z * FR_LEN;
+        let z_offset = FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::Z * FR_LEN;
         proof[z_offset + 31] = 1;
 
         // Set sigma_1 final_eval = 7.
-        let sigma_1_offset =
-            FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::SIGMA_1 * FR_LEN;
+        let sigma_1_offset = FIXED_HEADER_LEN + 10 * SUMCHECK_POLY_LEN + idx::SIGMA_1 * FR_LEN;
         proof[sigma_1_offset + 31] = 7;
 
         let pi = [0u8; FR_LEN];
@@ -578,10 +572,7 @@ mod tests {
         // fail parsing → None.
         let backend = NeverBackend;
         let v = HyperPlonkKzgBn254::new(&backend);
-        assert_eq!(
-            ProofSystem::estimated_compute_units(&v, &[], &[]),
-            None,
-        );
+        assert_eq!(ProofSystem::estimated_compute_units(&v, &[], &[]), None,);
     }
 
     #[test]
@@ -638,12 +629,10 @@ mod tests {
         let k3_b = Fr::from(47u64);
 
         let term_a = permutation_term(
-            &wires, &z, &sigma_1, &sigma_2, &sigma_3, &beta, &gamma, &k1_a,
-            &k2_a, &k3_a,
+            &wires, &z, &sigma_1, &sigma_2, &sigma_3, &beta, &gamma, &k1_a, &k2_a, &k3_a,
         );
         let term_b = permutation_term(
-            &wires, &z, &sigma_1, &sigma_2, &sigma_3, &beta, &gamma, &k1_b,
-            &k2_b, &k3_b,
+            &wires, &z, &sigma_1, &sigma_2, &sigma_3, &beta, &gamma, &k1_b, &k2_b, &k3_b,
         );
 
         assert_ne!(
@@ -706,23 +695,132 @@ mod tests {
         let mut vk_bad = vk_ok.clone();
         vk_bad.k_1 = HyperPlonkVerifyingKey::fr_be_from_u64(99);
 
-        let claim_ok = compute_expected_final_claim(
-            &evals_bytes,
-            &challenges,
-            &vk_ok,
-        )
-        .unwrap();
-        let claim_bad = compute_expected_final_claim(
-            &evals_bytes,
-            &challenges,
-            &vk_bad,
-        )
-        .unwrap();
+        let claim_ok = compute_expected_final_claim(&evals_bytes, &challenges, &vk_ok).unwrap();
+        let claim_bad = compute_expected_final_claim(&evals_bytes, &challenges, &vk_bad).unwrap();
 
         assert_ne!(
             claim_ok, claim_bad,
             "tampered vk.k_1 must produce a different final claim; \
              otherwise VK coset tampering would be silently absorbed"
         );
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 38 — adversarial single-byte tamper proptests for
+    // HyperPlonk's verifier pipeline.
+    //
+    // Same audit-grade soundness density check as the session-37 Halo2
+    // sweep, restricted to the byte regions that do *not* interact with
+    // the trivially-zero dummy fixture's wire-products. For HyperPlonk
+    // the safe regions are:
+    //
+    //   - Commits A / B / C / Z   ([0, 256))      — round-1 absorb,
+    //                                                cascades soundness.
+    //   - KZG opening witness     ([1604, 1668))  — direct pairing
+    //                                                input.
+    //
+    // The sumcheck round-poly area and the final_evals selector slots
+    // are skipped for the same reason as Halo2's commit-only sweep:
+    // selectors multiplied by zero wires preserve the trivial accept,
+    // so flipping their bytes is not a soundness defect of the verifier.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Any single non-zero bit flip inside an A / B / C / Z
+        /// commitment must cause verification to fail. The four 64-byte
+        /// commits sit at the proof's prefix and feed round 1 of the
+        /// Fiat-Shamir transcript, so a flip cascades into β / γ / α
+        /// and breaks the sumcheck identity that holds for the
+        /// un-tampered fixture.
+        ///
+        /// **Note on the tamper write.** We assign `proof[off] =
+        /// new_val` directly rather than XOR-ing into a fixed anchor.
+        /// The anchor pattern is brittle: if the bit mask happens to
+        /// equal the anchor value the XOR cancels out, leaving the
+        /// byte at zero and reproducing the accepting fixture (caught
+        /// during the first run of this proptest at off=0, mask=0x55).
+        /// `new_val ∈ [1, 255]` is non-zero by construction and
+        /// therefore guaranteed to differ from the dummy fixture's
+        /// zero-fill at any offset.
+        #[test]
+        fn proptest_random_commit_byte_flip_rejects(
+            commit_select in 0u8..4, // A, B, C, Z
+            byte_idx in 0usize..G1_LEN,
+            new_val in 1u8..=u8::MAX,
+        ) {
+            let backend = HostBackend::new();
+            let v = HyperPlonkKzgBn254::new(&backend);
+            let vk = dummy_vk_bytes();
+            let mut proof = dummy_proof_bytes_10_rounds();
+            let off = (commit_select as usize) * G1_LEN + byte_idx;
+            proof[off] = new_val;
+            let pi = [0u8; FR_LEN];
+            let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
+            prop_assert!(
+                r.is_err(),
+                "commit flip at off {off} (new_val {new_val:#04x}) \
+                 unexpectedly accepted: {r:?}"
+            );
+        }
+
+        /// Any single non-zero bit flip inside the trailing KZG opening
+        /// witness must cause verification to fail. The opening witness
+        /// is the final input to the pairing check; flipping any byte
+        /// causes `e(W, [x]_2) = e(C - y·G1, G2)` to disagree.
+        #[test]
+        fn proptest_random_kzg_opening_byte_flip_rejects(
+            byte_idx in 0usize..G1_LEN,
+            new_val in 1u8..=u8::MAX,
+        ) {
+            let backend = HostBackend::new();
+            let v = HyperPlonkKzgBn254::new(&backend);
+            let vk = dummy_vk_bytes();
+            let mut proof = dummy_proof_bytes_10_rounds();
+            // KZG opening is the trailing G1: total - G1_LEN .. total.
+            let total = proof.len();
+            let off = total - G1_LEN + byte_idx;
+            proof[off] = new_val;
+            let pi = [0u8; FR_LEN];
+            let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
+            prop_assert!(
+                r.is_err(),
+                "kzg opening flip at off {off} (new_val {new_val:#04x}) \
+                 unexpectedly accepted: {r:?}"
+            );
+        }
+
+        /// Any single non-zero bit flip inside the VK's selector
+        /// commitment region (`Q_M / Q_L / Q_R / Q_O / Q_C`) must
+        /// cause verification to fail. Selector commits feed round 1
+        /// of `derive_challenges` via `commits_iter`, so any flip
+        /// shifts β / γ / α and breaks the trivially-satisfied
+        /// sumcheck identity.
+        #[test]
+        fn proptest_random_vk_selector_byte_flip_rejects(
+            selector_select in 0u8..5, // Q_M, Q_L, Q_R, Q_O, Q_C
+            byte_idx in 0usize..G1_LEN,
+            new_val in 1u8..=u8::MAX,
+        ) {
+            let backend = HostBackend::new();
+            let v = HyperPlonkKzgBn254::new(&backend);
+            let mut vk = dummy_vk_bytes();
+            // Layout: 4 (n_public) + 4 (num_vars) + 128 (G2)
+            // = 136. Then 8 G1 commits in canonical order:
+            // q_m, q_l, q_r, q_o, q_c, σ_1, σ_2, σ_3.
+            let vk_commits_off = 4 + 4 + 128 + (selector_select as usize) * G1_LEN;
+            let off = vk_commits_off + byte_idx;
+            vk[off] = new_val;
+            let proof = dummy_proof_bytes_10_rounds();
+            let pi = [0u8; FR_LEN];
+            let r = HyperPlonkKzgBn254::verify(&v, &vk, &proof, &pi);
+            prop_assert!(
+                r.is_err(),
+                "VK selector flip at off {off} (new_val {new_val:#04x}) \
+                 unexpectedly accepted: {r:?}"
+            );
+        }
     }
 }

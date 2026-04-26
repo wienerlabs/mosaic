@@ -161,13 +161,7 @@ pub fn verify_batched_opening<B: SyscallBackend + ?Sized>(
     let xi_bytes = fr_to_canonical_bytes(univ_eval_point);
     let mut opening_arr = [0u8; G1_LEN];
     opening_arr.copy_from_slice(proof.kzg_opening);
-    let a1 = compute_kzg_opening_lhs(
-        backend,
-        &c_batched,
-        &y_bytes,
-        &xi_bytes,
-        &opening_arr,
-    )?;
+    let a1 = compute_kzg_opening_lhs(backend, &c_batched, &y_bytes, &xi_bytes, &opening_arr)?;
 
     // 6. Pairing check with 2 pairs:
     //    Pair 1: (A1, [1]_G2)
@@ -253,13 +247,7 @@ mod tests {
             final_evals: &proof_parsed.final_evals[..11 * FR_LEN],
             ..proof_parsed
         };
-        let r = verify_batched_opening(
-            &backend,
-            &mut t,
-            &vk,
-            &bad,
-            &Fr::from(0u64),
-        );
+        let r = verify_batched_opening(&backend, &mut t, &vk, &bad, &Fr::from(0u64));
         assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
     }
 
@@ -275,13 +263,7 @@ mod tests {
             kzg_opening: &proof_parsed.kzg_opening[..63],
             ..proof_parsed
         };
-        let r = verify_batched_opening(
-            &backend,
-            &mut t,
-            &vk,
-            &bad,
-            &Fr::from(0u64),
-        );
+        let r = verify_batched_opening(&backend, &mut t, &vk, &bad, &Fr::from(0u64));
         assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
     }
 
@@ -299,15 +281,12 @@ mod tests {
         let vk = zero_vk();
         let mut t = Transcript::new(Kind::Keccak256, &backend);
 
-        let r = verify_batched_opening(
-            &backend,
-            &mut t,
-            &vk,
-            &proof,
-            &Fr::from(0u64),
-        );
+        let r = verify_batched_opening(&backend, &mut t, &vk, &proof, &Fr::from(0u64));
         // Zero commitments → pairing of identity × identity = 1.
-        assert!(r.is_ok(), "zero proof should trivially pass pairing, got {r:?}");
+        assert!(
+            r.is_ok(),
+            "zero proof should trivially pass pairing, got {r:?}"
+        );
     }
 
     /// Non-trivial inputs with VK's `x2_g2 = G2_generator` (so the
@@ -345,13 +324,7 @@ mod tests {
         let mut t = Transcript::new(Kind::Keccak256, &backend);
 
         // ξ = 2 — non-zero univariate evaluation point.
-        let r = verify_batched_opening(
-            &backend,
-            &mut t,
-            &vk,
-            &proof,
-            &Fr::from(2u64),
-        );
+        let r = verify_batched_opening(&backend, &mut t, &vk, &proof, &Fr::from(2u64));
         assert!(
             matches!(r, Err(OnChainError::PairingCheckFailed)),
             "expected PairingCheckFailed for non-trivial proof with wrong opening, got {r:?}",

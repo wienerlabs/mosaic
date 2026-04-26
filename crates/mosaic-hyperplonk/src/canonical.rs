@@ -129,7 +129,10 @@ impl<'a> HyperPlonkProof<'a> {
         let (z, rest) = rest.split_at(G1_LEN);
         let (rounds_bytes, rest) = rest.split_at(4);
         let sumcheck_rounds = u32::from_le_bytes([
-            rounds_bytes[0], rounds_bytes[1], rounds_bytes[2], rounds_bytes[3],
+            rounds_bytes[0],
+            rounds_bytes[1],
+            rounds_bytes[2],
+            rounds_bytes[3],
         ]);
         if sumcheck_rounds > MAX_SUMCHECK_ROUNDS {
             return Err(OnChainError::ProofLengthMismatch);
@@ -145,8 +148,14 @@ impl<'a> HyperPlonkProof<'a> {
         let (final_evals, kzg_opening) = rest.split_at(FINAL_EVALS * FR_LEN);
         debug_assert_eq!(kzg_opening.len(), G1_LEN);
         Ok(Self {
-            a, b, c, z, sumcheck_rounds,
-            sumcheck_polys, final_evals, kzg_opening,
+            a,
+            b,
+            c,
+            z,
+            sumcheck_rounds,
+            sumcheck_polys,
+            final_evals,
+            kzg_opening,
         })
     }
 
@@ -348,9 +357,7 @@ impl HyperPlonkVerifyingKey {
 mod tests {
     use super::*;
     use alloc::vec;
-    use sizes::{
-        FINAL_EVALS, FIXED_HEADER_LEN, FR_LEN, G1_LEN, MIN_PROOF_LEN, SUMCHECK_POLY_LEN,
-    };
+    use sizes::{FINAL_EVALS, FIXED_HEADER_LEN, FR_LEN, G1_LEN, MIN_PROOF_LEN, SUMCHECK_POLY_LEN};
 
     fn proof_bytes_for_rounds(rounds: u32) -> Vec<u8> {
         let polys_len = (rounds as usize) * SUMCHECK_POLY_LEN;
@@ -363,7 +370,10 @@ mod tests {
 
     #[test]
     fn proof_layout_constants_consistent() {
-        assert_eq!(MIN_PROOF_LEN, 4 * G1_LEN + 4 + FINAL_EVALS * FR_LEN + G1_LEN);
+        assert_eq!(
+            MIN_PROOF_LEN,
+            4 * G1_LEN + 4 + FINAL_EVALS * FR_LEN + G1_LEN
+        );
         // 4·64 + 4 + 12·32 + 64 = 708.
         assert_eq!(MIN_PROOF_LEN, 708);
     }
@@ -469,7 +479,9 @@ mod tests {
     #[test]
     fn final_evals_indices_distinct_and_complete() {
         use final_evals_index::*;
-        let all = [A, B, C, Z, Q_M, Q_L, Q_R, Q_O, Q_C, SIGMA_1, SIGMA_2, SIGMA_3];
+        let all = [
+            A, B, C, Z, Q_M, Q_L, Q_R, Q_O, Q_C, SIGMA_1, SIGMA_2, SIGMA_3,
+        ];
         // All 12 slots filled.
         assert_eq!(all.len(), FINAL_EVALS);
         // All distinct (no index collision).
@@ -478,6 +490,203 @@ mod tests {
             assert!(i < 12, "index {i} out of range");
             assert!(!seen[i], "duplicate index {i}");
             seen[i] = true;
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 38 — proptest coverage for HyperPlonk canonical layout.
+    //
+    // Mirrors the session-37 Halo2 sweep: byte-layout invariants and
+    // adversarial framing. Two crate-specific shapes that don't exist
+    // in Halo2:
+    //
+    //   1. The dynamic dimension is `sumcheck_rounds` (≤
+    //      MAX_SUMCHECK_ROUNDS = 28 for arkworks TWO_ADICITY) rather
+    //      than four independent counters. This collapses the
+    //      "oversized counter" property to a one-axis fuzz.
+    //
+    //   2. The VK has a fixed serialized length (744 B) — there is no
+    //      variable-length tail. So the only adversarial framing
+    //      property for the VK is "wrong length ⇒ reject", which we
+    //      exhaust over the entire forbidden length space.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    prop_compose! {
+        /// Random VK with bounded shape parameters, distinct commit
+        /// fill bytes (so a swap between any two commitments would
+        /// surface as inequality after round-trip), and a coset triple
+        /// that satisfies the "all distinct" invariant.
+        fn arb_vk()(
+            n_public in 0u32..=8,
+            num_variables in 0u32..=20,
+            x2_byte in any::<u8>(),
+            qm_byte in any::<u8>(),
+            ql_byte in any::<u8>(),
+            qr_byte in any::<u8>(),
+            qo_byte in any::<u8>(),
+            qc_byte in any::<u8>(),
+            s1_byte in any::<u8>(),
+            s2_byte in any::<u8>(),
+            s3_byte in any::<u8>(),
+        ) -> HyperPlonkVerifyingKey {
+            HyperPlonkVerifyingKey {
+                n_public,
+                num_variables,
+                x2_g2: [x2_byte; 128],
+                q_m_g1: [qm_byte; G1_LEN],
+                q_l_g1: [ql_byte; G1_LEN],
+                q_r_g1: [qr_byte; G1_LEN],
+                q_o_g1: [qo_byte; G1_LEN],
+                q_c_g1: [qc_byte; G1_LEN],
+                sigma_1_g1: [s1_byte; G1_LEN],
+                sigma_2_g1: [s2_byte; G1_LEN],
+                sigma_3_g1: [s3_byte; G1_LEN],
+                k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+                k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+                k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
+            }
+        }
+    }
+
+    proptest! {
+        /// Any in-range `sumcheck_rounds` produces a parseable proof,
+        /// the round-poly iterator yields exactly that count, and each
+        /// round poly slice has the canonical 96-byte length.
+        #[test]
+        fn proptest_proof_parses_any_in_range_rounds(
+            rounds in 0u32..=sizes::MAX_SUMCHECK_ROUNDS,
+        ) {
+            let buf = proof_bytes_for_rounds(rounds);
+            let p = HyperPlonkProof::from_bytes(&buf)
+                .expect("in-range sumcheck_rounds parses");
+            prop_assert_eq!(p.sumcheck_rounds, rounds);
+            prop_assert_eq!(p.round_polys().count(), rounds as usize);
+            prop_assert_eq!(p.sumcheck_polys.len(), rounds as usize * SUMCHECK_POLY_LEN);
+            prop_assert_eq!(p.final_evals.len(), FINAL_EVALS * FR_LEN);
+            prop_assert_eq!(p.kzg_opening.len(), G1_LEN);
+            for rp in p.round_polys() {
+                prop_assert_eq!(rp.len(), SUMCHECK_POLY_LEN);
+            }
+        }
+
+        /// Any rounds count above the cap must be rejected before the
+        /// `checked_mul` size computation runs.
+        #[test]
+        fn proptest_proof_rejects_rounds_over_max(
+            overflow in 1u32..=64,
+        ) {
+            let bad = sizes::MAX_SUMCHECK_ROUNDS + overflow;
+            let polys_len = (bad as usize).saturating_mul(SUMCHECK_POLY_LEN);
+            let total = FIXED_HEADER_LEN
+                .saturating_add(polys_len)
+                .saturating_add(FINAL_EVALS * FR_LEN)
+                .saturating_add(G1_LEN);
+            // Cap allocation to avoid OOM on shrink (a u32::MAX rounds
+            // count would propose a TB of memory on the heap).
+            prop_assume!(total < 1 << 20);
+            let mut buf = vec![0u8; total];
+            buf[256..260].copy_from_slice(&bad.to_le_bytes());
+            prop_assert!(matches!(
+                HyperPlonkProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// Trailing garbage of any non-zero length must be rejected.
+        #[test]
+        fn proptest_proof_rejects_trailing_garbage(
+            rounds in 0u32..=sizes::MAX_SUMCHECK_ROUNDS,
+            extra in 1usize..=64,
+        ) {
+            let mut buf = proof_bytes_for_rounds(rounds);
+            buf.extend(core::iter::repeat_n(0xDE, extra));
+            prop_assert!(matches!(
+                HyperPlonkProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// Truncation past the fixed header must be rejected. Fixed
+        /// header carries the rounds counter; truncating the dynamic
+        /// payload leaves the parser asking for bytes that aren't there.
+        #[test]
+        fn proptest_proof_rejects_truncation(
+            rounds in 0u32..=sizes::MAX_SUMCHECK_ROUNDS,
+            chop in 1usize..=128,
+        ) {
+            let mut buf = proof_bytes_for_rounds(rounds);
+            let new_len = buf.len().saturating_sub(chop);
+            // Truncation below MIN_PROOF_LEN already rejected by the
+            // `bytes.len() < MIN_PROOF_LEN` guard — those cases are
+            // covered by `proof_rejects_wrong_length` above.
+            prop_assume!(new_len >= MIN_PROOF_LEN);
+            prop_assume!(new_len < buf.len());
+            buf.truncate(new_len);
+            prop_assert!(matches!(
+                HyperPlonkProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// VK encode then decode is the identity for any well-formed VK.
+        #[test]
+        fn proptest_vk_roundtrip(vk in arb_vk()) {
+            let bytes = vk.to_bytes();
+            prop_assert_eq!(bytes.len(), HyperPlonkVerifyingKey::SERIALIZED_LEN);
+            let decoded = HyperPlonkVerifyingKey::from_bytes(&bytes)
+                .expect("well-formed VK round-trips");
+            prop_assert_eq!(vk, decoded);
+        }
+
+        /// Any VK byte buffer whose length differs from
+        /// `SERIALIZED_LEN` must be rejected (the VK has no variable-
+        /// length tail, so any mismatch is fatal). Excludes the exact
+        /// canonical length.
+        #[test]
+        fn proptest_vk_rejects_any_wrong_length(
+            len in 0usize..=2 * HyperPlonkVerifyingKey::SERIALIZED_LEN,
+        ) {
+            prop_assume!(len != HyperPlonkVerifyingKey::SERIALIZED_LEN);
+            let buf = vec![0u8; len];
+            prop_assert!(matches!(
+                HyperPlonkVerifyingKey::from_bytes(&buf),
+                Err(OnChainError::VerifyingKeyLengthMismatch),
+            ));
+        }
+
+        /// Trailing garbage on encoded VK bytes must be rejected.
+        /// Catches "decoder ignored trailing bytes" failure modes.
+        #[test]
+        fn proptest_vk_rejects_trailing_garbage(
+            vk in arb_vk(),
+            extra in 1usize..=32,
+        ) {
+            let mut bytes = vk.to_bytes();
+            bytes.extend(core::iter::repeat_n(0xFF, extra));
+            prop_assert!(matches!(
+                HyperPlonkVerifyingKey::from_bytes(&bytes),
+                Err(OnChainError::VerifyingKeyLengthMismatch),
+            ));
+        }
+
+        /// `commits_iter()` is a faithful enumeration: the order it
+        /// yields matches direct field reads, and the count matches
+        /// `NUM_COMMITS`. Catches reorderings that would silently break
+        /// the Fiat-Shamir absorb sequence (which depends on this
+        /// iteration order — see `derive_challenges`).
+        #[test]
+        fn proptest_vk_commits_iter_order_stable(vk in arb_vk()) {
+            let collected: alloc::vec::Vec<&[u8; G1_LEN]> = vk.commits_iter().collect();
+            prop_assert_eq!(collected.len(), HyperPlonkVerifyingKey::NUM_COMMITS);
+            prop_assert_eq!(collected[0], &vk.q_m_g1);
+            prop_assert_eq!(collected[1], &vk.q_l_g1);
+            prop_assert_eq!(collected[2], &vk.q_r_g1);
+            prop_assert_eq!(collected[3], &vk.q_o_g1);
+            prop_assert_eq!(collected[4], &vk.q_c_g1);
+            prop_assert_eq!(collected[5], &vk.sigma_1_g1);
+            prop_assert_eq!(collected[6], &vk.sigma_2_g1);
+            prop_assert_eq!(collected[7], &vk.sigma_3_g1);
         }
     }
 }

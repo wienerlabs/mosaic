@@ -26,10 +26,7 @@
 //! `C_folded = C_1 + r · C_2 + r² · T`.
 
 use ark_bn254::Fr;
-use mosaic_core::{
-    syscall::SyscallBackend,
-    OnChainError,
-};
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::{
     field::fr_to_canonical_bytes,
     msm::{add_g1, scalar_mul_g1},
@@ -45,13 +42,7 @@ use mosaic_zk_primitives::{
 /// outer verifier closes the soundness check by cross-verifying this
 /// residual against a Spartan opening at ξ.
 #[must_use]
-pub fn hadamard_residual(
-    a_eval: &Fr,
-    b_eval: &Fr,
-    c_eval: &Fr,
-    e_eval: &Fr,
-    u: &Fr,
-) -> Fr {
+pub fn hadamard_residual(a_eval: &Fr, b_eval: &Fr, c_eval: &Fr, e_eval: &Fr, u: &Fr) -> Fr {
     *a_eval * b_eval - *u * c_eval - e_eval
 }
 
@@ -200,11 +191,9 @@ mod tests {
         let backend = HostBackend::new();
         let g1 = g1_generator_bytes();
         let zero_commit = [0u8; 64];
-        let got = folded_commitment_from_fold(
-            &backend,
-            &g1, &zero_commit, &zero_commit, &Fr::zero(),
-        )
-        .unwrap();
+        let got =
+            folded_commitment_from_fold(&backend, &g1, &zero_commit, &zero_commit, &Fr::zero())
+                .unwrap();
         assert_eq!(got, g1);
     }
 
@@ -212,10 +201,8 @@ mod tests {
     fn folded_commitment_identity_inputs_is_identity() {
         let backend = HostBackend::new();
         let zero = [0u8; 64];
-        let got = folded_commitment_from_fold(
-            &backend, &zero, &zero, &zero, &Fr::from(5u64),
-        )
-        .unwrap();
+        let got =
+            folded_commitment_from_fold(&backend, &zero, &zero, &zero, &Fr::from(5u64)).unwrap();
         // 0 + 5·0 + 25·0 = 0.
         assert_eq!(got, zero);
     }
@@ -225,9 +212,7 @@ mod tests {
         let backend = HostBackend::new();
         let short = [0u8; 63];
         let g1 = g1_generator_bytes();
-        let r = folded_commitment_from_fold(
-            &backend, &short, &g1, &g1, &Fr::from(1u64),
-        );
+        let r = folded_commitment_from_fold(&backend, &short, &g1, &g1, &Fr::from(1u64));
         assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
     }
 
@@ -238,8 +223,7 @@ mod tests {
         let backend = HostBackend::new();
         let g1 = g1_generator_bytes();
         let zero = [0u8; 64];
-        let got =
-            folded_error_commitment(&backend, &g1, &zero, &Fr::zero()).unwrap();
+        let got = folded_error_commitment(&backend, &g1, &zero, &Fr::zero()).unwrap();
         assert_eq!(got, g1);
     }
 

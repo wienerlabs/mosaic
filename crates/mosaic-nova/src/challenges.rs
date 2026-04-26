@@ -290,4 +290,193 @@ mod tests {
         let r = derive_challenges(&backend, &vk, &pi, &proof);
         assert!(matches!(r, Err(OnChainError::PublicInputOutOfRange)));
     }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 38 — proptest coverage for Nova Fiat-Shamir.
+    //
+    // Three-round absorb sequence (see module docs):
+    //
+    //   Round 1: r  ← (vk fields, vk a/b/c commits, public inputs,
+    //                  proof.e_comm, w_comm, t_comm)
+    //   Round 2: ξ  ← (r, proof.u, aux_commits)
+    //   Round 3: ν  ← (ξ, proof.w_xi, proof.w_xiw)
+    //
+    // Avalanche properties:
+    //
+    //   - VK / PI / E,W,T mutation ⇒ r shifts ⇒ ξ, ν cascade.
+    //   - u-scalar / aux mutation ⇒ r unchanged; ξ shifts ⇒ ν cascade.
+    //   - w_xi / w_xiw mutation   ⇒ r, ξ unchanged; only ν shifts.
+    //
+    // The Nova absorb contract has aux commits in round 2 (not round 1)
+    // — flagged explicitly by `proptest_aux_mutation_only_xi_nu` because
+    // a future refactor that moves aux into round 1 would break the
+    // cascade asymmetry the verifier relies on.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    /// Build a 2-PI byte vector from two u64 seeds.
+    fn two_pi(a: u64, b: u64) -> alloc::vec::Vec<u8> {
+        let mut pi = alloc::vec::Vec::new();
+        pi.extend_from_slice(&fr_to_canonical_bytes(&Fr::from(a)));
+        pi.extend_from_slice(&fr_to_canonical_bytes(&Fr::from(b)));
+        pi
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// Determinism: same inputs ⇒ same challenge tuple over the
+        /// random PI space.
+        #[test]
+        fn proptest_derive_challenges_deterministic(
+            pi_a in any::<u64>(),
+            pi_b in any::<u64>(),
+        ) {
+            let backend = HostBackend::new();
+            let vk = sample_vk();
+            let buf = sample_proof_bytes(0, 2);
+            let proof = NovaFoldingProof::from_bytes(&buf).unwrap();
+            let pi = two_pi(pi_a, pi_b);
+            let (a, _) = derive_challenges(&backend, &vk, &pi, &proof).unwrap();
+            let (b, _) = derive_challenges(&backend, &vk, &pi, &proof).unwrap();
+            prop_assert_eq!(a, b);
+        }
+
+        /// All three challenges are non-zero and pairwise distinct
+        /// with overwhelming probability.
+        #[test]
+        fn proptest_challenges_non_degenerate(
+            pi_a in any::<u64>(),
+            pi_b in any::<u64>(),
+        ) {
+            let backend = HostBackend::new();
+            let vk = sample_vk();
+            let buf = sample_proof_bytes(0, 2);
+            let proof = NovaFoldingProof::from_bytes(&buf).unwrap();
+            let pi = two_pi(pi_a, pi_b);
+            let (c, _) = derive_challenges(&backend, &vk, &pi, &proof).unwrap();
+            let zero = Fr::from(0u64);
+            prop_assert_ne!(c.r, zero);
+            prop_assert_ne!(c.xi, zero);
+            prop_assert_ne!(c.nu, zero);
+            prop_assert_ne!(c.r, c.xi);
+            prop_assert_ne!(c.xi, c.nu);
+            prop_assert_ne!(c.r, c.nu);
+        }
+
+        /// Avalanche from any E / W / T accumulator commit byte:
+        /// round-1 absorb, so r shifts and ξ, ν cascade.
+        #[test]
+        fn proptest_ewt_commit_mutation_cascades(
+            commit_select in 0u8..3, // 0 = E, 1 = W, 2 = T
+            byte_idx in 0usize..sizes::G1_LEN,
+            bit_mask in 1u8..=u8::MAX,
+        ) {
+            let backend = HostBackend::new();
+            let vk = sample_vk();
+            // E/W/T live at offsets FIXED_HEADER_LEN + {0, 1, 2} × G1_LEN
+            // inside the proof buffer.
+            let off = sizes::FIXED_HEADER_LEN
+                + (commit_select as usize) * sizes::G1_LEN
+                + byte_idx;
+            let mut buf_a = sample_proof_bytes(0, 2);
+            let mut buf_b = sample_proof_bytes(0, 2);
+            buf_a[off] = 0x55;
+            buf_b[off] = 0x55 ^ bit_mask;
+            prop_assume!(buf_a[off] != buf_b[off]);
+            let p_a = NovaFoldingProof::from_bytes(&buf_a).unwrap();
+            let p_b = NovaFoldingProof::from_bytes(&buf_b).unwrap();
+            let pi = two_pi(1, 2);
+            let (ca, _) = derive_challenges(&backend, &vk, &pi, &p_a).unwrap();
+            let (cb, _) = derive_challenges(&backend, &vk, &pi, &p_b).unwrap();
+            prop_assert_ne!(ca.r, cb.r);
+            prop_assert_ne!(ca.xi, cb.xi);
+            prop_assert_ne!(ca.nu, cb.nu);
+        }
+
+        /// Avalanche from the folding scalar `u`: round-2 absorb, so
+        /// r unchanged but ξ shifts ⇒ ν cascades.
+        #[test]
+        fn proptest_u_scalar_mutation_only_xi_nu(
+            byte_idx in 0usize..(sizes::FR_LEN - 1), // skip top byte (out-of-range Fr)
+            bit_mask in 1u8..=u8::MAX,
+        ) {
+            let backend = HostBackend::new();
+            let vk = sample_vk();
+            // u offset = FIXED_HEADER_LEN + 3·G1_LEN.
+            let u_off = sizes::FIXED_HEADER_LEN
+                + sizes::FIXED_COMMITS_LEN
+                + byte_idx;
+            let mut buf_a = sample_proof_bytes(0, 2);
+            let mut buf_b = sample_proof_bytes(0, 2);
+            buf_a[u_off] = 0x55;
+            buf_b[u_off] = 0x55 ^ bit_mask;
+            prop_assume!(buf_a[u_off] != buf_b[u_off]);
+            let p_a = NovaFoldingProof::from_bytes(&buf_a).unwrap();
+            let p_b = NovaFoldingProof::from_bytes(&buf_b).unwrap();
+            let pi = two_pi(1, 2);
+            let (ca, _) = derive_challenges(&backend, &vk, &pi, &p_a).unwrap();
+            let (cb, _) = derive_challenges(&backend, &vk, &pi, &p_b).unwrap();
+            prop_assert_eq!(ca.r, cb.r);
+            prop_assert_ne!(ca.xi, cb.xi);
+            prop_assert_ne!(ca.nu, cb.nu);
+        }
+
+        /// Avalanche from any aux commit (HyperNova path): round-2
+        /// absorb, so r unchanged; ξ shifts ⇒ ν cascades. This is the
+        /// audit-grade pin on the absorb contract — moving aux into
+        /// round 1 would break r-equality on this property.
+        #[test]
+        fn proptest_aux_mutation_only_xi_nu(
+            num_aux in 1u8..=4,
+            aux_idx in 0u8..4,
+            byte_idx in 0usize..sizes::G1_LEN,
+            bit_mask in 1u8..=u8::MAX,
+        ) {
+            prop_assume!(aux_idx < num_aux);
+            let backend = HostBackend::new();
+            let vk = sample_vk();
+            // aux_off = FIXED + COMMITS + SCALAR + 4·G1 + HADAMARD + W_EVAL.
+            let base_aux_off = sizes::FIXED_HEADER_LEN
+                + sizes::FIXED_COMMITS_LEN
+                + sizes::SCALAR_LEN
+                + 4 * sizes::G1_LEN
+                + sizes::HADAMARD_EVALS_LEN
+                + sizes::W_EVAL_LEN;
+            let off = base_aux_off + (aux_idx as usize) * sizes::G1_LEN + byte_idx;
+            let mut buf_a = sample_proof_bytes(num_aux, 2);
+            let mut buf_b = sample_proof_bytes(num_aux, 2);
+            buf_a[off] = 0x55;
+            buf_b[off] = 0x55 ^ bit_mask;
+            prop_assume!(buf_a[off] != buf_b[off]);
+            let p_a = NovaFoldingProof::from_bytes(&buf_a).unwrap();
+            let p_b = NovaFoldingProof::from_bytes(&buf_b).unwrap();
+            let pi = two_pi(1, 2);
+            let (ca, _) = derive_challenges(&backend, &vk, &pi, &p_a).unwrap();
+            let (cb, _) = derive_challenges(&backend, &vk, &pi, &p_b).unwrap();
+            prop_assert_eq!(ca.r, cb.r);
+            prop_assert_ne!(ca.xi, cb.xi);
+            prop_assert_ne!(ca.nu, cb.nu);
+        }
+
+        /// Public input binding: round-1 absorb, so r shifts ⇒ ξ, ν
+        /// cascade. Catches missing PI absorbs in round 1.
+        #[test]
+        fn proptest_public_input_change_cascades(
+            pi_a in any::<u64>(),
+            delta in 1u64..=u64::MAX,
+        ) {
+            let backend = HostBackend::new();
+            let vk = sample_vk();
+            let buf = sample_proof_bytes(0, 2);
+            let proof = NovaFoldingProof::from_bytes(&buf).unwrap();
+            let pi_b = pi_a.wrapping_add(delta);
+            prop_assume!(pi_a != pi_b);
+            let (ca, _) = derive_challenges(&backend, &vk, &two_pi(pi_a, 7), &proof).unwrap();
+            let (cb, _) = derive_challenges(&backend, &vk, &two_pi(pi_b, 7), &proof).unwrap();
+            prop_assert_ne!(ca.r, cb.r);
+            prop_assert_ne!(ca.xi, cb.xi);
+            prop_assert_ne!(ca.nu, cb.nu);
+        }
+    }
 }

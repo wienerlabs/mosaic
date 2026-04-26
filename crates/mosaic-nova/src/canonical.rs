@@ -275,12 +275,10 @@ impl<'a> NovaFoldingProof<'a> {
     pub fn parse_hadamard_evals(&self) -> Result<(Fr, Fr, Fr, Fr), OnChainError> {
         let a = fr_from_canonical_bytes(&self.hadamard_evals[0..sizes::FR_LEN])?;
         let b = fr_from_canonical_bytes(&self.hadamard_evals[sizes::FR_LEN..2 * sizes::FR_LEN])?;
-        let c = fr_from_canonical_bytes(
-            &self.hadamard_evals[2 * sizes::FR_LEN..3 * sizes::FR_LEN],
-        )?;
-        let e = fr_from_canonical_bytes(
-            &self.hadamard_evals[3 * sizes::FR_LEN..4 * sizes::FR_LEN],
-        )?;
+        let c =
+            fr_from_canonical_bytes(&self.hadamard_evals[2 * sizes::FR_LEN..3 * sizes::FR_LEN])?;
+        let e =
+            fr_from_canonical_bytes(&self.hadamard_evals[3 * sizes::FR_LEN..4 * sizes::FR_LEN])?;
         Ok((a, b, c, e))
     }
 
@@ -524,5 +522,239 @@ mod tests {
             NovaFoldingVerifyingKey::from_bytes(&vk_bytes),
             Err(OnChainError::UnknownProofSystem),
         ));
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 38 — proptest coverage for Nova folding canonical layout.
+    //
+    // Nova-specific shape parameters in the random space:
+    //
+    //   - 3-way `FoldingVariant` enum (Nova / HyperNova / ProtoStar) +
+    //     a one-byte tag space [0, 255] to enumerate "unknown variant"
+    //     rejections from outside the valid set.
+    //   - Two independent dynamic counters: `num_aux_commits` (u8,
+    //     capped at MAX_AUX_COMMITS = 16) and `n_public` (u16, capped
+    //     at MAX_PUBLIC_INPUTS = 256).
+    //   - Two fixed sub-buffers (`base_commits`, `hadamard_evals`,
+    //     `w_eval`) enumerated by the verifier.
+    //
+    // Properties exercised:
+    //
+    //   1. Any in-range (variant, num_aux, n_public) triple parses,
+    //      and the parsed accessors agree with the intended shape.
+    //   2. Any tag byte outside [0, 1, 2] is rejected as
+    //      `UnknownProofSystem` regardless of body length.
+    //   3. Counters above their declared max are rejected before the
+    //      `checked_mul` size computation runs.
+    //   4. Trailing garbage of any non-zero length must be rejected.
+    //   5. VK round-trip is the identity for any well-formed VK.
+    //   6. Any wrong VK length and any unknown VK variant tag must be
+    //      rejected.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    prop_compose! {
+        /// Random in-range (variant, num_aux_commits, n_public) triple.
+        fn arb_proof_shape()(
+            variant_select in 0u8..3,
+            num_aux in 0u8..=sizes::MAX_AUX_COMMITS,
+            n_public in 0u16..=sizes::MAX_PUBLIC_INPUTS,
+        ) -> (FoldingVariant, u8, u16) {
+            let variant = match variant_select {
+                0 => FoldingVariant::Nova,
+                1 => FoldingVariant::HyperNova,
+                _ => FoldingVariant::ProtoStar,
+            };
+            (variant, num_aux, n_public)
+        }
+    }
+
+    prop_compose! {
+        /// Random VK shape with byte fills chosen to make a swap
+        /// between any two named commitments surface as inequality
+        /// after round-trip.
+        fn arb_vk()(
+            variant_select in 0u8..3,
+            n_public in 0u16..=8,
+            n_constraints in 0u32..=2048,
+            x2 in any::<u8>(),
+            a in any::<u8>(),
+            b in any::<u8>(),
+            c in any::<u8>(),
+            digest in any::<u8>(),
+        ) -> NovaFoldingVerifyingKey {
+            let variant = match variant_select {
+                0 => FoldingVariant::Nova,
+                1 => FoldingVariant::HyperNova,
+                _ => FoldingVariant::ProtoStar,
+            };
+            NovaFoldingVerifyingKey {
+                variant,
+                n_public,
+                n_constraints,
+                x2_g2: [x2; G2_LEN],
+                a_comm: [a; G1_LEN],
+                b_comm: [b; G1_LEN],
+                c_comm: [c; G1_LEN],
+                cs_digest: [digest; 32],
+            }
+        }
+    }
+
+    proptest! {
+        /// Any in-range (variant, num_aux, n_public) triple parses;
+        /// accessors agree with the intended shape.
+        #[test]
+        fn proptest_proof_parses_any_in_range_shape(
+            (variant, num_aux, n_public) in arb_proof_shape(),
+        ) {
+            let buf = proof_bytes(variant, num_aux, n_public);
+            let p = NovaFoldingProof::from_bytes(&buf)
+                .expect("in-range shape parses");
+            prop_assert_eq!(p.variant, variant);
+            prop_assert_eq!(p.num_aux_commits, num_aux);
+            prop_assert_eq!(p.n_public, n_public);
+            prop_assert_eq!(p.aux_iter().count(), num_aux as usize);
+            prop_assert_eq!(p.public_inputs_iter().count(), n_public as usize);
+            prop_assert_eq!(p.e_comm.len(), G1_LEN);
+            prop_assert_eq!(p.w_comm.len(), G1_LEN);
+            prop_assert_eq!(p.t_comm.len(), G1_LEN);
+            prop_assert_eq!(p.u.len(), FR_LEN);
+            prop_assert_eq!(p.hadamard_evals.len(), HADAMARD_EVALS_LEN);
+            prop_assert_eq!(p.w_eval.len(), W_EVAL_LEN);
+            prop_assert_eq!(p.w_xi.len(), G1_LEN);
+            prop_assert_eq!(p.w_xiw.len(), G1_LEN);
+        }
+
+        /// Any tag byte outside `[0, 1, 2]` must be rejected as
+        /// `UnknownProofSystem`. Catches the failure mode where a
+        /// silent reinterpretation would map an unknown variant onto a
+        /// known one and let the rest of the verifier proceed.
+        #[test]
+        fn proptest_proof_rejects_unknown_variant_tag(
+            tag in 3u8..=u8::MAX,
+            num_aux in 0u8..=sizes::MAX_AUX_COMMITS,
+            n_public in 0u16..=8,
+        ) {
+            // Build a Nova-shaped buffer (so the body length is
+            // structurally valid) then overwrite the variant tag.
+            let mut buf = proof_bytes(FoldingVariant::Nova, num_aux, n_public);
+            buf[0] = tag;
+            prop_assert!(matches!(
+                NovaFoldingProof::from_bytes(&buf),
+                Err(OnChainError::UnknownProofSystem),
+            ));
+        }
+
+        /// Counters above their declared max must be rejected. Picks
+        /// `num_aux_commits` or `n_public` randomly and pushes one
+        /// past its cap.
+        #[test]
+        fn proptest_proof_rejects_oversized_counter(
+            which in 0u8..2,
+            overflow in 1u32..=64,
+        ) {
+            // Build the smallest legal shape, then overwrite the chosen
+            // counter to its over-cap value. Body length stays minimal
+            // because the canonical pre-check rejects on the cap test
+            // before the size formula even runs.
+            let mut buf = proof_bytes(FoldingVariant::Nova, 0, 0);
+            match which {
+                0 => {
+                    let bad = (sizes::MAX_AUX_COMMITS as u32) + overflow;
+                    prop_assume!(bad <= u32::from(u8::MAX));
+                    buf[1] = bad as u8;
+                }
+                _ => {
+                    let bad = (u32::from(sizes::MAX_PUBLIC_INPUTS)) + overflow;
+                    prop_assume!(bad <= u32::from(u16::MAX));
+                    buf[2..4].copy_from_slice(&(bad as u16).to_le_bytes());
+                }
+            }
+            prop_assert!(matches!(
+                NovaFoldingProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// Trailing garbage of any non-zero length must be rejected.
+        #[test]
+        fn proptest_proof_rejects_trailing_garbage(
+            (variant, num_aux, n_public) in arb_proof_shape(),
+            extra in 1usize..=64,
+        ) {
+            let mut buf = proof_bytes(variant, num_aux, n_public);
+            buf.extend(core::iter::repeat_n(0xDE, extra));
+            prop_assert!(matches!(
+                NovaFoldingProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// Truncation past the fixed envelope must be rejected.
+        #[test]
+        fn proptest_proof_rejects_truncation(
+            (variant, num_aux, n_public) in arb_proof_shape(),
+            chop in 1usize..=128,
+        ) {
+            let mut buf = proof_bytes(variant, num_aux, n_public);
+            let new_len = buf.len().saturating_sub(chop);
+            // Below the minimum the parser short-circuits with a length
+            // check that doesn't even read the variant tag — those
+            // cases are covered by `proof_rejects_short_buffer`.
+            let minimum = FIXED_HEADER_LEN
+                + FIXED_COMMITS_LEN
+                + SCALAR_LEN
+                + 4 * G1_LEN
+                + HADAMARD_EVALS_LEN
+                + W_EVAL_LEN
+                + OPENING_LEN;
+            prop_assume!(new_len >= minimum);
+            prop_assume!(new_len < buf.len());
+            buf.truncate(new_len);
+            prop_assert!(matches!(
+                NovaFoldingProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// VK encode-then-decode is the identity for any well-formed VK.
+        #[test]
+        fn proptest_vk_roundtrip(vk in arb_vk()) {
+            let bytes = vk.to_bytes();
+            prop_assert_eq!(bytes.len(), NovaFoldingVerifyingKey::SERIALIZED_LEN);
+            let decoded = NovaFoldingVerifyingKey::from_bytes(&bytes)
+                .expect("well-formed VK round-trips");
+            prop_assert_eq!(vk, decoded);
+        }
+
+        /// Any VK byte buffer whose length differs from
+        /// `SERIALIZED_LEN` must be rejected.
+        #[test]
+        fn proptest_vk_rejects_any_wrong_length(
+            len in 0usize..=2 * NovaFoldingVerifyingKey::SERIALIZED_LEN,
+        ) {
+            prop_assume!(len != NovaFoldingVerifyingKey::SERIALIZED_LEN);
+            let buf = vec![0u8; len];
+            prop_assert!(matches!(
+                NovaFoldingVerifyingKey::from_bytes(&buf),
+                Err(OnChainError::VerifyingKeyLengthMismatch),
+            ));
+        }
+
+        /// Any tag byte outside `[0, 1, 2]` in a correctly-sized VK
+        /// buffer must be rejected as `UnknownProofSystem`.
+        #[test]
+        fn proptest_vk_rejects_unknown_variant_tag(
+            tag in 3u8..=u8::MAX,
+            vk in arb_vk(),
+        ) {
+            let mut bytes = vk.to_bytes();
+            bytes[0] = tag;
+            prop_assert!(matches!(
+                NovaFoldingVerifyingKey::from_bytes(&bytes),
+                Err(OnChainError::UnknownProofSystem),
+            ));
+        }
     }
 }

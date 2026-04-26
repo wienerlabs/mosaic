@@ -74,7 +74,9 @@ impl RoundPolynomial {
         let c0 = fr_from_canonical_bytes(&bytes[0..FR_LEN])?;
         let c1 = fr_from_canonical_bytes(&bytes[FR_LEN..2 * FR_LEN])?;
         let c2 = fr_from_canonical_bytes(&bytes[2 * FR_LEN..3 * FR_LEN])?;
-        Ok(Self { coeffs: [c0, c1, c2] })
+        Ok(Self {
+            coeffs: [c0, c1, c2],
+        })
     }
 
     /// Evaluate `p(0) = c_0`.
@@ -252,7 +254,9 @@ mod tests {
         let c0 = Fr::rand(&mut rng);
         let c1 = Fr::rand(&mut rng);
         let c2 = Fr::rand(&mut rng);
-        let original = RoundPolynomial { coeffs: [c0, c1, c2] };
+        let original = RoundPolynomial {
+            coeffs: [c0, c1, c2],
+        };
         let bytes = encode_round_polynomial(&original);
         let decoded = RoundPolynomial::from_bytes(&bytes).unwrap();
         assert_eq!(decoded, original);
@@ -292,7 +296,9 @@ mod tests {
             let c1 = Fr::rand(&mut rng);
             let c2 = Fr::rand(&mut rng);
             let x = Fr::rand(&mut rng);
-            let p = RoundPolynomial { coeffs: [c0, c1, c2] };
+            let p = RoundPolynomial {
+                coeffs: [c0, c1, c2],
+            };
             // Reference: c0 + c1*x + c2*x^2
             let expected = c0 + c1 * x + c2 * x * x;
             assert_eq!(p.eval_at(&x), expected);
@@ -371,8 +377,7 @@ mod tests {
             polys.extend_from_slice(&zero_round_polynomial_bytes());
         }
         let mut transcript = mk_transcript(&backend);
-        let out =
-            verify_sumcheck(&mut transcript, &zero_claim(), &polys, 5).unwrap();
+        let out = verify_sumcheck(&mut transcript, &zero_claim(), &polys, 5).unwrap();
         assert_eq!(out.final_claim, Fr::zero());
         assert_eq!(out.challenges.len(), 5);
     }
@@ -474,7 +479,9 @@ mod tests {
             let c1 = Fr::rand(&mut rng);
             let c2 = Fr::rand(&mut rng);
             let c0 = (current - c1 - c2) * two_inv;
-            let p = RoundPolynomial { coeffs: [c0, c1, c2] };
+            let p = RoundPolynomial {
+                coeffs: [c0, c1, c2],
+            };
             // Sanity: p(0) + p(1) should equal current.
             debug_assert_eq!(p.evals_sum_on_boolean_cube(), current);
 

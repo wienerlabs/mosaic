@@ -139,10 +139,22 @@ mod tests {
             for i in 0..(1u64 << n) {
                 for j in 0..(1u64 << n) {
                     let x: Vec<Fr> = (0..n)
-                        .map(|k| if (i >> k) & 1 == 1 { Fr::one() } else { Fr::zero() })
+                        .map(|k| {
+                            if (i >> k) & 1 == 1 {
+                                Fr::one()
+                            } else {
+                                Fr::zero()
+                            }
+                        })
                         .collect();
                     let y: Vec<Fr> = (0..n)
-                        .map(|k| if (j >> k) & 1 == 1 { Fr::one() } else { Fr::zero() })
+                        .map(|k| {
+                            if (j >> k) & 1 == 1 {
+                                Fr::one()
+                            } else {
+                                Fr::zero()
+                            }
+                        })
                         .collect();
                     let got = eq_poly_eval(&x, &y).unwrap();
                     if i == j {
@@ -208,7 +220,13 @@ mod tests {
             let values: Vec<Fr> = (0..size).map(|_| Fr::rand(&mut r)).collect();
             for i in 0..size {
                 let point: Vec<Fr> = (0..n)
-                    .map(|k| if (i >> k) & 1 == 1 { Fr::one() } else { Fr::zero() })
+                    .map(|k| {
+                        if (i >> k) & 1 == 1 {
+                            Fr::one()
+                        } else {
+                            Fr::zero()
+                        }
+                    })
                     .collect();
                 let got = mle_eval_from_cube(&values, &point).unwrap();
                 assert_eq!(got, values[i], "cube point {i} should recover values[{i}]");
@@ -232,7 +250,13 @@ mod tests {
             let mut expected = Fr::zero();
             for (i, fx) in values.iter().enumerate() {
                 let x_point: Vec<Fr> = (0..n)
-                    .map(|k| if (i >> k) & 1 == 1 { Fr::one() } else { Fr::zero() })
+                    .map(|k| {
+                        if (i >> k) & 1 == 1 {
+                            Fr::one()
+                        } else {
+                            Fr::zero()
+                        }
+                    })
                     .collect();
                 expected += *fx * eq_poly_eval(&x_point, &y).unwrap();
             }
@@ -245,7 +269,10 @@ mod tests {
     fn mle_eval_zero_variables_returns_constant() {
         let values = [Fr::from(42u64)];
         let point: [Fr; 0] = [];
-        assert_eq!(mle_eval_from_cube(&values, &point).unwrap(), Fr::from(42u64));
+        assert_eq!(
+            mle_eval_from_cube(&values, &point).unwrap(),
+            Fr::from(42u64)
+        );
     }
 
     #[test]

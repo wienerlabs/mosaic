@@ -30,16 +30,11 @@ use crate::canonical::{
     NovaFoldingProof, NovaFoldingVerifyingKey,
 };
 use ark_bn254::Fr;
-use mosaic_core::{
-    syscall::SyscallBackend,
-    OnChainError,
-};
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
-    msm::{
-        compute_kzg_opening_lhs, msm_g1, negate_g1, verify_two_pair_pairing,
-    },
+    msm::{compute_kzg_opening_lhs, msm_g1, negate_g1, verify_two_pair_pairing},
 };
 
 /// Scaffold single-commitment KZG opening check for a folded Nova
@@ -144,10 +139,7 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
     v: &Fr,
 ) -> Result<(), OnChainError> {
     use crate::canonical::sizes::HADAMARD_EVALS_LEN;
-    if proof.w_comm.len() != G1_LEN
-        || proof.e_comm.len() != G1_LEN
-        || proof.w_xi.len() != G1_LEN
-    {
+    if proof.w_comm.len() != G1_LEN || proof.e_comm.len() != G1_LEN || proof.w_xi.len() != G1_LEN {
         return Err(OnChainError::InvalidPointEncoding);
     }
     if proof.hadamard_evals.len() < HADAMARD_EVALS_LEN {
@@ -155,12 +147,9 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
     }
 
     let a_eval = fr_from_canonical_bytes(&proof.hadamard_evals[0..FR_LEN])?;
-    let b_eval =
-        fr_from_canonical_bytes(&proof.hadamard_evals[FR_LEN..2 * FR_LEN])?;
-    let c_eval =
-        fr_from_canonical_bytes(&proof.hadamard_evals[2 * FR_LEN..3 * FR_LEN])?;
-    let e_eval =
-        fr_from_canonical_bytes(&proof.hadamard_evals[3 * FR_LEN..4 * FR_LEN])?;
+    let b_eval = fr_from_canonical_bytes(&proof.hadamard_evals[FR_LEN..2 * FR_LEN])?;
+    let c_eval = fr_from_canonical_bytes(&proof.hadamard_evals[2 * FR_LEN..3 * FR_LEN])?;
+    let e_eval = fr_from_canonical_bytes(&proof.hadamard_evals[3 * FR_LEN..4 * FR_LEN])?;
     // Session 23: w_eval now comes from a dedicated 32-byte slot
     // rather than the first public input.
     if proof.w_eval.len() != FR_LEN {

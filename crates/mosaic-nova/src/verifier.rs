@@ -215,18 +215,11 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
                 proof.e_comm,
             ],
         )?;
-        verify_spartan_batched_opening(
-            self.backend,
-            &vk,
-            &proof,
-            &challenges.xi,
-            &v,
-        )?;
+        verify_spartan_batched_opening(self.backend, &vk, &proof, &challenges.xi, &v)?;
 
         Ok(())
     }
 }
-
 
 impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for NovaFolding<'_, B> {
     fn proof_system_id(&self) -> ProofSystemId {
@@ -368,7 +361,10 @@ mod tests {
         let proof = proof_bytes(FoldingVariant::HyperNova, 4, 2);
         let pi = zero_pi(2);
         let r = NovaFolding::verify(&v, &vk, &proof, &pi);
-        assert!(r.is_ok(), "HyperNova zero-proof pipeline should pass, got {r:?}");
+        assert!(
+            r.is_ok(),
+            "HyperNova zero-proof pipeline should pass, got {r:?}"
+        );
     }
 
     /// Session-15-nova: tamper with `base_e_1` (set to G1 generator,
@@ -385,9 +381,7 @@ mod tests {
         let mut proof = proof_bytes(FoldingVariant::Nova, 0, 2);
 
         // Layout: FIXED_HEADER + E/W/T (3·G1) + u (32 B) → base_e_1.
-        let base_e_1_off = sizes::FIXED_HEADER_LEN
-            + sizes::FIXED_COMMITS_LEN
-            + sizes::SCALAR_LEN;
+        let base_e_1_off = sizes::FIXED_HEADER_LEN + sizes::FIXED_COMMITS_LEN + sizes::SCALAR_LEN;
         let g1_gen = g1_generator_bytes();
         proof[base_e_1_off..base_e_1_off + sizes::G1_LEN].copy_from_slice(&g1_gen);
 
@@ -493,8 +487,7 @@ mod tests {
         // x2_g2 (128) + a_comm (64) + b_comm (64) + c_comm (64) +
         // cs_digest (32). a_comm sits at offset 1 + 2 + 4 + 128 = 135.
         let a_comm_off = 1 + 2 + 4 + 128;
-        vk_bytes[a_comm_off..a_comm_off + sizes::G1_LEN]
-            .copy_from_slice(&g1_generator_bytes());
+        vk_bytes[a_comm_off..a_comm_off + sizes::G1_LEN].copy_from_slice(&g1_generator_bytes());
 
         let proof = proof_bytes(FoldingVariant::Nova, 0, 0);
         let pi = zero_pi(0);
@@ -567,10 +560,7 @@ mod tests {
         // w_eval slot sits immediately after the hadamard_evals block.
         // Layout offset: FIXED_HEADER + FIXED_COMMITS + SCALAR +
         //   4·G1 (base commits) + HADAMARD_EVALS.
-        let w_eval_off = u_off
-            + sizes::FR_LEN
-            + 4 * sizes::G1_LEN
-            + sizes::HADAMARD_EVALS_LEN;
+        let w_eval_off = u_off + sizes::FR_LEN + 4 * sizes::G1_LEN + sizes::HADAMARD_EVALS_LEN;
         proof[w_eval_off..w_eval_off + sizes::FR_LEN].copy_from_slice(&one_bytes);
 
         let pi = zero_pi(0);
@@ -630,10 +620,7 @@ mod tests {
         // aware estimate. Empty inputs fail parsing → None.
         let backend = MockBackend;
         let v = NovaFolding::new(&backend);
-        assert_eq!(
-            ProofSystem::estimated_compute_units(&v, &[], &[]),
-            None,
-        );
+        assert_eq!(ProofSystem::estimated_compute_units(&v, &[], &[]), None,);
     }
 
     #[test]
