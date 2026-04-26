@@ -312,11 +312,15 @@ impl SnarkjsPlonkCodec {
         }
         let mut out = Vec::with_capacity(768);
         // 9 G1 commitments in the canonical order.
-        for g1 in [&p.a, &p.b, &p.c, &p.z, &p.t1, &p.t2, &p.t3, &p.w_xi, &p.w_xiw] {
+        for g1 in [
+            &p.a, &p.b, &p.c, &p.z, &p.t1, &p.t2, &p.t3, &p.w_xi, &p.w_xiw,
+        ] {
             out.extend_from_slice(&encode_g1_dec(g1)?);
         }
         // 6 Fr evaluations.
-        for fr in [&p.eval_a, &p.eval_b, &p.eval_c, &p.eval_s1, &p.eval_s2, &p.eval_zw] {
+        for fr in [
+            &p.eval_a, &p.eval_b, &p.eval_c, &p.eval_s1, &p.eval_s2, &p.eval_zw,
+        ] {
             out.extend_from_slice(&decimal_to_be_32(fr)?);
         }
         debug_assert_eq!(out.len(), 768);
@@ -385,10 +389,222 @@ mod tests {
 
     #[test]
     fn decimal_overflow_rejected() {
-        let too_big = "115792089237316195423570985008687907853269984665640564039457584007913129639937";
+        let too_big =
+            "115792089237316195423570985008687907853269984665640564039457584007913129639937";
         assert!(matches!(
             decimal_to_be_32(too_big),
             Err(OnChainError::PublicInputOutOfRange),
         ));
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 40 — proptest coverage for the snarkjs adapter primitives.
+    //
+    // The adapter has three soundness-critical building blocks:
+    //
+    //   - `decimal_to_be_32` — parses a snarkjs decimal string into a
+    //     32-byte BE buffer; rejects values ≥ 2^256.
+    //   - `encode_g1_dec`   — packs `[x, y, z]` into 64 BE bytes,
+    //     mapping `z = "0"` to the identity (64 zero bytes).
+    //   - `encode_g2_dec`   — packs `[[x.c0, x.c1], …]` into 128 BE
+    //     bytes with the **Solana c1 ‖ c0** ordering (different from
+    //     snarkjs's native c0 ‖ c1).
+    //
+    // Soundness narrative: a single bug in any of these silently
+    // misroutes proof bytes through the alt_bn128 syscall — pairings
+    // would either reject all valid proofs (best case) or accept
+    // arbitrary forged ones if the misroute happens to hit a
+    // self-consistent encoding. The properties below pin all three
+    // primitives against round-trip identity, padding invariants, and
+    // adversarial input rejection.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    /// Format a `BigUint` ≥ 0 as the decimal-string form snarkjs uses.
+    fn big_to_decimal(n: &BigUint) -> String {
+        n.to_str_radix(10)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Round-trip: any 32-byte BE buffer formatted as a decimal
+        /// string parses back to itself. Pins both directions of the
+        /// `BigUint ↔ snarkjs string ↔ canonical BE` chain.
+        #[test]
+        fn proptest_decimal_round_trip(
+            bytes in proptest::collection::vec(any::<u8>(), 32..=32),
+        ) {
+            let mut buf = [0u8; 32];
+            buf.copy_from_slice(&bytes);
+            let n = BigUint::from_bytes_be(&buf);
+            let s = big_to_decimal(&n);
+            let parsed = decimal_to_be_32(&s).expect("32-B value parses");
+            prop_assert_eq!(parsed, buf);
+        }
+
+        /// Padding: any value ≤ u128::MAX is parsed and padded to 32
+        /// bytes with leading zeros. Catches a regression that would
+        /// emit a short buffer for small values (buffer overflow when
+        /// the verifier reads past the end of the encoded slice).
+        #[test]
+        fn proptest_decimal_pads_small_values(x in any::<u128>()) {
+            let s = x.to_string();
+            let parsed = decimal_to_be_32(&s).expect("u128 fits in 32 B");
+            prop_assert_eq!(parsed.len(), 32);
+            // Trailing 16 bytes match `x.to_be_bytes()`; leading 16 are
+            // zero-padded.
+            prop_assert_eq!(&parsed[0..16], &[0u8; 16]);
+            let expected_tail = x.to_be_bytes();
+            prop_assert_eq!(&parsed[16..], &expected_tail[..]);
+        }
+
+        /// Any decimal value `≥ 2^256` is rejected with
+        /// `PublicInputOutOfRange`. Generates the value as `2^256 +
+        /// extra` to guarantee overflow.
+        #[test]
+        fn proptest_decimal_rejects_overflow(extra in 1u128..=u128::MAX) {
+            let two_256 = BigUint::from(1u8) << 256;
+            let big = two_256 + BigUint::from(extra);
+            let s = big_to_decimal(&big);
+            prop_assert!(matches!(
+                decimal_to_be_32(&s),
+                Err(OnChainError::PublicInputOutOfRange),
+            ));
+        }
+
+        /// Any decimal string that fails to parse as a non-negative
+        /// integer is rejected with `InvalidFieldEncoding`. The
+        /// generator builds strings with a non-digit prefix so they
+        /// never accidentally parse.
+        #[test]
+        fn proptest_decimal_rejects_garbage(
+            prefix in "[a-zA-Z][a-zA-Z0-9]{0,8}",
+            digits in proptest::collection::vec(any::<u8>(), 0..=8),
+        ) {
+            let mut s = prefix;
+            for d in digits {
+                s.push(char::from(b'0' + (d % 10)));
+            }
+            prop_assert!(matches!(
+                decimal_to_be_32(&s),
+                Err(OnChainError::InvalidFieldEncoding),
+            ));
+        }
+
+        /// G1 identity: any point with `z = "0"` maps to 64 zero bytes
+        /// regardless of the (formally meaningless) x and y values.
+        /// Pins the snarkjs identity convention against future
+        /// "validate x, y are also zero" tightening that would break
+        /// real snarkjs output (which leaves x, y unspecified at the
+        /// identity).
+        #[test]
+        fn proptest_g1_identity_z_zero_yields_zero_bytes(
+            x in any::<u128>(),
+            y in any::<u128>(),
+        ) {
+            let pt = [
+                x.to_string(),
+                y.to_string(),
+                "0".to_string(),
+            ];
+            let bytes = encode_g1_dec(&pt).expect("identity encodes");
+            prop_assert_eq!(bytes, [0u8; 64]);
+        }
+
+        /// G1 affine layout: any non-identity point with `z = "1"`
+        /// packs as `x_BE ‖ y_BE` exactly. Catches a coordinate-swap
+        /// bug between x and y in the encoder.
+        #[test]
+        fn proptest_g1_affine_layout(
+            x_seed in any::<u128>(),
+            y_seed in any::<u128>(),
+        ) {
+            let pt = [
+                x_seed.to_string(),
+                y_seed.to_string(),
+                "1".to_string(),
+            ];
+            let bytes = encode_g1_dec(&pt).expect("affine encodes");
+            // First 32 bytes = x_BE (zero-padded), last 32 = y_BE.
+            let mut expected_x = [0u8; 32];
+            expected_x[16..].copy_from_slice(&x_seed.to_be_bytes());
+            let mut expected_y = [0u8; 32];
+            expected_y[16..].copy_from_slice(&y_seed.to_be_bytes());
+            prop_assert_eq!(&bytes[0..32], &expected_x);
+            prop_assert_eq!(&bytes[32..64], &expected_y);
+        }
+
+        /// G1: any `z` other than "0" or "1" is rejected. snarkjs only
+        /// emits z ∈ {"0", "1"}; anything else means the JSON was
+        /// hand-crafted by an attacker (or by a buggy prover that
+        /// emitted Jacobian coordinates without normalizing).
+        #[test]
+        fn proptest_g1_rejects_invalid_z(
+            x in any::<u128>(),
+            y in any::<u128>(),
+            bad_z_seed in 2u8..=u8::MAX,
+        ) {
+            let pt = [
+                x.to_string(),
+                y.to_string(),
+                bad_z_seed.to_string(),
+            ];
+            prop_assert!(matches!(
+                encode_g1_dec(&pt),
+                Err(OnChainError::InvalidPointEncoding),
+            ));
+        }
+
+        /// G2 layout: pins the **Solana c1 ‖ c0** byte ordering on
+        /// both x and y. snarkjs's native order is c0 ‖ c1; the
+        /// adapter swaps them. A regression that drops the swap
+        /// silently breaks the alt_bn128 pairing syscall.
+        #[test]
+        fn proptest_g2_layout_c1_then_c0(
+            xc0 in any::<u128>(),
+            xc1 in any::<u128>(),
+            yc0 in any::<u128>(),
+            yc1 in any::<u128>(),
+        ) {
+            let pt = [
+                [xc0.to_string(), xc1.to_string()],
+                [yc0.to_string(), yc1.to_string()],
+                ["1".to_string(), "0".to_string()],
+            ];
+            let bytes = encode_g2_dec(&pt).expect("affine G2 encodes");
+            let pad = |v: u128| -> [u8; 32] {
+                let mut out = [0u8; 32];
+                out[16..].copy_from_slice(&v.to_be_bytes());
+                out
+            };
+            prop_assert_eq!(&bytes[0..32], &pad(xc1)); // x.c1 first
+            prop_assert_eq!(&bytes[32..64], &pad(xc0)); // x.c0 second
+            prop_assert_eq!(&bytes[64..96], &pad(yc1)); // y.c1 first
+            prop_assert_eq!(&bytes[96..128], &pad(yc0)); // y.c0 second
+        }
+
+        /// G2: any z component other than the canonical (c0=1, c1=0)
+        /// pair is rejected. snarkjs only emits the affine
+        /// representation; anything else means a malformed input.
+        #[test]
+        fn proptest_g2_rejects_non_canonical_z(
+            xc0 in any::<u128>(),
+            xc1 in any::<u128>(),
+            yc0 in any::<u128>(),
+            yc1 in any::<u128>(),
+            zc0 in 2u8..=u8::MAX,
+            zc1_byte in 1u8..=u8::MAX,
+        ) {
+            let pt = [
+                [xc0.to_string(), xc1.to_string()],
+                [yc0.to_string(), yc1.to_string()],
+                [zc0.to_string(), zc1_byte.to_string()],
+            ];
+            prop_assert!(matches!(
+                encode_g2_dec(&pt),
+                Err(OnChainError::InvalidPointEncoding),
+            ));
+        }
     }
 }

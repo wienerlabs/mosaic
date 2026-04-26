@@ -17,6 +17,9 @@ mosaic-core = { workspace = true }
 borsh = { workspace = true }
 bytemuck = { workspace = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+
 [features]
 default = []
 std = ["mosaic-core/std", "borsh/std"]

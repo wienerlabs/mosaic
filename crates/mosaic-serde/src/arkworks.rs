@@ -105,7 +105,9 @@ impl ProofCodec for ArkworksCodec {
 
 fn g1_to_be64(point: &G1Affine) -> [u8; 64] {
     let mut out = [0u8; 64];
-    let (x, y) = point.xy().unwrap_or((ark_bn254::Fq::default(), ark_bn254::Fq::default()));
+    let (x, y) = point
+        .xy()
+        .unwrap_or((ark_bn254::Fq::default(), ark_bn254::Fq::default()));
     let mut x_bytes = x.into_bigint().to_bytes_le();
     let mut y_bytes = y.into_bigint().to_bytes_le();
     x_bytes.resize(32, 0);
@@ -119,7 +121,9 @@ fn g1_to_be64(point: &G1Affine) -> [u8; 64] {
 
 fn g2_to_be128(point: &G2Affine) -> [u8; 128] {
     let mut out = [0u8; 128];
-    let (x, y) = point.xy().unwrap_or((ark_bn254::Fq2::default(), ark_bn254::Fq2::default()));
+    let (x, y) = point
+        .xy()
+        .unwrap_or((ark_bn254::Fq2::default(), ark_bn254::Fq2::default()));
     let mut x_c0 = x.c0.into_bigint().to_bytes_le();
     let mut x_c1 = x.c1.into_bigint().to_bytes_le();
     let mut y_c0 = y.c0.into_bigint().to_bytes_le();

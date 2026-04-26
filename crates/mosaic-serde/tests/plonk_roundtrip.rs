@@ -23,8 +23,7 @@ fn fixture_path() -> PathBuf {
 }
 
 fn read(name: &str) -> Vec<u8> {
-    fs::read(fixture_path().join(name))
-        .unwrap_or_else(|_| panic!("fixture {name} not found"))
+    fs::read(fixture_path().join(name)).unwrap_or_else(|_| panic!("fixture {name} not found"))
 }
 
 #[test]
@@ -79,7 +78,9 @@ fn decoded_proof_parses_via_canonical_plonk_proof() {
         assert_eq!(g1.len(), 64);
     }
     // Fr slices are all 32 bytes.
-    for fr in [p.eval_a, p.eval_b, p.eval_c, p.eval_s1, p.eval_s2, p.eval_zw] {
+    for fr in [
+        p.eval_a, p.eval_b, p.eval_c, p.eval_s1, p.eval_s2, p.eval_zw,
+    ] {
         assert_eq!(fr.len(), 32);
     }
 }

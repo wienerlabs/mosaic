@@ -40,6 +40,7 @@ ark-snark = "0.5"
 ark-std = { workspace = true, features = ["std"] }
 num-bigint = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
+proptest = { workspace = true }
 
 [features]
 default = []

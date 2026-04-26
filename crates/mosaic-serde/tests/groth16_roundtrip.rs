@@ -72,7 +72,11 @@ fn generate() -> FixtureBundle {
     let (a, b) = (7_u64, 6_u64);
 
     let (pk, vk) = Groth16::<Bn254>::circuit_specific_setup(
-        MulCircuit { a: None, b: None, c: None },
+        MulCircuit {
+            a: None,
+            b: None,
+            c: None,
+        },
         &mut setup_rng,
     )
     .expect("setup");
@@ -83,12 +87,22 @@ fn generate() -> FixtureBundle {
 
     let proof = Groth16::<Bn254>::prove(
         &pk,
-        MulCircuit { a: Some(a_fr), b: Some(b_fr), c: Some(c_fr) },
+        MulCircuit {
+            a: Some(a_fr),
+            b: Some(b_fr),
+            c: Some(c_fr),
+        },
         &mut prove_rng,
     )
     .expect("prove");
 
-    FixtureBundle { vk, proof, public_inputs: vec![c_fr], a, b }
+    FixtureBundle {
+        vk,
+        proof,
+        public_inputs: vec![c_fr],
+        a,
+        b,
+    }
 }
 
 // ---------- snarkjs JSON encoding helpers ----------
@@ -97,34 +111,34 @@ fn generate() -> FixtureBundle {
 // `[[x.c0, x.c1], [y.c0, y.c1], [z.c0, z.c1]]`.
 
 fn fr_to_decimal(fr: &Fr) -> String {
-    BigUint::from_bytes_be(
-        &{
-            let mut b = fr.into_bigint().to_bytes_be();
-            b.resize(32, 0);
-            b
-        },
-    )
+    BigUint::from_bytes_be(&{
+        let mut b = fr.into_bigint().to_bytes_be();
+        b.resize(32, 0);
+        b
+    })
     .to_string()
 }
 
 fn fq_to_decimal(fq: &ark_bn254::Fq) -> String {
-    BigUint::from_bytes_be(
-        &{
-            let mut b = fq.into_bigint().to_bytes_be();
-            b.resize(32, 0);
-            b
-        },
-    )
+    BigUint::from_bytes_be(&{
+        let mut b = fq.into_bigint().to_bytes_be();
+        b.resize(32, 0);
+        b
+    })
     .to_string()
 }
 
 fn g1_to_snarkjs_json(point: &G1Affine) -> serde_json::Value {
-    let (x, y) = point.xy().unwrap_or((ark_bn254::Fq::default(), ark_bn254::Fq::default()));
+    let (x, y) = point
+        .xy()
+        .unwrap_or((ark_bn254::Fq::default(), ark_bn254::Fq::default()));
     serde_json::json!([fq_to_decimal(&x), fq_to_decimal(&y), "1"])
 }
 
 fn g2_to_snarkjs_json(point: &G2Affine) -> serde_json::Value {
-    let (x, y) = point.xy().unwrap_or((ark_bn254::Fq2::default(), ark_bn254::Fq2::default()));
+    let (x, y) = point
+        .xy()
+        .unwrap_or((ark_bn254::Fq2::default(), ark_bn254::Fq2::default()));
     serde_json::json!([
         [fq_to_decimal(&x.c0), fq_to_decimal(&x.c1)],
         [fq_to_decimal(&y.c0), fq_to_decimal(&y.c1)],
@@ -143,8 +157,7 @@ fn proof_to_snarkjs_json(proof: &ArkProof<Bn254>) -> serde_json::Value {
 }
 
 fn vk_to_snarkjs_json(vk: &ArkVk<Bn254>) -> serde_json::Value {
-    let ic: Vec<serde_json::Value> =
-        vk.gamma_abc_g1.iter().map(g1_to_snarkjs_json).collect();
+    let ic: Vec<serde_json::Value> = vk.gamma_abc_g1.iter().map(g1_to_snarkjs_json).collect();
     serde_json::json!({
         "protocol":    "groth16",
         "curve":       "bn128",
@@ -169,7 +182,9 @@ fn public_inputs_to_snarkjs_json(pi: &[Fr]) -> serde_json::Value {
 
 fn ark_serialize_uncompressed<T: CanonicalSerialize>(value: &T) -> Vec<u8> {
     let mut buf = Vec::with_capacity(value.uncompressed_size());
-    value.serialize_uncompressed(&mut buf).expect("ark serialize");
+    value
+        .serialize_uncompressed(&mut buf)
+        .expect("ark serialize");
     buf
 }
 
@@ -182,7 +197,11 @@ fn fixtures_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf();
-    workspace_root.join("tests").join("fixtures").join("groth16").join("mul-circuit")
+    workspace_root
+        .join("tests")
+        .join("fixtures")
+        .join("groth16")
+        .join("mul-circuit")
 }
 
 fn write_if_regen(path: PathBuf, bytes: &[u8]) {
@@ -200,7 +219,12 @@ fn write_if_regen(path: PathBuf, bytes: &[u8]) {
 /// `mosaic-groth16` host backend.
 #[test]
 fn roundtrip_arkworks_and_snarkjs_produce_equal_canonical_bytes() {
-    let FixtureBundle { vk, proof, public_inputs, .. } = generate();
+    let FixtureBundle {
+        vk,
+        proof,
+        public_inputs,
+        ..
+    } = generate();
 
     // --- path 1: direct encode from in-memory arkworks types ---
     let canonical_vk_direct = ArkworksCodec::encode_vk(&vk);
@@ -222,8 +246,12 @@ fn roundtrip_arkworks_and_snarkjs_produce_equal_canonical_bytes() {
     let snarkjs_pi_json = public_inputs_to_snarkjs_json(&public_inputs).to_string();
     let sn_codec = SnarkjsCodec::new();
     let canonical_vk_via_snark = sn_codec.decode_vk(snarkjs_vk_json.as_bytes()).unwrap();
-    let canonical_proof_via_snark = sn_codec.decode_proof(snarkjs_proof_json.as_bytes()).unwrap();
-    let canonical_pi_via_snark = sn_codec.decode_public_inputs(snarkjs_pi_json.as_bytes()).unwrap();
+    let canonical_proof_via_snark = sn_codec
+        .decode_proof(snarkjs_proof_json.as_bytes())
+        .unwrap();
+    let canonical_pi_via_snark = sn_codec
+        .decode_public_inputs(snarkjs_pi_json.as_bytes())
+        .unwrap();
 
     // --- byte equality across all three paths ---
     assert_eq!(
@@ -252,15 +280,24 @@ fn roundtrip_arkworks_and_snarkjs_produce_equal_canonical_bytes() {
 
     // --- regenerate static fixtures if requested ---
     let root = fixtures_root();
-    write_if_regen(root.join("snarkjs/proof.json"), snarkjs_proof_json.as_bytes());
-    write_if_regen(root.join("snarkjs/verification_key.json"), snarkjs_vk_json.as_bytes());
+    write_if_regen(
+        root.join("snarkjs/proof.json"),
+        snarkjs_proof_json.as_bytes(),
+    );
+    write_if_regen(
+        root.join("snarkjs/verification_key.json"),
+        snarkjs_vk_json.as_bytes(),
+    );
     write_if_regen(root.join("snarkjs/public.json"), snarkjs_pi_json.as_bytes());
     write_if_regen(root.join("arkworks/proof.bin"), &ark_proof_bytes);
     write_if_regen(root.join("arkworks/vk.bin"), &ark_vk_bytes);
     write_if_regen(root.join("arkworks/public_inputs.bin"), &ark_pi_bytes);
     write_if_regen(root.join("canonical/proof.bin"), &canonical_proof_direct);
     write_if_regen(root.join("canonical/vk.bin"), &canonical_vk_direct);
-    write_if_regen(root.join("canonical/public_inputs.bin"), &canonical_pi_direct);
+    write_if_regen(
+        root.join("canonical/public_inputs.bin"),
+        &canonical_pi_direct,
+    );
 }
 
 /// Static fixtures on disk (if committed) must match the freshly-generated
@@ -273,7 +310,12 @@ fn committed_fixtures_match_regenerated_bytes() {
         return;
     }
 
-    let FixtureBundle { vk, proof, public_inputs, .. } = generate();
+    let FixtureBundle {
+        vk,
+        proof,
+        public_inputs,
+        ..
+    } = generate();
     let direct_proof = ArkworksCodec::encode_proof(&proof);
     let direct_vk = ArkworksCodec::encode_vk(&vk);
     let direct_pi = ArkworksCodec::encode_public_inputs(&public_inputs);
@@ -294,7 +336,12 @@ fn committed_fixtures_match_regenerated_bytes() {
 /// reject. Ensures canonical-bytes verification is end-to-end sensitive.
 #[test]
 fn tampered_proof_byte_is_rejected() {
-    let FixtureBundle { vk, proof, public_inputs, .. } = generate();
+    let FixtureBundle {
+        vk,
+        proof,
+        public_inputs,
+        ..
+    } = generate();
     let canonical_vk = ArkworksCodec::encode_vk(&vk);
     let mut canonical_proof = ArkworksCodec::encode_proof(&proof);
     // Flip the low bit of proof.A.x byte 0.
@@ -303,8 +350,7 @@ fn tampered_proof_byte_is_rejected() {
 
     let backend = HostBackend::new();
     let verifier = Groth16Verifier::<_, false>::new(&backend);
-    let result =
-        ProofSystem::verify(&verifier, &canonical_vk, &canonical_proof, &canonical_pi);
+    let result = ProofSystem::verify(&verifier, &canonical_vk, &canonical_proof, &canonical_pi);
     assert!(result.is_err(), "tampered proof must be rejected");
 }
 
@@ -312,7 +358,9 @@ fn tampered_proof_byte_is_rejected() {
 /// proved: asking the verifier about `a*b + 1` must fail.
 #[test]
 fn wrong_public_input_is_rejected() {
-    let FixtureBundle { vk, proof, a, b, .. } = generate();
+    let FixtureBundle {
+        vk, proof, a, b, ..
+    } = generate();
     let canonical_vk = ArkworksCodec::encode_vk(&vk);
     let canonical_proof = ArkworksCodec::encode_proof(&proof);
     let wrong_c = Fr::from(a) * Fr::from(b) + Fr::from(1_u64);
@@ -320,7 +368,6 @@ fn wrong_public_input_is_rejected() {
 
     let backend = HostBackend::new();
     let verifier = Groth16Verifier::<_, false>::new(&backend);
-    let result =
-        ProofSystem::verify(&verifier, &canonical_vk, &canonical_proof, &canonical_pi);
+    let result = ProofSystem::verify(&verifier, &canonical_vk, &canonical_proof, &canonical_pi);
     assert!(result.is_err(), "wrong public input must be rejected");
 }

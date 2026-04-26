@@ -3061,6 +3061,7 @@ dependencies = [
  "borsh 1.6.1",
  "bytemuck",
  "mosaic-core",
+ "proptest",
 ]
 
 [[package]]
@@ -3238,6 +3239,7 @@ dependencies = [
  "mosaic-groth16",
  "mosaic-plonk",
  "num-bigint 0.4.6",
+ "proptest",
  "serde",
  "serde_json",
 ]

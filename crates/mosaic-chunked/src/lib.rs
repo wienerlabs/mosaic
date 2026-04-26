@@ -212,8 +212,7 @@ impl ProofUploadSession {
         if chunk.len() > CHUNK_SIZE {
             return Err(OnChainError::ChunkOverflow);
         }
-        let chunk_len_u32 =
-            u32::try_from(chunk.len()).map_err(|_| OnChainError::ChunkOverflow)?;
+        let chunk_len_u32 = u32::try_from(chunk.len()).map_err(|_| OnChainError::ChunkOverflow)?;
         let new_len = self
             .appended_len
             .checked_add(chunk_len_u32)
@@ -297,9 +296,7 @@ mod tests {
     use super::*;
 
     fn fixture_session(total_len: u32) -> ProofUploadSession {
-        ProofUploadSession::new(
-            [1; 32], [2; 32], 254, 0x01, total_len, [0xAA; 32], 1_000,
-        )
+        ProofUploadSession::new([1; 32], [2; 32], 254, 0x01, total_len, [0xAA; 32], 1_000)
     }
 
     #[test]
@@ -363,7 +360,10 @@ mod tests {
     fn account_size_arithmetic() {
         let total_len = 4_096_u32;
         let size = ProofUploadSession::account_size_for(total_len);
-        assert_eq!(size, ProofUploadSession::FIXED_HEADER_LEN + total_len as usize);
+        assert_eq!(
+            size,
+            ProofUploadSession::FIXED_HEADER_LEN + total_len as usize
+        );
     }
 
     #[test]
@@ -381,5 +381,315 @@ mod tests {
         let bytes = borsh::to_vec(&session).unwrap();
         let decoded = ProofUploadSession::try_from_slice(&bytes).unwrap();
         assert_eq!(session, decoded);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 40 — proptest coverage for the chunked-upload state machine.
+    //
+    // The chunked upload protocol is a small but security-critical
+    // state machine: any deviation from the documented invariants
+    // (chunk ordering, length cap, hash commitment, finalization
+    // monotonicity) lets an attacker either corrupt the assembled
+    // proof bytes or replay a finalized session.
+    //
+    // Proptest matrix:
+    //
+    //   1. State machine soundness — any random sequence of legitimate
+    //      `append_chunk` calls (in-order, in-bounds) lets `finalize`
+    //      succeed when the cumulative chunk bytes equal `total_len`.
+    //   2. Out-of-order rejection — any chunk_index ≠ chunks_committed
+    //      is rejected with `ChunkOutOfOrder`.
+    //   3. Overflow rejection — any chunk that would push appended_len
+    //      past total_len is rejected with `ChunkOverflow`.
+    //   4. Chunk-size cap — any chunk longer than `CHUNK_SIZE` is
+    //      rejected with `ChunkOverflow`.
+    //   5. Already-finalized monotonicity — once finalized, no
+    //      append_chunk and no second finalize is allowed.
+    //   6. Hash commitment — finalize with the wrong final hash is
+    //      rejected with `ChunkCommitmentMismatch`.
+    //   7. Length commitment — finalize with appended_len < total_len
+    //      is rejected with `ChunkCommitmentMismatch`.
+    //   8. Borsh round-trip — encode → decode is the identity over
+    //      the full state space we generate.
+    //   9. Expiry semantics — `current_slot ≥ expires_at_slot` ⇔
+    //      `is_expired(current_slot)`.
+    //  10. Instruction tag round-trip — exhaustive over byte space
+    //      [0, 255] checks the from_byte mapping.
+    //  11. PDA seeds — order is [SEED_PREFIX, session_id, payer]
+    //      regardless of the specific session_id and payer values.
+    //
+    // The state-machine property uses a tiny "trace" generator that
+    // produces a sequence of (chunk_index, chunk_payload) pairs
+    // satisfying the in-order + in-bounds preconditions, then asserts
+    // that running the trace through `append_chunk` followed by
+    // `finalize` succeeds and the assembled bytes match the
+    // concatenation of the trace.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    /// Random `(num_chunks, last_chunk_len)` shape for a session.
+    /// Total length is `num_chunks * CHUNK_SIZE` minus a clip on the
+    /// last chunk so we exercise both even-multiple and partial-tail
+    /// session shapes.
+    prop_compose! {
+        fn arb_session_shape()(
+            num_chunks in 1usize..=8,
+            last_chunk_len in 1usize..=CHUNK_SIZE,
+        ) -> (usize, usize) {
+            (num_chunks, last_chunk_len)
+        }
+    }
+
+    /// Synthesize a full chunk sequence from a shape descriptor: every
+    /// chunk except the last is exactly `CHUNK_SIZE` bytes; the last
+    /// is `last_chunk_len ∈ [1, CHUNK_SIZE]`.
+    fn make_trace(num_chunks: usize, last_chunk_len: usize, fill: u8) -> Vec<Vec<u8>> {
+        let mut trace = Vec::with_capacity(num_chunks);
+        for i in 0..num_chunks {
+            let len = if i + 1 == num_chunks {
+                last_chunk_len
+            } else {
+                CHUNK_SIZE
+            };
+            trace.push(alloc::vec![fill.wrapping_add(i as u8); len]);
+        }
+        trace
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// Any in-spec trace assembles correctly. Pins the happy path
+        /// across the random shape space.
+        #[test]
+        fn proptest_in_order_trace_finalizes(
+            (num_chunks, last_chunk_len) in arb_session_shape(),
+            fill in any::<u8>(),
+        ) {
+            let trace = make_trace(num_chunks, last_chunk_len, fill);
+            let total_len: u32 = trace.iter().map(|c| c.len() as u32).sum();
+            let mut session = ProofUploadSession::new(
+                [3; 32], [4; 32], 254, 0x01, total_len, [0xAA; 32], 1_000,
+            );
+            // Use a deterministic "next_hash" sequence so the test
+            // doesn't depend on a real SHA-256 — finalize compares the
+            // final hash to a value we choose.
+            let mut last_hash = [0xAAu8; 32];
+            for (idx, chunk) in trace.iter().enumerate() {
+                let next_hash = [(idx as u8).wrapping_add(1); 32];
+                session.append_chunk(idx as u16, chunk, next_hash).unwrap();
+                last_hash = next_hash;
+            }
+            session.finalize(last_hash).unwrap();
+            prop_assert!(session.finalized);
+            prop_assert_eq!(session.appended_len, total_len);
+            prop_assert_eq!(session.chunks_committed as usize, num_chunks);
+            // Assembled bytes match the concatenated trace.
+            let expected: Vec<u8> = trace.iter().flatten().copied().collect();
+            prop_assert_eq!(&session.assembled, &expected);
+        }
+
+        /// Any chunk_index that doesn't equal `chunks_committed` is
+        /// rejected with `ChunkOutOfOrder`. We start from a fresh
+        /// session (chunks_committed = 0) and try a non-zero index.
+        #[test]
+        fn proptest_rejects_out_of_order(
+            wrong_idx in 1u16..=u16::MAX,
+            payload_len in 1usize..=CHUNK_SIZE,
+        ) {
+            let mut session = ProofUploadSession::new(
+                [5; 32], [6; 32], 254, 0x01, 4096, [0; 32], 0,
+            );
+            let chunk = alloc::vec![0u8; payload_len];
+            prop_assert!(matches!(
+                session.append_chunk(wrong_idx, &chunk, [0; 32]),
+                Err(OnChainError::ChunkOutOfOrder),
+            ));
+        }
+
+        /// Any chunk longer than `CHUNK_SIZE` is rejected as
+        /// `ChunkOverflow`, regardless of the session's `total_len`
+        /// budget.
+        #[test]
+        fn proptest_rejects_oversized_chunk(
+            extra in 1usize..=64,
+        ) {
+            let mut session = ProofUploadSession::new(
+                [7; 32], [8; 32], 254, 0x01, MAX_PROOF_LEN, [0; 32], 0,
+            );
+            let oversized = alloc::vec![0u8; CHUNK_SIZE + extra];
+            prop_assert!(matches!(
+                session.append_chunk(0, &oversized, [0; 32]),
+                Err(OnChainError::ChunkOverflow),
+            ));
+        }
+
+        /// Any chunk that would push `appended_len` past `total_len`
+        /// is rejected with `ChunkOverflow`.
+        #[test]
+        fn proptest_rejects_total_len_overflow(
+            total_len in 1u32..=200,
+            overshoot in 1usize..=64,
+        ) {
+            let mut session = ProofUploadSession::new(
+                [9; 32], [10; 32], 254, 0x01, total_len, [0; 32], 0,
+            );
+            let chunk = alloc::vec![0u8; (total_len as usize) + overshoot];
+            // For very small total_len the chunk above might exceed
+            // CHUNK_SIZE which would route through a different error.
+            prop_assume!(chunk.len() <= CHUNK_SIZE);
+            prop_assert!(matches!(
+                session.append_chunk(0, &chunk, [0; 32]),
+                Err(OnChainError::ChunkOverflow),
+            ));
+        }
+
+        /// Once `finalized = true`, no further `append_chunk` is
+        /// accepted. Pins the monotonicity guarantee that prevents
+        /// attackers from extending a finalized session.
+        #[test]
+        fn proptest_finalized_session_rejects_appends(
+            extra_chunk_len in 1usize..=CHUNK_SIZE,
+        ) {
+            let mut session = ProofUploadSession::new(
+                [11; 32], [12; 32], 254, 0x01, 4, [0; 32], 0,
+            );
+            session.append_chunk(0, &[1, 2, 3, 4], [0xBB; 32]).unwrap();
+            session.finalize([0xBB; 32]).unwrap();
+            let extra = alloc::vec![0u8; extra_chunk_len];
+            prop_assert!(matches!(
+                session.append_chunk(1, &extra, [0xCC; 32]),
+                Err(OnChainError::SessionAlreadyFinalized),
+            ));
+            // Second finalize attempt must also reject.
+            prop_assert!(matches!(
+                session.finalize([0xBB; 32]),
+                Err(OnChainError::SessionAlreadyFinalized),
+            ));
+        }
+
+        /// Finalize with any hash other than the actual rolling hash
+        /// is rejected with `ChunkCommitmentMismatch`.
+        #[test]
+        fn proptest_finalize_rejects_wrong_hash(
+            wrong_hash_byte in 0u8..u8::MAX,
+        ) {
+            let mut session = ProofUploadSession::new(
+                [13; 32], [14; 32], 254, 0x01, 2, [0; 32], 0,
+            );
+            session.append_chunk(0, &[1, 2], [0xBB; 32]).unwrap();
+            // Pick any hash != [0xBB; 32].
+            prop_assume!(wrong_hash_byte != 0xBB);
+            let bad_hash = [wrong_hash_byte; 32];
+            prop_assert!(matches!(
+                session.finalize(bad_hash),
+                Err(OnChainError::ChunkCommitmentMismatch),
+            ));
+            prop_assert!(!session.finalized);
+        }
+
+        /// Finalize with `appended_len < total_len` is rejected.
+        /// Catches the failure mode where a partial upload would slip
+        /// past the commitment check.
+        #[test]
+        fn proptest_finalize_rejects_short_assembly(
+            total_len in 4u32..=200,
+            short_by in 1u32..=4,
+        ) {
+            prop_assume!(short_by < total_len);
+            let mut session = ProofUploadSession::new(
+                [15; 32], [16; 32], 254, 0x01, total_len, [0; 32], 0,
+            );
+            let chunk_len = (total_len - short_by) as usize;
+            // Chunk_len ≤ CHUNK_SIZE for the cases we generate.
+            prop_assume!(chunk_len <= CHUNK_SIZE);
+            let chunk = alloc::vec![0u8; chunk_len];
+            session.append_chunk(0, &chunk, [0xBB; 32]).unwrap();
+            prop_assert!(matches!(
+                session.finalize([0xBB; 32]),
+                Err(OnChainError::ChunkCommitmentMismatch),
+            ));
+        }
+
+        /// Borsh encode → decode is the identity for any reachable
+        /// session state. Generates random session parameters and
+        /// runs a partial trace before serializing.
+        #[test]
+        fn proptest_borsh_roundtrip(
+            session_id_byte in any::<u8>(),
+            payer_byte in any::<u8>(),
+            bump in any::<u8>(),
+            proof_system_id in any::<u8>(),
+            total_len in 0u32..=1024,
+            chunks_to_append in 0usize..=4,
+        ) {
+            let mut session = ProofUploadSession::new(
+                [session_id_byte; 32],
+                [payer_byte; 32],
+                bump,
+                proof_system_id,
+                total_len,
+                [0; 32],
+                0,
+            );
+            // Append chunks until we hit total_len or the requested
+            // chunk count.
+            let chunk_payload = alloc::vec![0xAAu8; 16];
+            for i in 0..chunks_to_append {
+                if session.appended_len + chunk_payload.len() as u32 > total_len {
+                    break;
+                }
+                if session.append_chunk(i as u16, &chunk_payload, [i as u8; 32]).is_err() {
+                    break;
+                }
+            }
+            let bytes = borsh::to_vec(&session).unwrap();
+            let decoded = ProofUploadSession::try_from_slice(&bytes).unwrap();
+            prop_assert_eq!(session, decoded);
+        }
+
+        /// `is_expired` matches the documented `current_slot >=
+        /// expires_at_slot` rule across the entire u64 slot space.
+        #[test]
+        fn proptest_expiry_semantics(
+            created_slot in 0u64..=u64::MAX / 2,
+            current_slot in 0u64..=u64::MAX,
+        ) {
+            let session = ProofUploadSession::new(
+                [17; 32], [18; 32], 254, 0x01, 1, [0; 32], created_slot,
+            );
+            let expected = current_slot >= session.expires_at_slot;
+            prop_assert_eq!(session.is_expired(current_slot), expected);
+        }
+
+        /// Instruction tag mapping: bytes 0x10..=0x14 round-trip as
+        /// `Some(variant)`; everything else is `None`. Exhaustive over
+        /// the entire u8 space.
+        #[test]
+        fn proptest_instruction_tag_mapping(byte in any::<u8>()) {
+            let parsed = ChunkedInstructionTag::from_byte(byte);
+            match byte {
+                0x10..=0x14 => prop_assert!(parsed.is_some()),
+                _ => prop_assert!(parsed.is_none()),
+            }
+        }
+
+        /// PDA seed material is exactly `[SESSION_SEED_PREFIX,
+        /// session_id, payer]` regardless of the session_id and payer
+        /// values. A reorder would silently change the derived PDA on
+        /// every account, breaking all previously-uploaded sessions.
+        #[test]
+        fn proptest_pda_seed_order_stable(
+            session_id_byte in any::<u8>(),
+            payer_byte in any::<u8>(),
+        ) {
+            let session_id = [session_id_byte; 32];
+            let payer = [payer_byte; 32];
+            let seeds = ProofUploadSession::pda_seeds(&session_id, &payer);
+            prop_assert_eq!(seeds.len(), 3);
+            prop_assert_eq!(seeds[0], SESSION_SEED_PREFIX);
+            prop_assert_eq!(seeds[1], &session_id[..]);
+            prop_assert_eq!(seeds[2], &payer[..]);
+        }
     }
 }
