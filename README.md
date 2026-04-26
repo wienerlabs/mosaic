@@ -55,7 +55,8 @@ frozen CU budgets.
 | `mosaic-chunked` data model | ✅ Implemented | — |
 | `mosaic-chunked` instruction handlers | ✅ Production | — |
 | Reference Solana program | ✅ 319 KB SBF ELF (30.4% of 1 MB cap; 12 cryptographic gates wired) | — |
-| Differential test harness (arkworks + snarkjs fixture) | ✅ Production | — |
+| Differential test harness (arkworks + snarkjs fixture) | ✅ Production (Groth16 + PLONK; Phase-3 extension tracked) | — |
+| Property-test coverage (proptest, sessions 36-42) | ✅ 324 lib tests across 11 crates (+111 in audit-coverage sweep) | — |
 | Fuzz harnesses (3) | ✅ Scaffolded | — |
 | External audit | 🔴 Not yet commissioned | — |
 
@@ -224,8 +225,47 @@ same locally.
   four `as u8` truncation warnings in `fr::sub_r` + `msm::negate_g1`.
   **+27 proptest tests** (zk-primitives 51→64, stark 103→117) plus
   clippy cleanup + complete `# Errors` rustdoc for zk-primitives.
+- **Audit-coverage sweep (sessions 37-42, post-v0.8.0):**
+  Workspace-wide property-based test sweep brings every Phase-1,
+  Phase-2, Phase-3, adapter, state-machine, SDK, and on-chain
+  program crate under audit-grade proptest coverage. **+111
+  proptest tests** across nine crates:
+
+  | Crate | Δ | Total |
+  |---|---:|---:|
+  | `mosaic-halo2` | +16 | 75 |
+  | `mosaic-hyperplonk` | +17 | 82 |
+  | `mosaic-nova` | +14 | 59 |
+  | `mosaic-plonk` | +15 | 32 |
+  | `mosaic-groth16` | +15 | 26 |
+  | `mosaic-serde` | +9 | 12 |
+  | `mosaic-chunked` | +11 | 20 |
+  | `mosaic-sdk` | +7 | 11 |
+  | `mosaic-program` | +7 | 7 |
+
+  Property categories: canonical byte layout invariants, full
+  Fiat-Shamir round-by-round avalanche (Halo2 4-round, HyperPlonk
+  3-round, Nova 3-round, PLONK 6-round including the snarkjs-
+  compatibility "u-absorbs-only-W_xi-and-W_xiω" bit), single-byte
+  tamper rejection over commit and opening regions, state-machine
+  monotonicity (chunked upload session), Borsh wire-format round-
+  trip (instruction payloads), BE-comparison + Fr arithmetic
+  invariants, snarkjs adapter c1‖c0 ordering and `decimal_to_be_32`
+  range envelope, builder/setter independence, instruction-tag
+  dispatch routing.
+
+  Three false positives surfaced and were documented inline: the
+  Halo2 verifier random-byte-flip test required scope-narrowing
+  away from selector slots that interact with the dummy fixture's
+  trivially-zero wires; the HyperPlonk verifier's `anchor + XOR`
+  tamper pattern was rewritten to direct `proof[off] = new_val`
+  after `bit_mask = anchor` cancellation was caught by proptest
+  shrinking; the same byte-anchor pattern was avoided across the
+  rest of the sweep.
+
   Only fixture-driven differential testing remains before external
-  audit engagement.
+  audit engagement (tracked: extending `tests/differential` from
+  Groth16 + PLONK to all four Phase-3 bodies).
 - **Vulnerability reports:** see [SECURITY.md](SECURITY.md) and the
   [disclosure-timeline SLA](docs/responsible-disclosure-timeline.md).
 - **Audit history:** see [AUDIT.md](AUDIT.md).

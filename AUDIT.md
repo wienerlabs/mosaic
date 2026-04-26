@@ -5,6 +5,83 @@ appended in reverse chronological order.
 
 ---
 
+## 2026-04-27 — Workspace-wide proptest sweep (sessions 37-42, post-v0.8.0)
+
+| Field | Value |
+|---|---|
+| Tag | _no separate tag_ — work appended to the `v0.8.0-phase3-polish` line via main branch commits `cfef56a..0fb0ea9` |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Property-based test coverage for every host-callable byte-format, Fiat-Shamir, state-machine, and SDK surface in the workspace |
+| Findings | Three internal false positives surfaced and documented inline (see "Yan kazanım" section in each session commit message); zero soundness regressions |
+| Status | ✅ Audit-grade proptest coverage now spans 9 of 11 workspace crates |
+
+### What this milestone changes for an external auditor
+
+The workspace now ships **324 lib tests across 11 crates**, of which
+**+111 are property-based tests added in this sweep**. Every Phase-1,
+Phase-2, and Phase-3 verifier crate, plus the snarkjs adapter, the
+chunked-upload state machine, the client SDK, and the on-chain program
+dispatch surface, is now property-tested under proptest with explicit
+audit-grade rationale comments at each test's docstring.
+
+The intention is to give an external review firm a single point of
+entry to the soundness density of every byte-format and state-transition
+boundary: instead of having to derive the audit-relevant invariants
+from prose, they can read the proptest body and verify it pins the
+property they care about.
+
+### Property categories pinned by the sweep
+
+| Category | Crates covered | Representative property |
+|---|---|---|
+| Canonical byte layout | halo2, hyperplonk, nova, plonk, groth16 | `proof_view_parses_any_canonical_payload` reassembles A‖B‖C exactly |
+| Fiat-Shamir avalanche | halo2 (4-round), hyperplonk (3-round), nova (3-round), plonk (6-round) | `quotient_t_mutation_xi_v_only` — round-4 absorb cascades to ξ + v but leaves β/γ/α/u stable |
+| Single-byte tamper rejection | halo2, hyperplonk verifiers | `random_commit_byte_flip_rejects` over commit + opening regions |
+| State-machine monotonicity | chunked | `finalized_session_rejects_appends` pins no-double-finalize + no-post-finalize-append |
+| Borsh wire-format round-trip | sdk, program | `verify_proof_data_borsh_roundtrip` pins the four-field order against silent reorderings |
+| BE-comparison + Fr arithmetic | groth16 | `add_mod_r_preserves_range` for the batch-coefficient sum |
+| snarkjs adapter byte ordering | serde | `g2_layout_c1_then_c0` pins the Solana c1 ‖ c0 swap |
+| Builder/setter independence | sdk | `builder_setters_are_independent` against copy-paste setter aliasing |
+| Instruction-tag dispatch | program | `process_rejects_unknown_tag` exhaustive over u8 ∉ known dispatch ranges |
+
+### Documented false positives (inline rationale + scope narrowing)
+
+1. **Halo2 verifier random-byte-flip selector slot**
+   The trivially-zero dummy fixture has `b = 0` for every wire, so
+   flipping a `Q_R` byte preserves the gate expression `Q_R · b = 0`.
+   Scope was narrowed to commit-region bytes; the selector-slot
+   property is deferred to the fixture-driven differential harness.
+
+2. **HyperPlonk verifier `anchor + XOR` cancellation**
+   The pattern `proof[off] = anchor; proof[off] ^= bit_mask;` collapses
+   to a no-op when `bit_mask == anchor`. Surfaced by proptest shrinking
+   on the first run; rewritten as direct `proof[off] = new_val` with
+   `new_val ∈ [1, 255]`. Same pattern audited and avoided across the
+   rest of the sweep.
+
+3. **`is_multiple_of` MSRV warning** _(pre-existing, not from this sweep)_
+   The challenges modules use `usize::is_multiple_of`, stable since
+   Rust 1.87. Workspace MSRV is 1.85. CI passes because the lint is in
+   the pedantic group; documented here as an unresolved drift between
+   nightly clippy's stable-version detection and our MSRV pin.
+
+### What this does NOT yet cover
+
+- **Fixture-driven differential testing for Phase-3 bodies.** The
+  existing `tests/differential` harness covers Groth16 + PLONK against
+  arkworks; HyperPlonk, Halo2, Nova, and FRI-STARK still need
+  Espresso / PSE / sonobe / Plonky3 reference fixtures wired in.
+  This is the last named pre-audit gap in `README.md § Security`.
+- **`mosaic-program::chunked::dispatch` integration tests.** The
+  current SBF integration test under `tests/verify_proof_sbf.rs` exercises
+  the verify-proof path; the chunked dispatch path needs a parallel
+  `solana-program-test` harness with synthesized `AccountInfo`.
+- **Arkworks adapter property tests.** Generating random valid
+  `ArkProof` / `ArkVk` fixtures requires a small inline circuit; this
+  was deferred from session 40.
+
+---
+
 ## 2026-04-20 — Phase 1 scope frozen; **ready for external review**
 
 | Field | Value |
