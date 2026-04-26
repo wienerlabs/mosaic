@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.7.0-phase3-primitives](https://img.shields.io/badge/release-v0.7.0--phase3--primitives-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.7.0-phase3-primitives)
+[![Release: v0.8.0-phase3-polish](https://img.shields.io/badge/release-v0.8.0--phase3--polish-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.0-phase3-polish)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -210,8 +210,22 @@ same locally.
   `verify_two_pair_pairing`, `commitment_minus_scalar_g1`. Nova
   proof canonical gains a dedicated `w_eval` slot (session 23),
   replacing the scaffold reuse of `public_inputs[0]`. 14 new unit
-  tests cover the lifted primitives. Only fixture-driven
-  differential testing remains before external audit engagement.
+  tests cover the lifted primitives.
+- **Phase-3 polish release:** [`v0.8.0-phase3-polish`](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.0-phase3-polish).
+  Sixth primitive `compute_kzg_opening_lhs` consolidates the full
+  `A = C − y·G1 + ξ·W` pairing-LHS construction across every KZG
+  verifier. HyperPlonk univariate opening point now binds the
+  FULL sumcheck challenge vector (not just the trailing challenge).
+  `ProofSystem::estimated_compute_units` turns shape-aware for the
+  three Phase-3 bodies (halo2/hyperplonk/nova). `mosaic-sdk` gains
+  five opt-in Cargo features (`plonk`, `hyperplonk`, `halo2`,
+  `nova`, `stark`, plus `all-phase3`) so client preflight covers
+  every proof system. Cast-safe borrow-chain rewrite eliminates
+  four `as u8` truncation warnings in `fr::sub_r` + `msm::negate_g1`.
+  **+27 proptest tests** (zk-primitives 51→64, stark 103→117) plus
+  clippy cleanup + complete `# Errors` rustdoc for zk-primitives.
+  Only fixture-driven differential testing remains before external
+  audit engagement.
 - **Vulnerability reports:** see [SECURITY.md](SECURITY.md) and the
   [disclosure-timeline SLA](docs/responsible-disclosure-timeline.md).
 - **Audit history:** see [AUDIT.md](AUDIT.md).
