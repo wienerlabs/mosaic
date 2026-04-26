@@ -37,6 +37,8 @@ hex = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
+proptest = { workspace = true }
+borsh = { workspace = true, features = ["std"] }
 
 [features]
 # Default ships Groth16 preflight only (baseline behavior pre-

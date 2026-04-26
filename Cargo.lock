@@ -3216,6 +3216,7 @@ dependencies = [
  "mosaic-plonk",
  "mosaic-serde",
  "mosaic-stark",
+ "proptest",
  "solana-client",
  "solana-sdk",
  "thiserror 1.0.69",
