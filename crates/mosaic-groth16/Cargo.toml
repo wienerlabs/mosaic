@@ -21,6 +21,7 @@ arrayvec = { workspace = true }
 
 [dev-dependencies]
 mosaic-core = { workspace = true, features = ["std", "host-backend"] }
+proptest = { workspace = true }
 
 [features]
 default = []

@@ -163,8 +163,7 @@ pub fn batch_verify<B: SyscallBackend + ?Sized, const LE_INPUTS: bool>(
     pairing_input.extend_from_slice(&vk.delta_g2);
 
     // ---------- 5. Single pairing syscall ----------
-    let result =
-        backend.alt_bn128_group_op(AltBn128Op::Pairing, endianness, &pairing_input)?;
+    let result = backend.alt_bn128_group_op(AltBn128Op::Pairing, endianness, &pairing_input)?;
     if result.len() != 32 || result[31] != 0x01 {
         return Err(OnChainError::PairingCheckFailed);
     }

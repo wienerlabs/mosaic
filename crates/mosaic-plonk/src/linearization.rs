@@ -25,8 +25,8 @@ use crate::{
     canonical::{PlonkProof, PlonkVerifyingKey},
     challenges::RoundChallenges,
     field::{
-        decode_public_inputs, evaluate_public_input_poly, fr_from_canonical_bytes,
-        fr_pow_u64, fr_to_canonical_bytes, lagrange_basis_at,
+        decode_public_inputs, evaluate_public_input_poly, fr_from_canonical_bytes, fr_pow_u64,
+        fr_to_canonical_bytes, lagrange_basis_at,
     },
     g1_consts::{g1_generator_bytes, g2_generator_bytes},
     msm::{add_g1, msm_g1, negate_g1, scalar_mul_g1},
@@ -96,17 +96,27 @@ impl ComputedScalars {
         let r0 = compute_r0_scalar(proof, &beta, &gamma, &alpha, &l1, &pi)?;
 
         Ok(Self {
-            beta, gamma, alpha, xi, v_powers, u,
-            xi_n, zh, l1, pi, r0,
-            k1, k2, omega, n,
+            beta,
+            gamma,
+            alpha,
+            xi,
+            v_powers,
+            u,
+            xi_n,
+            zh,
+            l1,
+            pi,
+            r0,
+            k1,
+            k2,
+            omega,
+            n,
         })
     }
 }
 
 #[inline(never)]
-fn decode_challenges(
-    c: &RoundChallenges,
-) -> Result<(Fr, Fr, Fr, Fr, Fr, Fr), OnChainError> {
+fn decode_challenges(c: &RoundChallenges) -> Result<(Fr, Fr, Fr, Fr, Fr, Fr), OnChainError> {
     Ok((
         fr_from_canonical_bytes(&c.beta)?,
         fr_from_canonical_bytes(&c.gamma)?,
@@ -128,9 +138,7 @@ fn compute_v_powers(v: &Fr) -> [Fr; 6] {
 }
 
 #[inline(never)]
-fn decode_vk_constants(
-    vk: &PlonkVerifyingKey,
-) -> Result<(Fr, Fr, Fr, u64), OnChainError> {
+fn decode_vk_constants(vk: &PlonkVerifyingKey) -> Result<(Fr, Fr, Fr, u64), OnChainError> {
     let k1 = fr_from_canonical_bytes(&vk.k1)?;
     let k2 = fr_from_canonical_bytes(&vk.k2)?;
     let omega = fr_from_canonical_bytes(&vk.omega)?;
@@ -149,12 +157,7 @@ fn compute_domain_scalars(xi: &Fr, n: u64, omega: &Fr) -> Result<(Fr, Fr, Fr), O
 }
 
 #[inline(never)]
-fn compute_pi(
-    xi: &Fr,
-    omega: &Fr,
-    n: u64,
-    public_inputs_bytes: &[u8],
-) -> Result<Fr, OnChainError> {
+fn compute_pi(xi: &Fr, omega: &Fr, n: u64, public_inputs_bytes: &[u8]) -> Result<Fr, OnChainError> {
     let public_inputs_fr = decode_public_inputs(public_inputs_bytes)?;
     evaluate_public_input_poly(xi, omega, n, &public_inputs_fr)
 }
@@ -244,17 +247,13 @@ fn compute_d1<B: SyscallBackend + ?Sized>(
         fr_to_canonical_bytes(&eval_c),
         fr_to_canonical_bytes(&Fr::one()),
     ];
-    let gate_points: [&[u8]; 5] =
-        [&vk.qm_g1, &vk.ql_g1, &vk.qr_g1, &vk.qo_g1, &vk.qc_g1];
+    let gate_points: [&[u8]; 5] = [&vk.qm_g1, &vk.ql_g1, &vk.qr_g1, &vk.qo_g1, &vk.qc_g1];
     msm_g1(backend, &gate_points, &gate_scalars)
 }
 
 /// d2a = α · (eval_a + β·ξ + γ) · (eval_b + β·k1·ξ + γ) · (eval_c + β·k2·ξ + γ).
 #[inline(never)]
-fn compute_d2a(
-    proof: &PlonkProof<'_>,
-    scalars: &ComputedScalars,
-) -> Result<Fr, OnChainError> {
+fn compute_d2a(proof: &PlonkProof<'_>, scalars: &ComputedScalars) -> Result<Fr, OnChainError> {
     let eval_a = fr_from_canonical_bytes(proof.eval_a)?;
     let eval_b = fr_from_canonical_bytes(proof.eval_b)?;
     let eval_c = fr_from_canonical_bytes(proof.eval_c)?;
@@ -267,10 +266,7 @@ fn compute_d2a(
 
 /// Sub-helper: d2 coefficient = d2a + α²·L_1 + u.
 #[inline(never)]
-fn compute_d2_coeff(
-    proof: &PlonkProof<'_>,
-    scalars: &ComputedScalars,
-) -> Result<Fr, OnChainError> {
+fn compute_d2_coeff(proof: &PlonkProof<'_>, scalars: &ComputedScalars) -> Result<Fr, OnChainError> {
     let d2a = compute_d2a(proof, scalars)?;
     let d2b = scalars.l1 * scalars.alpha * scalars.alpha;
     Ok(d2a + d2b + scalars.u)

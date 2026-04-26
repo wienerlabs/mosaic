@@ -79,7 +79,10 @@ impl<'a, B: SyscallBackend, const LE: bool> Groth16Verifier<'a, B, LE> {
         // ---------- L = IC[0] + Σ pi[i] · IC[i+1] ----------
         let mut l = vk.ic[0]; // start with IC[0]
         for (i, chunk) in public_inputs_bytes.chunks_exact(FR_LEN).enumerate() {
-            let ic_i_plus_1 = vk.ic.get(i + 1).ok_or(OnChainError::InternalInvariantViolation)?;
+            let ic_i_plus_1 = vk
+                .ic
+                .get(i + 1)
+                .ok_or(OnChainError::InternalInvariantViolation)?;
             // scalar mul: IC[i+1] · pi[i]
             let mut mul_input = Vec::with_capacity(G1_LEN + FR_LEN);
             mul_input.extend_from_slice(ic_i_plus_1);
@@ -213,7 +216,11 @@ where
         let ic_bytes = vk_bytes.len().saturating_sub(header);
         let n = (ic_bytes / G1_LEN).saturating_sub(1);
         let n_u32 = u32::try_from(n).unwrap_or(u32::MAX);
-        Some(5_000_u32.saturating_add(n_u32.saturating_mul(3_300)).saturating_add(36_000))
+        Some(
+            5_000_u32
+                .saturating_add(n_u32.saturating_mul(3_300))
+                .saturating_add(36_000),
+        )
     }
 
     fn batch_verify(

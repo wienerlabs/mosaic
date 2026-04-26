@@ -3124,6 +3124,7 @@ dependencies = [
  "arrayvec",
  "borsh 1.6.1",
  "mosaic-core",
+ "proptest",
  "subtle",
  "zeroize",
 ]
@@ -3175,6 +3176,7 @@ dependencies = [
  "ark-std 0.5.0",
  "mosaic-core",
  "mosaic-zk-primitives",
+ "proptest",
  "tiny-keccak",
 ]
 

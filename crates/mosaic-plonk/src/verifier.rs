@@ -75,8 +75,7 @@ impl<'a, B: SyscallBackend + ?Sized> PlonkKzgBn254<'a, B> {
     ) -> Result<(), OnChainError> {
         let vk = PlonkVerifyingKey::from_bytes(vk_bytes)?;
         let proof = PlonkProof::from_bytes(proof_bytes)?;
-        let challenges =
-            RoundChallenges::derive(self.backend, &vk, &proof, public_inputs_bytes)?;
+        let challenges = RoundChallenges::derive(self.backend, &vk, &proof, public_inputs_bytes)?;
         crate::linearization::finalize_verify(
             self.backend,
             &vk,
@@ -154,14 +153,20 @@ mod tests {
 
     fn dummy_vk_bytes(n_public: u32) -> alloc::vec::Vec<u8> {
         PlonkVerifyingKey {
-            qm_g1: [0; G1_LEN], ql_g1: [0; G1_LEN],
-            qr_g1: [0; G1_LEN], qo_g1: [0; G1_LEN],
+            qm_g1: [0; G1_LEN],
+            ql_g1: [0; G1_LEN],
+            qr_g1: [0; G1_LEN],
+            qo_g1: [0; G1_LEN],
             qc_g1: [0; G1_LEN],
-            s1_g1: [0; G1_LEN], s2_g1: [0; G1_LEN],
+            s1_g1: [0; G1_LEN],
+            s2_g1: [0; G1_LEN],
             s3_g1: [0; G1_LEN],
-            x2_g2: [0; G2_LEN], power: 10,
-            k1: [0; FR_LEN], k2: [0; FR_LEN],
-            omega: [0; FR_LEN], n_public,
+            x2_g2: [0; G2_LEN],
+            power: 10,
+            k1: [0; FR_LEN],
+            k2: [0; FR_LEN],
+            omega: [0; FR_LEN],
+            n_public,
         }
         .to_bytes()
     }
