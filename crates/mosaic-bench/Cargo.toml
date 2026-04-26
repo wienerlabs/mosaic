@@ -17,12 +17,19 @@ publish = false
 mosaic-core = { workspace = true, features = ["std", "host-backend"] }
 mosaic-groth16 = { workspace = true, features = ["std", "host-backend"] }
 mosaic-plonk = { workspace = true, features = ["std"] }
+mosaic-hyperplonk = { workspace = true, features = ["std"] }
+mosaic-halo2 = { workspace = true, features = ["std"] }
+mosaic-nova = { workspace = true, features = ["std"] }
+mosaic-stark = { workspace = true, features = ["std", "host-backend"] }
+mosaic-zk-primitives = { workspace = true, features = ["std", "host-backend"] }
 mosaic-serde = { workspace = true, features = ["std", "host-backend"] }
 solana-program-test = { workspace = true }
 solana-sdk = { workspace = true }
 borsh = { workspace = true, features = ["std"] }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+ark-bn254 = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

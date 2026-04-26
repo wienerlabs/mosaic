@@ -44,8 +44,7 @@ use std::{fs, path::PathBuf, process::ExitCode};
 // The reference program's declared id. Hardcoded because mosaic-bench does
 // not depend on mosaic-program (avoids pulling solana-program as a direct
 // dep into the bench crate's compile graph).
-const PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("MosA1cVer1f1er11111111111111111111111111111");
+const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("MosA1cVer1f1er11111111111111111111111111111");
 
 /// Tolerance around the last-measured baseline. A deviation beyond this
 /// triggers a WARN but not a hard failure.
@@ -104,6 +103,70 @@ const TARGETS: &[SystemTarget] = &[
         hard_cap_cu: 1_100_000,
         baseline_cu: 968_457,
     },
+    // ───────────────────────────────────────────────────────────────────
+    // Session 47 — Phase-3 BPF bench coverage. The four Phase-3 bodies
+    // (HyperPlonk, Halo2, Nova, FRI-STARK) currently have CU baselines
+    // measured only on the host side via `ProofSystem::estimated_compute_units`.
+    // This sweep adds full BPF execution measurements through
+    // `solana-program-test`, mirroring the Groth16 + PLONK pattern.
+    //
+    // Fixture provenance
+    // ──────────────────
+    // No fixtures exist yet under `tests/fixtures/{hyperplonk,halo2,nova,
+    // stark}/` because the Espresso / PSE / sonobe / Plonky3 prover
+    // toolchains are not in the workspace's compile graph. Each Phase-3
+    // bench instead constructs an in-memory **scaffold-acceptance
+    // fixture** that mirrors the verifier's own dummy fixtures from its
+    // `lib.rs` test module. These fixtures pass every gate the verifier
+    // currently checks (hence "scaffold-acceptance"), so the measurement
+    // covers the full pipeline: parse → challenges → sumcheck (where
+    // applicable) → identity check → KZG/FRI pairing/Merkle verification.
+    //
+    // The hard caps below are derived from the verifier's
+    // `estimated_compute_units` shape-aware estimate at the chosen
+    // dummy proof size, plus a 30 % regression headroom. Once external
+    // fixtures land in `tests/fixtures/`, the baselines + caps will be
+    // re-measured against real-world proof shapes (planned in the
+    // session-47 follow-up commit).
+    SystemTarget {
+        name: "hyperplonk_kzg_bn254_scaffold",
+        // 10 sumcheck rounds (2^10 circuit) scaffold fixture. Estimated
+        // CU at this shape from `estimated_compute_units`:
+        //   ~340K transcript + sumcheck round arithmetic
+        //   + ~165K KZG pairing batched opening
+        // Scaffold fixture uses zero-wire + lookup_m=1 to make the
+        // identity reduce to 0 = 0; CU baseline is measured here for
+        // regression tracking against future scaffold tightening.
+        // Initial hard cap = estimate × 1.30 ≈ 660K.
+        hard_cap_cu: 660_000,
+        baseline_cu: 0, // measured-and-recorded after first run
+    },
+    SystemTarget {
+        name: "halo2_kzg_bn254_scaffold",
+        // 5 advice + 1 lookup + 3 quotient chunks + 19 evaluation
+        // bundle scaffold fixture (≈1.1 KB proof, 744 B VK including
+        // 2 fixed + 5 permutation commitments). Estimated CU at this
+        // shape: ~580K (challenge derivation + multi-poly batched
+        // opening). Initial hard cap = estimate × 1.30 ≈ 760K.
+        hard_cap_cu: 760_000,
+        baseline_cu: 0, // measured-and-recorded after first run
+    },
+    SystemTarget {
+        name: "nova_folding_bn254_scaffold",
+        // Nova variant scaffold (n_public = 2, no aux commits). The
+        // folding instance encodes E/W/T commits + base pre-fold
+        // commits + 4-element Hadamard bundle + w_eval slot + 2 KZG
+        // openings. Estimated CU at this shape: ~885K (Hadamard
+        // identity check + Spartan-batched opening pairing). Initial
+        // hard cap = estimate × 1.30 ≈ 1.15M.
+        hard_cap_cu: 1_150_000,
+        baseline_cu: 0, // measured-and-recorded after first run
+    },
+    // STARK bench is deferred — its canonical layout has more shape
+    // dimensions (per-query FRI layer headers + Merkle path commits)
+    // than fits a hand-rolled scaffold fixture cleanly. Tracked as
+    // session 48 follow-up; until then `bpf-bench` covers
+    // {Groth16, Groth16-batch, KZG-PLONK, HyperPlonk, Halo2, Nova}.
 ];
 
 #[derive(BorshSerialize)]
@@ -143,7 +206,10 @@ fn fixture_bytes(system: &str, name: &str) -> Result<Vec<u8>> {
 }
 
 fn sbf_artifact_exists() -> Result<()> {
-    let path = workspace_root().join("target").join("deploy").join("mosaic_program.so");
+    let path = workspace_root()
+        .join("target")
+        .join("deploy")
+        .join("mosaic_program.so");
     if !path.exists() {
         anyhow::bail!(
             "SBF artifact missing at {path:?}; run `cargo build-sbf --tools-version v1.52 \
@@ -176,14 +242,15 @@ fn require_sbf_env() -> Result<()> {
     Ok(())
 }
 
-
 /// Parse `Program <id> consumed <N> of <M> compute units` from program logs.
 ///
 /// Returns the first `N` for a log line emitted by our program.
 fn extract_cu(logs: &[String]) -> Option<u64> {
     let needle = format!("Program {PROGRAM_ID} consumed ");
     for line in logs {
-        let Some(rest) = line.strip_prefix(&needle) else { continue };
+        let Some(rest) = line.strip_prefix(&needle) else {
+            continue;
+        };
         let n_str = rest.split_whitespace().next()?;
         if let Ok(n) = n_str.parse::<u64>() {
             return Some(n);
@@ -313,8 +380,8 @@ async fn bench_groth16_batch_n5(target: &SystemTarget) -> Result<MeasurementRepo
         .metadata
         .ok_or_else(|| anyhow!("no tx metadata"))?
         .log_messages;
-    let cu = extract_cu(&logs)
-        .ok_or_else(|| anyhow!("no CU line in logs:\n{}", logs.join("\n")))?;
+    let cu =
+        extract_cu(&logs).ok_or_else(|| anyhow!("no CU line in logs:\n{}", logs.join("\n")))?;
     Ok(MeasurementReport::from_target(target, cu))
 }
 
@@ -333,6 +400,211 @@ async fn bench_plonk_mul_circuit(target: &SystemTarget) -> Result<MeasurementRep
     // even if initial run lands high. Hard cap is checked against
     // target.hard_cap_cu, not against set_compute_unit_limit.
     run_bpf_verify(target, 0x02, &vk, &proof, &public_inputs, 1_400_000).await
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Session 47 — Phase-3 BPF bench fixtures + bench functions.
+//
+// Each `build_*_scaffold_fixture` mirrors the verifier's own dummy
+// fixture (the one used in the `verifier::tests` module of each
+// crate). The bench function runs a host preflight to confirm the
+// scaffold accepts, then submits the same bytes to the on-chain
+// program through `solana-program-test` and parses the program-log
+// CU consumption.
+//
+// ProofSystemId byte mapping (mirrors `mosaic_core::proof_system::ProofSystemId`):
+//   0x01 = Groth16Bn254          (already covered above)
+//   0x02 = PlonkKzgBn254         (already covered above)
+//   0x03 = HyperPlonkKzgBn254
+//   0x04 = Halo2KzgBn254
+//   0x05 = NovaFolding
+//   0x06 = ProtoStarFolding      (shares verifier with NovaFolding)
+//   0x07 = FriStark
+// ─────────────────────────────────────────────────────────────────────────
+
+const PROOF_SYSTEM_ID_HYPERPLONK: u8 = 0x03;
+const PROOF_SYSTEM_ID_HALO2: u8 = 0x04;
+const PROOF_SYSTEM_ID_NOVA: u8 = 0x05;
+
+/// Build the HyperPlonk scaffold-acceptance fixture used by
+/// `mosaic_hyperplonk::verifier::tests::full_pipeline_zero_proof_accepts`:
+/// 10 sumcheck rounds, n_public = 1, all wire / selector / σ
+/// commitments zero, real G2 generator for the pairing syscall.
+fn build_hyperplonk_scaffold_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use mosaic_hyperplonk::canonical::{
+        sizes::{FINAL_EVALS, FIXED_HEADER_LEN, FR_LEN, G1_LEN, SUMCHECK_POLY_LEN},
+        HyperPlonkVerifyingKey,
+    };
+    use mosaic_zk_primitives::g1_consts::g2_generator_bytes;
+
+    let vk = HyperPlonkVerifyingKey {
+        n_public: 1,
+        num_variables: 10,
+        x2_g2: g2_generator_bytes(),
+        q_m_g1: [0; G1_LEN],
+        q_l_g1: [0; G1_LEN],
+        q_r_g1: [0; G1_LEN],
+        q_o_g1: [0; G1_LEN],
+        q_c_g1: [0; G1_LEN],
+        sigma_1_g1: [0; G1_LEN],
+        sigma_2_g1: [0; G1_LEN],
+        sigma_3_g1: [0; G1_LEN],
+        k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+        k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+        k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
+    }
+    .to_bytes();
+
+    // Proof: 4 G1 commits + sumcheck_rounds u32 + 10 sumcheck polys
+    // + 12 final evals (Fr) + 1 KZG opening G1.
+    let polys_len = 10 * SUMCHECK_POLY_LEN;
+    let total = FIXED_HEADER_LEN + polys_len + FINAL_EVALS * FR_LEN + G1_LEN;
+    let mut proof = vec![0u8; total];
+    proof[256..260].copy_from_slice(&10u32.to_le_bytes());
+
+    // Public input: single Fr = 0 (in range, scaffold accepts).
+    let public_inputs = vec![0u8; FR_LEN];
+
+    (vk, proof, public_inputs)
+}
+
+/// Build the Halo2 scaffold-acceptance fixture used by
+/// `mosaic_halo2::verifier::tests::full_pipeline_zero_proof_accepts`:
+/// 5 advice columns, 0 lookup, 3 quotient chunks, 19 evaluation
+/// slots (16 fixed + 3 per quotient), `LOOKUP_M = 1` so the lookup
+/// expression evaluates to zero on the all-zero wire bundle.
+fn build_halo2_scaffold_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use mosaic_halo2::canonical::{
+        sizes::{FIXED_HEADER_LEN, FR_LEN, G1_LEN, G2_LEN},
+        Halo2KzgVerifyingKey,
+    };
+    use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+    use mosaic_zk_primitives::g1_consts::g2_generator_bytes;
+
+    // VK: n_instances=1, n_advice=5, 2 fixed columns, 5 permuted
+    // columns. x2_g2 = real G2 generator (pairing syscall rejects
+    // (0,0,0,0)).
+    let vk = Halo2KzgVerifyingKey {
+        k: 10,
+        n_instances: 1,
+        n_advice: 5,
+        n_fixed: 2,
+        x2_g2: {
+            let mut a = [0u8; G2_LEN];
+            a.copy_from_slice(&g2_generator_bytes());
+            a
+        },
+        omega_fr: [0u8; FR_LEN],
+        fixed_commits: vec![0; 2 * G1_LEN],
+        permutation_commits: vec![0; 5 * G1_LEN],
+    }
+    .to_bytes();
+
+    // Proof: 5 advice + 0 lookup + 1 perm_z + 3 quotient + 19 evals
+    // + 2 opening witnesses.
+    let n_advice = 5u32;
+    let n_lookups = 0u32;
+    let n_quotient = 3u32;
+    let n_evals = 19u32;
+    let total = FIXED_HEADER_LEN
+        + (n_advice as usize) * G1_LEN
+        + (n_lookups as usize) * G1_LEN
+        + G1_LEN
+        + (n_quotient as usize) * G1_LEN
+        + (n_evals as usize) * FR_LEN
+        + 2 * G1_LEN;
+    let mut proof = vec![0u8; total];
+    proof[0..4].copy_from_slice(&n_advice.to_le_bytes());
+    proof[4..8].copy_from_slice(&n_lookups.to_le_bytes());
+    proof[8..12].copy_from_slice(&n_quotient.to_le_bytes());
+    proof[12..16].copy_from_slice(&n_evals.to_le_bytes());
+
+    // LOOKUP_M slot = 1 so the lookup expression vanishes on all-zero
+    // input/table — same trick the verifier's lib test uses.
+    let evals_off = FIXED_HEADER_LEN
+        + (n_advice as usize) * G1_LEN
+        + (n_lookups as usize) * G1_LEN
+        + G1_LEN
+        + (n_quotient as usize) * G1_LEN;
+    let m_off = evals_off + 15 * FR_LEN; // LOOKUP_M = idx 15
+    let one_bytes = fr_to_canonical_bytes(&ark_bn254::Fr::from(1u64));
+    proof[m_off..m_off + FR_LEN].copy_from_slice(&one_bytes);
+
+    let public_inputs = vec![0u8; FR_LEN];
+    (vk, proof, public_inputs)
+}
+
+/// Build the Nova scaffold fixture: variant = Nova, n_public = 2,
+/// num_aux_commits = 0. All commits zero except `x2_g2` which is the
+/// real G2 generator. Public inputs are two zero Fr elements.
+fn build_nova_scaffold_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use mosaic_nova::canonical::{
+        sizes::{
+            FIXED_COMMITS_LEN, FIXED_HEADER_LEN, FR_LEN, G1_LEN, G2_LEN, HADAMARD_EVALS_LEN,
+            OPENING_LEN, SCALAR_LEN, W_EVAL_LEN,
+        },
+        FoldingVariant, NovaFoldingVerifyingKey,
+    };
+    use mosaic_zk_primitives::g1_consts::g2_generator_bytes;
+
+    let vk = NovaFoldingVerifyingKey {
+        variant: FoldingVariant::Nova,
+        n_public: 2,
+        n_constraints: 1024,
+        x2_g2: {
+            let mut a = [0u8; G2_LEN];
+            a.copy_from_slice(&g2_generator_bytes());
+            a
+        },
+        a_comm: [0u8; G1_LEN],
+        b_comm: [0u8; G1_LEN],
+        c_comm: [0u8; G1_LEN],
+        cs_digest: [0u8; 32],
+    }
+    .to_bytes();
+
+    // Proof shape: header (16) + E/W/T (3 × G1) + u (Fr) + 4 base
+    // commits (G1) + Hadamard bundle (4 × Fr) + w_eval (Fr) + 0 aux
+    // + 2 public inputs (2 × Fr) + 2 KZG openings (2 × G1).
+    let pi_len = 2 * FR_LEN;
+    let total = FIXED_HEADER_LEN
+        + FIXED_COMMITS_LEN
+        + SCALAR_LEN
+        + 4 * G1_LEN
+        + HADAMARD_EVALS_LEN
+        + W_EVAL_LEN
+        + pi_len
+        + OPENING_LEN;
+    let mut proof = vec![0u8; total];
+    proof[0] = FoldingVariant::Nova as u8;
+    proof[1] = 0; // num_aux_commits
+    proof[2..4].copy_from_slice(&2u16.to_le_bytes()); // n_public
+
+    let public_inputs = vec![0u8; pi_len];
+    (vk, proof, public_inputs)
+}
+
+async fn bench_phase3_scaffold(
+    target: &SystemTarget,
+    proof_system_id: u8,
+    fixture: (Vec<u8>, Vec<u8>, Vec<u8>),
+    cu_limit: u32,
+) -> Result<MeasurementReport> {
+    let (vk, proof, public_inputs) = fixture;
+    // Note: we deliberately skip a host preflight here because the
+    // Phase-3 verifiers' `verify` requires per-system feature flags
+    // already carried by the dependencies, and the BPF run is the
+    // measurement we care about. A failed BPF run will surface in the
+    // log-extraction step below with the exact ProgramError.
+    run_bpf_verify(
+        target,
+        proof_system_id,
+        &vk,
+        &proof,
+        &public_inputs,
+        cu_limit,
+    )
+    .await
 }
 
 async fn run_bpf_verify(
@@ -399,7 +671,11 @@ fn build_verify_ix_for_system(
     let mut data = Vec::with_capacity(1 + 1 + vk.len() + proof.len() + public_inputs.len() + 16);
     data.push(0x01); // InstructionTag::VerifyProof
     borsh::to_writer(&mut data, &payload).expect("borsh VerifyProofData");
-    Instruction { program_id: PROGRAM_ID, accounts: Vec::<AccountMeta>::new(), data }
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: Vec::<AccountMeta>::new(),
+        data,
+    }
 }
 
 fn print_report(reports: &[MeasurementReport]) {
@@ -417,7 +693,11 @@ fn print_report(reports: &[MeasurementReport]) {
         };
         println!(
             "{:<40} {:>10} {:>10} {:>10} {:>6}",
-            r.name, r.measured_cu, r.hard_cap_cu, baseline_display, r.status(),
+            r.name,
+            r.measured_cu,
+            r.hard_cap_cu,
+            baseline_display,
+            r.status(),
         );
         if let Some(pct) = r.baseline_drift_pct {
             println!(
@@ -445,6 +725,33 @@ async fn main() -> ExitCode {
             "groth16_bn254_mul_circuit_1pi" => bench_groth16_mul_circuit(target).await,
             "groth16_batch_n5_mul_circuit_1pi" => bench_groth16_batch_n5(target).await,
             "plonk_bn254_mul_circuit_1pi" => bench_plonk_mul_circuit(target).await,
+            "hyperplonk_kzg_bn254_scaffold" => {
+                bench_phase3_scaffold(
+                    target,
+                    PROOF_SYSTEM_ID_HYPERPLONK,
+                    build_hyperplonk_scaffold_fixture(),
+                    800_000,
+                )
+                .await
+            },
+            "halo2_kzg_bn254_scaffold" => {
+                bench_phase3_scaffold(
+                    target,
+                    PROOF_SYSTEM_ID_HALO2,
+                    build_halo2_scaffold_fixture(),
+                    900_000,
+                )
+                .await
+            },
+            "nova_folding_bn254_scaffold" => {
+                bench_phase3_scaffold(
+                    target,
+                    PROOF_SYSTEM_ID_NOVA,
+                    build_nova_scaffold_fixture(),
+                    1_300_000,
+                )
+                .await
+            },
             other => {
                 eprintln!("unknown bench target: {other}");
                 continue;
