@@ -7,14 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.8.1-audit-coverage
+### Added — sessions 47-49 (post-v0.8.1, audit-coverage extension)
+
+**Phase-3 BPF bench coverage + arkworks adapter property tests.**
+Pushes the `bpf-bench` regression harness from 3 to 7 measured
+systems and closes the arkworks adapter's 0-test gap from session 40.
+
+#### Session 47 — HyperPlonk + Halo2 + Nova BPF benches
+`crates/mosaic-bench/src/bin/bpf_bench.rs` gains 3 new
+`SystemTarget` entries, 3 inline scaffold-acceptance fixture
+builders, and 3 dispatch arms. The fixture builders mirror each
+verifier's own `verifier::tests` dummy fixtures (zero-wire +
+LOOKUP_M=1 trick for Halo2; real G2 generator for the pairing
+syscall on all three). Hard caps derived from each verifier's
+`estimated_compute_units` × 1.30 regression headroom.
+
+| Target | Hard cap | Baseline |
+|---|---:|---:|
+| `hyperplonk_kzg_bn254_scaffold` | 660K | tbd (first run) |
+| `halo2_kzg_bn254_scaffold` | 760K | tbd (first run) |
+| `nova_folding_bn254_scaffold` | 1.15M | tbd (first run) |
+
+#### Session 48 — arkworks adapter property tests
+`crates/mosaic-serde/src/arkworks.rs` gains 11 proptest tests
+covering encode_proof / encode_vk / encode_public_inputs:
+- Length invariants (256 B proof, `64 + 3·128 + 64·n` VK,
+  `32·n` public inputs).
+- Determinism (same struct → same bytes across two calls).
+- A‖B‖C and `alpha (G1) ‖ beta (G2) ‖ gamma (G2) ‖ delta (G2) ‖
+  ic[0..n] (G1)` byte-region pinning.
+- G1 + G2 identity-element handling (point at infinity → all-zero
+  bytes, matches Solana alt_bn128 convention).
+- `format()` tag stability.
+- decode/encode equivalence: bytes from ark-serialize +
+  `decode_proof` match `encode_proof` of the original struct.
+
+Fixtures are constructed by multiplying G1/G2 generators by
+random Fr scalars from `ark_std::test_rng()` — no inline circuit
+required. Closes the "arkworks adapter property tests" item from
+v0.8.1's planned-beyond list.
+
+mosaic-serde lib tests: 12 → 23.
+
+#### Session 49 — FRI-STARK BPF bench
+Closes the deferred Phase-3 BPF bench gap from session 47.
+`build_stark_scaffold_fixture` reproduces the canonical proof
+layout inline (mirrors `mosaic_stark::canonical::tests::proof_bytes`
+for the smallest Goldilocks shape: trace_width=1,
+trace_log_height=10, log_blowup=1, num_fri_layers=4, num_queries=8,
+pow_bits=0). Hard cap = 7.8M (estimate × 1.20; lower headroom
+because the work is dominated by syscall counts rather than
+polynomial codegen).
+
+| Target | Hard cap | Baseline |
+|---|---:|---:|
+| `fri_stark_goldilocks_scaffold` | 7.8M | tbd (first run) |
+
+After sessions 47-49 `bpf-bench` covers all 6 productionish
+verifier surfaces (Groth16 single + batch, KZG-PLONK, HyperPlonk,
+Halo2, Nova, FRI-STARK).
+
+### Planned beyond sessions 47-49
 
 - Fixture-driven differential testing for the four Phase-3 bodies
   (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  **Last named pre-audit gap on the Phase-3 verifier track.**
 - `mosaic-program::chunked::dispatch` integration tests via
   `solana-program-test` with synthesized `AccountInfo`.
-- Arkworks adapter property tests with an inline circuit fixture.
-- HyperPlonk full Zeromorph / PST / Gemini reduction.
+- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
+  layout breaking change).
 - External security audit commission.
 
 ## [0.8.1-audit-coverage] — 2026-04-27
