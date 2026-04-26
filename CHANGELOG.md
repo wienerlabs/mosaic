@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned beyond v0.8.1-audit-coverage
+
+- Fixture-driven differential testing for the four Phase-3 bodies
+  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+- `mosaic-program::chunked::dispatch` integration tests via
+  `solana-program-test` with synthesized `AccountInfo`.
+- Arkworks adapter property tests with an inline circuit fixture.
+- HyperPlonk full Zeromorph / PST / Gemini reduction.
+- External security audit commission.
+
+## [0.8.1-audit-coverage] — 2026-04-27
+
+**Workspace-wide property-based test sweep.** Sessions 37-42 bring
+every Phase-1, Phase-2, Phase-3, adapter, state-machine, SDK, and
+on-chain program crate under audit-grade proptest coverage. **No
+behaviour changes** — test code only, plus README / AUDIT /
+CHANGELOG entries documenting the milestone.
+
 ### Added — audit-coverage sweep (sessions 37-42, post-v0.8.0)
 
 Workspace-wide property-based test sweep brings every Phase-1,
@@ -100,29 +118,6 @@ inline rationale comments rather than silent suppressions:
   every multivariate sumcheck output scalar, not just the trailing
   one. The reduction itself (intermediate commitments + fold
   consistency) stays on the roadmap.
-
-### Planned beyond the audit-coverage sweep
-
-- **Fixture-driven differential testing** across all four Phase-3
-  bodies (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
-  Requires external prover tooling; closes cryptographic soundness
-  verification beyond in-tree scaffold construction. **This is now
-  the last named pre-audit gap** (see `README.md § Security`).
-- **HyperPlonk full Zeromorph / Pst / Gemini reduction** —
-  intermediate commitment fields + fold-consistency pairing checks
-  against the Espresso reference impl. Session 28 tightened the
-  univariate-point binding; the actual multi-point → univariate
-  reduction proof (with its per-fold commitments) remains a
-  substantial canonical-layout change.
-- **`mosaic-program::chunked::dispatch` integration tests.** The
-  current SBF integration test under `tests/verify_proof_sbf.rs`
-  exercises the verify-proof path; the chunked dispatch path needs
-  a parallel `solana-program-test` harness with synthesized
-  `AccountInfo`.
-- **Arkworks adapter property tests.** Random valid `ArkProof` /
-  `ArkVk` fixture generation requires a small inline circuit; this
-  was deferred from session 40.
-- **External security audit** (issue [#19](https://github.com/wienerlabs/mosaic/issues/19)).
 
 ## [0.7.0-phase3-primitives] — 2026-04-23
 

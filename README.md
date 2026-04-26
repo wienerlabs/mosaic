@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.8.0-phase3-polish](https://img.shields.io/badge/release-v0.8.0--phase3--polish-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.0-phase3-polish)
+[![Release: v0.8.1-audit-coverage](https://img.shields.io/badge/release-v0.8.1--audit--coverage-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.1-audit-coverage)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -225,11 +225,11 @@ same locally.
   four `as u8` truncation warnings in `fr::sub_r` + `msm::negate_g1`.
   **+27 proptest tests** (zk-primitives 51→64, stark 103→117) plus
   clippy cleanup + complete `# Errors` rustdoc for zk-primitives.
-- **Audit-coverage sweep (sessions 37-42, post-v0.8.0):**
-  Workspace-wide property-based test sweep brings every Phase-1,
-  Phase-2, Phase-3, adapter, state-machine, SDK, and on-chain
-  program crate under audit-grade proptest coverage. **+111
-  proptest tests** across nine crates:
+- **Audit-coverage release:** [`v0.8.1-audit-coverage`](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.1-audit-coverage).
+  Workspace-wide property-based test sweep (sessions 37-42) brings
+  every Phase-1, Phase-2, Phase-3, adapter, state-machine, SDK, and
+  on-chain program crate under audit-grade proptest coverage.
+  **+111 proptest tests** across nine crates:
 
   | Crate | Δ | Total |
   |---|---:|---:|
