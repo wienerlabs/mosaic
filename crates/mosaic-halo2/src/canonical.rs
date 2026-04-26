@@ -165,9 +165,17 @@ impl<'a> Halo2KzgProof<'a> {
         let w_xiw = &bytes[o..o + G1_LEN];
 
         Ok(Self {
-            n_advice, n_lookups, n_quotient, n_evals,
-            advice_commits, lookup_commits, permutation_z,
-            quotient_chunks, evaluations, w_xi, w_xiw,
+            n_advice,
+            n_lookups,
+            n_quotient,
+            n_evals,
+            advice_commits,
+            lookup_commits,
+            permutation_z,
+            quotient_chunks,
+            evaluations,
+            w_xi,
+            w_xiw,
         })
     }
 
@@ -266,8 +274,14 @@ impl Halo2KzgVerifyingKey {
         let permutation_commits =
             bytes[payload_start + fixed_len..payload_start + fixed_len + perm_len].to_vec();
         Ok(Self {
-            k, n_instances, n_advice, n_fixed,
-            x2_g2, omega_fr, fixed_commits, permutation_commits,
+            k,
+            n_instances,
+            n_advice,
+            n_fixed,
+            x2_g2,
+            omega_fr,
+            fixed_commits,
+            permutation_commits,
         })
     }
 
@@ -425,5 +439,207 @@ mod tests {
             Halo2KzgVerifyingKey::from_bytes(&bytes),
             Err(OnChainError::VerifyingKeyLengthMismatch),
         ));
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 37 — proptest coverage for canonical Halo2-KZG byte layout.
+    //
+    // These property-based tests close the gap between the unit tests
+    // above (which pin a handful of representative shapes) and the
+    // adversarial proof inputs an on-chain verifier will see in practice.
+    //
+    // Strategy spaces are deliberately bounded by the size constants
+    // already declared in `sizes::*`, so the proptests exercise only
+    // shapes a real verifier would accept up to header parsing — the
+    // negative cases below mutate inside that envelope to confirm the
+    // length checks fail closed.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    prop_compose! {
+        /// Random in-range (n_advice, n_lookups, n_quotient, n_evals)
+        /// quad. Each counter stays inside `sizes::MAX_*` so the
+        /// resulting buffer is always parseable.
+        fn arb_proof_shape()(
+            n_advice in 0u32..=sizes::MAX_ADVICE_COLUMNS,
+            n_lookups in 0u32..=sizes::MAX_LOOKUPS,
+            n_quotient in 0u32..=sizes::MAX_QUOTIENT_CHUNKS,
+            n_evals in 0u32..=sizes::MAX_EVALUATIONS,
+        ) -> (u32, u32, u32, u32) {
+            (n_advice, n_lookups, n_quotient, n_evals)
+        }
+    }
+
+    prop_compose! {
+        /// Random VK shape. Counter-derived buffers are filled with
+        /// distinct byte patterns so a swap between fixed_commits and
+        /// permutation_commits would surface as inequality after
+        /// round-trip.
+        fn arb_vk()(
+            k in 0u32..=20,
+            n_instances in 0u32..=8,
+            n_advice in 0u32..=8,
+            n_fixed in 0u32..=8,
+            x2_byte in any::<u8>(),
+            omega_byte in any::<u8>(),
+            fixed_count in 0u32..=4,
+            perm_count in 0u32..=4,
+        ) -> Halo2KzgVerifyingKey {
+            Halo2KzgVerifyingKey {
+                k,
+                n_instances,
+                n_advice,
+                n_fixed,
+                x2_g2: [x2_byte; G2_LEN],
+                omega_fr: [omega_byte; FR_LEN],
+                fixed_commits: vec![0x11; (fixed_count as usize) * G1_LEN],
+                permutation_commits: vec![0x22; (perm_count as usize) * G1_LEN],
+            }
+        }
+    }
+
+    proptest! {
+        /// Any in-range shape parses, and the parsed counters and
+        /// section iterators agree with the intended shape.
+        #[test]
+        fn proptest_proof_parses_any_in_range_shape(
+            (n_advice, n_lookups, n_quotient, n_evals) in arb_proof_shape(),
+        ) {
+            let buf = proof_bytes(n_advice, n_lookups, n_quotient, n_evals);
+            let p = Halo2KzgProof::from_bytes(&buf).expect("in-range shape parses");
+            prop_assert_eq!(p.n_advice, n_advice);
+            prop_assert_eq!(p.n_lookups, n_lookups);
+            prop_assert_eq!(p.n_quotient, n_quotient);
+            prop_assert_eq!(p.n_evals, n_evals);
+            prop_assert_eq!(p.advice_iter().count(), n_advice as usize);
+            prop_assert_eq!(p.quotient_iter().count(), n_quotient as usize);
+            prop_assert_eq!(p.evaluations_iter().count(), n_evals as usize);
+            prop_assert_eq!(p.permutation_z.len(), G1_LEN);
+            prop_assert_eq!(p.w_xi.len(), G1_LEN);
+            prop_assert_eq!(p.w_xiw.len(), G1_LEN);
+        }
+
+        /// Trailing garbage of any non-zero length must be rejected.
+        /// Catches off-by-one errors where a parser would silently
+        /// consume more or fewer bytes than the header advertises.
+        #[test]
+        fn proptest_proof_rejects_any_trailing_garbage(
+            (n_advice, n_lookups, n_quotient, n_evals) in arb_proof_shape(),
+            extra in 1usize..=64,
+        ) {
+            let mut buf = proof_bytes(n_advice, n_lookups, n_quotient, n_evals);
+            buf.extend(core::iter::repeat_n(0xDE, extra));
+            prop_assert!(matches!(
+                Halo2KzgProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// Any truncation by ≥1 byte must be rejected.
+        #[test]
+        fn proptest_proof_rejects_truncation(
+            (n_advice, n_lookups, n_quotient, n_evals) in arb_proof_shape(),
+            chop in 1usize..=64,
+        ) {
+            let mut buf = proof_bytes(n_advice, n_lookups, n_quotient, n_evals);
+            let new_len = buf.len().saturating_sub(chop);
+            // Skip degenerate truncations that drop the fixed header
+            // entirely — those test a different invariant covered below.
+            prop_assume!(new_len >= FIXED_HEADER_LEN);
+            buf.truncate(new_len);
+            prop_assert!(matches!(
+                Halo2KzgProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// Counters above their declared max must be rejected before
+        /// any payload arithmetic. Picks one of the four counters at
+        /// random and pushes it past its cap. This guards against
+        /// integer-overflow attacks via `checked_mul` slipping if the
+        /// max constants are ever raised.
+        #[test]
+        fn proptest_proof_rejects_oversized_counter(
+            which in 0u8..4,
+            overflow in 1u32..=8,
+        ) {
+            let max = match which {
+                0 => sizes::MAX_ADVICE_COLUMNS,
+                1 => sizes::MAX_LOOKUPS,
+                2 => sizes::MAX_QUOTIENT_CHUNKS,
+                _ => sizes::MAX_EVALUATIONS,
+            };
+            let bad = max + overflow;
+            let (n_advice, n_lookups, n_quotient, n_evals) = match which {
+                0 => (bad, 1, 1, 1),
+                1 => (1, bad, 1, 1),
+                2 => (1, 1, bad, 1),
+                _ => (1, 1, 1, bad),
+            };
+            // We synthesize the *header* explicitly because
+            // `proof_bytes` would over-allocate to the bad shape.
+            let mut hdr = [0u8; FIXED_HEADER_LEN];
+            hdr[0..4].copy_from_slice(&n_advice.to_le_bytes());
+            hdr[4..8].copy_from_slice(&n_lookups.to_le_bytes());
+            hdr[8..12].copy_from_slice(&n_quotient.to_le_bytes());
+            hdr[12..16].copy_from_slice(&n_evals.to_le_bytes());
+            // Append the minimum tail (perm_z + w_xi + w_xiw) so the
+            // length pre-check passes and the cap-check is the rejector.
+            let mut buf = hdr.to_vec();
+            buf.extend(vec![0u8; 3 * G1_LEN]);
+            prop_assert!(matches!(
+                Halo2KzgProof::from_bytes(&buf),
+                Err(OnChainError::ProofLengthMismatch),
+            ));
+        }
+
+        /// VK bytes round-trip: encode then decode is the identity for
+        /// any well-formed VK in our bounded shape space.
+        #[test]
+        fn proptest_vk_roundtrip(vk in arb_vk()) {
+            let bytes = vk.to_bytes();
+            let decoded = Halo2KzgVerifyingKey::from_bytes(&bytes)
+                .expect("well-formed VK round-trips");
+            prop_assert_eq!(vk, decoded);
+        }
+
+        /// Appending any non-empty trailing garbage to encoded VK bytes
+        /// must surface as `VerifyingKeyLengthMismatch`. Catches the
+        /// "decoder ignored trailing bytes" failure mode which would
+        /// allow attackers to smuggle data past the on-chain length
+        /// check.
+        #[test]
+        fn proptest_vk_rejects_trailing_garbage(
+            vk in arb_vk(),
+            extra in 1usize..=32,
+        ) {
+            let mut bytes = vk.to_bytes();
+            bytes.extend(core::iter::repeat_n(0xFF, extra));
+            prop_assert!(matches!(
+                Halo2KzgVerifyingKey::from_bytes(&bytes),
+                Err(OnChainError::VerifyingKeyLengthMismatch),
+            ));
+        }
+
+        /// Any truncation past the fixed header must be rejected. The
+        /// fixed header carries the `fixed_commits` / `perm_commits`
+        /// length advertisements; truncating the variable tail leaves
+        /// the decoder asking for bytes that aren't there.
+        #[test]
+        fn proptest_vk_rejects_truncated_tail(
+            vk in arb_vk(),
+            chop in 1usize..=32,
+        ) {
+            let mut bytes = vk.to_bytes();
+            let new_len = bytes.len().saturating_sub(chop);
+            prop_assume!(new_len >= Halo2KzgVerifyingKey::FIXED_LEN);
+            // Only meaningful when there *is* a tail to truncate.
+            prop_assume!(bytes.len() > Halo2KzgVerifyingKey::FIXED_LEN);
+            bytes.truncate(new_len);
+            prop_assert!(matches!(
+                Halo2KzgVerifyingKey::from_bytes(&bytes),
+                Err(OnChainError::VerifyingKeyLengthMismatch),
+            ));
+        }
     }
 }

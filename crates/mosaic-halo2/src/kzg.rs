@@ -36,16 +36,13 @@ use crate::canonical::{
 };
 use alloc::vec::Vec;
 use ark_bn254::Fr;
-use mosaic_core::{
-    syscall::SyscallBackend,
-    OnChainError,
-};
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
     msm::{
-        add_g1, commitment_minus_scalar_g1, compute_kzg_opening_lhs, msm_g1,
-        negate_g1, scalar_mul_g1, verify_two_pair_pairing,
+        add_g1, commitment_minus_scalar_g1, compute_kzg_opening_lhs, msm_g1, negate_g1,
+        scalar_mul_g1, verify_two_pair_pairing,
     },
 };
 
@@ -169,9 +166,7 @@ pub fn verify_two_point_opening_scaffold<B: SyscallBackend + ?Sized>(
     }
 
     // Parse the two evaluation points.
-    let y_xi = fr_from_canonical_bytes(
-        &proof.evaluations[idx::Z * FR_LEN..(idx::Z + 1) * FR_LEN],
-    )?;
+    let y_xi = fr_from_canonical_bytes(&proof.evaluations[idx::Z * FR_LEN..(idx::Z + 1) * FR_LEN])?;
     let y_xi_omega = fr_from_canonical_bytes(
         &proof.evaluations[idx::Z_NEXT * FR_LEN..(idx::Z_NEXT + 1) * FR_LEN],
     )?;
@@ -348,8 +343,7 @@ pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
     wxiw_arr.copy_from_slice(w_xi_omega);
 
     let xi_wxi = scalar_mul_g1(backend, &wxi_arr, &fr_to_canonical_bytes(xi))?;
-    let xi_omega_wxiw =
-        scalar_mul_g1(backend, &wxiw_arr, &fr_to_canonical_bytes(xi_omega))?;
+    let xi_omega_wxiw = scalar_mul_g1(backend, &wxiw_arr, &fr_to_canonical_bytes(xi_omega))?;
 
     let a1 = add_g1(backend, &c_minus_y_xi, &xi_wxi)?;
     let a2 = add_g1(backend, &c_minus_y_xi_omega, &xi_omega_wxiw)?;
@@ -468,11 +462,7 @@ mod tests {
         // Set z_next evaluation = 1 (last byte of its Fr slot).
         // Evaluations start at FIXED + n_advice·G1 + n_lookups·G1 +
         //   perm_z_G1 + n_quotient·G1 = 16 + 64 + 0 + 64 + 64 = 208.
-        let eval_base = FIXED_HEADER_LEN
-            + 1 * G1_LEN
-            + 0 * G1_LEN
-            + G1_LEN
-            + 1 * G1_LEN;
+        let eval_base = FIXED_HEADER_LEN + 1 * G1_LEN + 0 * G1_LEN + G1_LEN + 1 * G1_LEN;
         let z_next_off = eval_base + idx::Z_NEXT * FR_LEN;
         proof_buf[z_next_off + FR_LEN - 1] = 1;
 
@@ -482,8 +472,7 @@ mod tests {
         let xi = Fr::from(7u64);
         let xi_omega = Fr::from(11u64);
         let u = Fr::from(3u64);
-        let r =
-            verify_two_point_opening_scaffold(&backend, &vk, &proof, &xi, &xi_omega, &u);
+        let r = verify_two_point_opening_scaffold(&backend, &vk, &proof, &xi, &xi_omega, &u);
         assert!(
             matches!(r, Err(OnChainError::PairingCheckFailed)),
             "tampered z_next_eval should fail batched pairing, got {r:?}",

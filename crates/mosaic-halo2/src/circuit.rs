@@ -258,8 +258,11 @@ mod tests {
                 q_o: Fr::rand(&mut r),
                 q_c: Fr::rand(&mut r),
             };
-            let expected =
-                s.q_m * wires.a * wires.b + s.q_l * wires.a + s.q_r * wires.b + s.q_o * wires.c + s.q_c;
+            let expected = s.q_m * wires.a * wires.b
+                + s.q_l * wires.a
+                + s.q_r * wires.b
+                + s.q_o * wires.c
+                + s.q_c;
             assert_eq!(gate_expr(&wires, &s), expected);
         }
     }
@@ -288,7 +291,10 @@ mod tests {
         };
         let beta = Fr::rand(&mut r);
         let gamma = Fr::rand(&mut r);
-        assert_eq!(permutation_expr(&wires, &perm, &beta, &gamma, &xi), Fr::zero());
+        assert_eq!(
+            permutation_expr(&wires, &perm, &beta, &gamma, &xi),
+            Fr::zero()
+        );
     }
 
     #[test]
@@ -310,7 +316,10 @@ mod tests {
         let beta = Fr::rand(&mut r);
         let gamma = Fr::rand(&mut r);
         // With random inputs, probability of zero is negligible.
-        assert_ne!(permutation_expr(&wires, &perm, &beta, &gamma, &xi), Fr::zero());
+        assert_ne!(
+            permutation_expr(&wires, &perm, &beta, &gamma, &xi),
+            Fr::zero()
+        );
     }
 
     // ---- lookup_expr ----
@@ -394,8 +403,15 @@ mod tests {
         let xi = Fr::rand(&mut r);
 
         let combined = combined_expr(
-            &wires, &s, &perm, &lookup,
-            &theta, &beta, &gamma, &Fr::zero(), &xi,
+            &wires,
+            &s,
+            &perm,
+            &lookup,
+            &theta,
+            &beta,
+            &gamma,
+            &Fr::zero(),
+            &xi,
         )
         .unwrap();
         assert_eq!(combined, gate_expr(&wires, &s));
@@ -436,13 +452,27 @@ mod tests {
         let xi = Fr::rand(&mut r);
 
         let a = combined_expr(
-            &wires, &s, &perm, &lookup,
-            &theta, &beta, &gamma, &Fr::from(1u64), &xi,
+            &wires,
+            &s,
+            &perm,
+            &lookup,
+            &theta,
+            &beta,
+            &gamma,
+            &Fr::from(1u64),
+            &xi,
         )
         .unwrap();
         let b = combined_expr(
-            &wires, &s, &perm, &lookup,
-            &theta, &beta, &gamma, &Fr::from(2u64), &xi,
+            &wires,
+            &s,
+            &perm,
+            &lookup,
+            &theta,
+            &beta,
+            &gamma,
+            &Fr::from(2u64),
+            &xi,
         )
         .unwrap();
         assert_ne!(a, b, "combined expression should depend on y");

@@ -81,11 +81,7 @@ pub fn compute_z_h(xi: &Fr, k: u32) -> Result<Fr, OnChainError> {
 ///
 /// - [`OnChainError::ProofLengthMismatch`] if `k > 28` or
 ///   `chunk_evals.is_empty()`.
-pub fn compute_t_from_chunks(
-    chunk_evals: &[Fr],
-    xi: &Fr,
-    k: u32,
-) -> Result<Fr, OnChainError> {
+pub fn compute_t_from_chunks(chunk_evals: &[Fr], xi: &Fr, k: u32) -> Result<Fr, OnChainError> {
     if k > 28 {
         return Err(OnChainError::ProofLengthMismatch);
     }
@@ -306,8 +302,12 @@ mod tests {
     fn vanishing_identity_all_zero_holds_trivially() {
         // 0 · 0 == 0 + 0·0 + 0·0 = 0 — trivial accept.
         assert!(vanishing_identity_holds(
-            &Fr::zero(), &Fr::zero(), &Fr::zero(),
-            &Fr::zero(), &Fr::zero(), &Fr::zero(),
+            &Fr::zero(),
+            &Fr::zero(),
+            &Fr::zero(),
+            &Fr::zero(),
+            &Fr::zero(),
+            &Fr::zero(),
         ));
     }
 }

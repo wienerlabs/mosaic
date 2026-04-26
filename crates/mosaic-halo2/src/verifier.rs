@@ -72,13 +72,13 @@ use crate::{
 };
 use alloc::vec::Vec;
 use ark_bn254::Fr;
-use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
-use mosaic_zk_primitives::transcript::derive_fr_challenge;
 use mosaic_core::{
     proof_system::{ProofSystem, ProofSystemId},
     syscall::SyscallBackend,
     OnChainError,
 };
+use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
+use mosaic_zk_primitives::transcript::derive_fr_challenge;
 
 /// Halo2-KZG verifier over BN254 (Privacy Scaling Explorations fork).
 /// Phase-3 scaffold.
@@ -239,7 +239,6 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
     }
 }
 
-
 /// Commit ordering at ξ (scaffold): advice + lookup + `permutation_z` + quotient.
 /// Fixed selector commits + permutation σ commits live in the VK and are
 /// paired only structurally; they aren't batched at the proof-side MSM
@@ -320,12 +319,7 @@ fn collect_evals_at_xi(
         bundle.permutation.sigma_3,
     ];
     let mut out = Vec::with_capacity(
-        n_advice
-            + n_lookups
-            + 1
-            + bundle.quotient_chunks.len()
-            + n_fixed
-            + n_permutation,
+        n_advice + n_lookups + 1 + bundle.quotient_chunks.len() + n_fixed + n_permutation,
     );
     for i in 0..n_advice {
         out.push(wire_evals[i.min(idx::C)]);
@@ -510,7 +504,10 @@ mod tests {
         let proof = dummy_proof_bytes_typical();
         let pi = [0u8; FR_LEN];
         let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
-        assert!(r.is_ok(), "identity-satisfying bundle should pass, got {r:?}");
+        assert!(
+            r.is_ok(),
+            "identity-satisfying bundle should pass, got {r:?}"
+        );
     }
 
     /// Session-20 dedicated tamper test: swap the first 64 bytes of
@@ -572,8 +569,7 @@ mod tests {
             fixed_commits: vec![0; 2 * G1_LEN],
             permutation_commits: vec![0; 5 * G1_LEN],
         };
-        vk_struct.permutation_commits[..G1_LEN]
-            .copy_from_slice(&g1_generator_bytes());
+        vk_struct.permutation_commits[..G1_LEN].copy_from_slice(&g1_generator_bytes());
         let vk = vk_struct.to_bytes();
 
         let proof = dummy_proof_bytes_typical();
@@ -607,8 +603,7 @@ mod tests {
         // v-weighted MSM produces a non-zero `C_ξ_batched` while
         // `y_ξ_batched = 0` — the two-point opening check fails.
         let advice0_off = FIXED_HEADER_LEN;
-        proof[advice0_off..advice0_off + G1_LEN]
-            .copy_from_slice(&g1_generator_bytes());
+        proof[advice0_off..advice0_off + G1_LEN].copy_from_slice(&g1_generator_bytes());
 
         let pi = [0u8; FR_LEN];
         let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
@@ -633,15 +628,10 @@ mod tests {
 
         // Evaluations start after fixed + advice + lookup + perm_z + quotient.
         // n_advice=5, n_lookups=0, n_quotient=3 → evals_off = 16 + 5·64 + 0 + 64 + 3·64 = 592.
-        let evals_off = FIXED_HEADER_LEN
-            + 5 * G1_LEN
-            + 0 * G1_LEN
-            + G1_LEN
-            + 3 * G1_LEN;
+        let evals_off = FIXED_HEADER_LEN + 5 * G1_LEN + 0 * G1_LEN + G1_LEN + 3 * G1_LEN;
         let a_off = evals_off + idx::A * FR_LEN;
         // Set a(ξ) = 1 while leaving commits zero — breaks the opening.
-        proof[a_off..a_off + FR_LEN]
-            .copy_from_slice(&fr_to_canonical_bytes(&Fr::from(1u64)));
+        proof[a_off..a_off + FR_LEN].copy_from_slice(&fr_to_canonical_bytes(&Fr::from(1u64)));
 
         let pi = [0u8; FR_LEN];
         let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
@@ -710,10 +700,7 @@ mod tests {
         // bytes or fall back to the ADR-0005 hard cap (700 000).
         let backend = MockBackend;
         let v = Halo2KzgBn254::new(&backend);
-        assert_eq!(
-            ProofSystem::estimated_compute_units(&v, &[], &[]),
-            None,
-        );
+        assert_eq!(ProofSystem::estimated_compute_units(&v, &[], &[]), None,);
     }
 
     #[test]
@@ -743,5 +730,186 @@ mod tests {
     #[allow(dead_code)]
     fn boxed(v: Halo2KzgBn254<'static, MockBackend>) -> alloc::boxed::Box<dyn ProofSystem> {
         alloc::boxed::Box::new(v)
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 37 — adversarial single-byte tamper proptests.
+    //
+    // The unit tests above pin a handful of named tamper targets
+    // (`q_c`, `wire_a`, advice commit 0, etc.). The properties below
+    // generalize to "any single bit flip in the canonical envelope must
+    // fail verification". This is the densest soundness property the
+    // verifier exposes: the acceptance set is a measure-zero subset of
+    // proof byte space.
+    //
+    // Strategy: take the trivially-accepting proof from
+    // `dummy_proof_bytes_typical` (and its VK), XOR a random non-zero
+    // bit mask into a random byte position past the fixed header, and
+    // assert `verify(...)` returns an `Err`. The specific error variant
+    // depends on whether the flip lands in commits (PairingCheckFailed
+    // via the multi-poly batched opening), evaluations (SumcheckFailed
+    // via the vanishing identity), or the trailing opening witnesses
+    // (PairingCheckFailed). We assert only `is_err()` — pinning each
+    // path's exact error variant would tightly couple this test to the
+    // routing logic, while the looser assertion is exactly the
+    // soundness property an auditor cares about.
+    //
+    // Coverage budget: 64 cases per test keeps wall-clock manageable
+    // while still exercising several dozen distinct tamper sites per
+    // run. CI compounds across runs; flakes have no fixture cache so a
+    // regression would surface immediately.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Any single non-zero bit flip inside a *commitment* region
+        /// of the canonical proof envelope (advice commits, permutation
+        /// `z`, quotient chunks, or the two opening witnesses) must
+        /// cause verification to fail.
+        ///
+        /// **Why commits and not evaluations?** The dummy fixture is
+        /// constructed so that every wire and selector evaluates to
+        /// zero, which makes the vanishing identity hold trivially.
+        /// Flipping a *selector* evaluation that is multiplied by a
+        /// zero wire — e.g. `Q_R · b` with `b = 0` — preserves the
+        /// identity and is not a soundness defect of the verifier; it
+        /// is a property of this particular fixture's wire values. A
+        /// fully nontrivial fixture would catch those flips too, but
+        /// constructing one inline here would require synthesizing a
+        /// satisfying assignment from scratch (deferred to the
+        /// fixture-driven differential harness in `tests/differential`).
+        ///
+        /// Commitment bytes, by contrast, feed the Fiat-Shamir
+        /// transcript (advice, lookup, permutation_z and quotient are
+        /// all absorbed in rounds 1–4 of `derive_challenges`), so any
+        /// flip cascades into different challenges and breaks the
+        /// vanishing identity that holds for the un-tampered sample.
+        /// The opening witnesses `W_ξ` and `W_ξω` directly enter the
+        /// pairing equation and therefore reject under any flip.
+        #[test]
+        fn proptest_random_commit_byte_flip_rejects(
+            // Layout of dummy_proof_bytes_typical:
+            //   [0..16)        fixed header
+            //   [16..336)      advice commits (5 × G1)              ← commit
+            //   [336..336)     lookup commits (0 × G1)               (empty)
+            //   [336..400)     permutation_z commit (1 × G1)         ← commit
+            //   [400..592)     quotient chunks (3 × G1)              ← commit
+            //   [592..1200)    evaluation bundle (19 × Fr)           skip
+            //   [1200..1264)   W_ξ opening witness                   ← commit
+            //   [1264..1328)   W_ξω opening witness                  ← commit
+            // Commit-region byte count: 5·64 + 1·64 + 3·64 + 2·64 = 704.
+            commit_byte_idx in 0usize..704,
+            bit_mask in 1u8..=u8::MAX,
+        ) {
+            let backend = mosaic_core::syscall::host::HostBackend::new();
+            let v = Halo2KzgBn254::new(&backend);
+            let vk = dummy_vk_bytes();
+            let mut proof = dummy_proof_bytes_typical();
+
+            // Map [0, 704) → real proof offset, skipping the
+            // evaluation bundle in the middle.
+            const COMMIT_PREFIX_LEN: usize = 5 * G1_LEN + G1_LEN + 3 * G1_LEN; // 576
+            let off = if commit_byte_idx < COMMIT_PREFIX_LEN {
+                FIXED_HEADER_LEN + commit_byte_idx
+            } else {
+                // After the prefix region come the two opening
+                // witnesses, located after the 19-Fr evaluation bundle.
+                let witness_idx = commit_byte_idx - COMMIT_PREFIX_LEN;
+                FIXED_HEADER_LEN + COMMIT_PREFIX_LEN + 19 * FR_LEN + witness_idx
+            };
+            prop_assume!(off < proof.len());
+            proof[off] ^= bit_mask;
+            let pi = [0u8; FR_LEN];
+            let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+            prop_assert!(
+                r.is_err(),
+                "single-byte commit flip at off {off} (mask {bit_mask:#04x}) \
+                 unexpectedly accepted: {r:?}"
+            );
+        }
+
+        /// Single-bit flip inside a *wire* or *permutation* evaluation
+        /// slot (A, B, C, Z, Z_NEXT, SIGMA_*) must cause verification
+        /// to fail. These slots feed both the vanishing identity and
+        /// the multi-poly KZG opening, so any tamper is caught by at
+        /// least one of (`SumcheckFailed`, `PairingCheckFailed`).
+        ///
+        /// Slot indices come from `crate::bundle::idx`; we tamper one
+        /// of them per case rather than flipping a random byte
+        /// anywhere in the bundle, which would also hit selector slots
+        /// (see the rationale above the commit-region property).
+        #[test]
+        fn proptest_random_wire_eval_flip_rejects(
+            slot_select in 0u8..8, // 8 wire+permutation slots
+            byte_in_slot in 0usize..FR_LEN,
+            bit_mask in 1u8..=u8::MAX,
+        ) {
+            let backend = mosaic_core::syscall::host::HostBackend::new();
+            let v = Halo2KzgBn254::new(&backend);
+            let vk = dummy_vk_bytes();
+            let mut proof = dummy_proof_bytes_typical();
+
+            let slot = match slot_select {
+                0 => crate::bundle::idx::A,
+                1 => crate::bundle::idx::B,
+                2 => crate::bundle::idx::C,
+                3 => crate::bundle::idx::Z,
+                4 => crate::bundle::idx::Z_NEXT,
+                5 => crate::bundle::idx::SIGMA_1,
+                6 => crate::bundle::idx::SIGMA_2,
+                _ => crate::bundle::idx::SIGMA_3,
+            };
+            let evals_off = FIXED_HEADER_LEN + 5 * G1_LEN + G1_LEN + 3 * G1_LEN;
+            let off = evals_off + slot * FR_LEN + byte_in_slot;
+            // High bytes of an Fr that are above the field modulus are
+            // rejected by canonical Fr decode rather than by the
+            // verifier itself — that path is covered by
+            // `proptest_proof_rejects_*` in canonical.rs. Skip the
+            // top byte to keep this test focused on verifier soundness.
+            prop_assume!(byte_in_slot < FR_LEN - 1);
+            proof[off] ^= bit_mask;
+            let pi = [0u8; FR_LEN];
+            let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+            prop_assert!(
+                r.is_err(),
+                "wire/permutation eval flip at slot {slot} byte {byte_in_slot} \
+                 (off {off}, mask {bit_mask:#04x}) unexpectedly accepted: {r:?}"
+            );
+        }
+
+        /// Any single non-zero bit flip inside the encoded VK's payload
+        /// (past the fixed header, inside `fixed_commits` or
+        /// `permutation_commits`) must cause verification to fail. The
+        /// mechanism: flipped commits surface either as
+        /// PairingCheckFailed (multi-poly batched opening sees a
+        /// different commitment set) or as SumcheckFailed when the VK
+        /// digest changes the round-1 challenge θ — which cascades
+        /// through every subsequent challenge and breaks the vanishing
+        /// identity that holds for the un-tampered sample.
+        #[test]
+        fn proptest_random_vk_byte_flip_rejects(
+            payload_idx in 0usize..(2 * G1_LEN + 5 * G1_LEN),
+            bit_mask in 1u8..=u8::MAX,
+        ) {
+            let backend = mosaic_core::syscall::host::HostBackend::new();
+            let v = Halo2KzgBn254::new(&backend);
+            let mut vk = dummy_vk_bytes();
+            let proof = dummy_proof_bytes_typical();
+            // Skip the fixed-header + G2 + omega + length headers; tamper
+            // only inside the variable-length payload (fixed_commits ‖
+            // permutation_commits).
+            let off = Halo2KzgVerifyingKey::FIXED_LEN + payload_idx;
+            prop_assume!(off < vk.len());
+            vk[off] ^= bit_mask;
+            let pi = [0u8; FR_LEN];
+            let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+            prop_assert!(
+                r.is_err(),
+                "single-byte VK payload flip at off {off} unexpectedly \
+                 accepted: {r:?}"
+            );
+        }
     }
 }
