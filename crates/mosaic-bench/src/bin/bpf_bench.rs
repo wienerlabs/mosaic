@@ -162,11 +162,22 @@ const TARGETS: &[SystemTarget] = &[
         hard_cap_cu: 1_150_000,
         baseline_cu: 0, // measured-and-recorded after first run
     },
-    // STARK bench is deferred — its canonical layout has more shape
-    // dimensions (per-query FRI layer headers + Merkle path commits)
-    // than fits a hand-rolled scaffold fixture cleanly. Tracked as
-    // session 48 follow-up; until then `bpf-bench` covers
-    // {Groth16, Groth16-batch, KZG-PLONK, HyperPlonk, Halo2, Nova}.
+    SystemTarget {
+        name: "fri_stark_goldilocks_scaffold",
+        // Session 49 — Goldilocks STARK scaffold at the smallest sane
+        // shape: trace_width = 1, trace_log_height = 10 (1024 rows),
+        // log_blowup = 1, num_fri_layers = 4, num_queries = 8,
+        // pow_bits = 0 (no PoW grinding for the scaffold). Estimated
+        // CU at this shape:
+        //   - 8 queries × 4 layers × 2 leaves × 11 depth × ~9K CU/keccak
+        //     ≈ 6.3M for Merkle path verification
+        //   - sundry header parse + transcript ≈ ~200K
+        // Initial hard cap = estimate × 1.20 ≈ 7.8M (lower headroom
+        // because the work is dominated by syscall counts rather than
+        // polynomial codegen — drift surface is narrower).
+        hard_cap_cu: 7_800_000,
+        baseline_cu: 0, // measured-and-recorded after first run
+    },
 ];
 
 #[derive(BorshSerialize)]
@@ -425,6 +436,7 @@ async fn bench_plonk_mul_circuit(target: &SystemTarget) -> Result<MeasurementRep
 const PROOF_SYSTEM_ID_HYPERPLONK: u8 = 0x03;
 const PROOF_SYSTEM_ID_HALO2: u8 = 0x04;
 const PROOF_SYSTEM_ID_NOVA: u8 = 0x05;
+const PROOF_SYSTEM_ID_FRI_STARK: u8 = 0x07;
 
 /// Build the HyperPlonk scaffold-acceptance fixture used by
 /// `mosaic_hyperplonk::verifier::tests::full_pipeline_zero_proof_accepts`:
@@ -581,6 +593,94 @@ fn build_nova_scaffold_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     proof[2..4].copy_from_slice(&2u16.to_le_bytes()); // n_public
 
     let public_inputs = vec![0u8; pi_len];
+    (vk, proof, public_inputs)
+}
+
+/// Build the FRI-STARK Goldilocks scaffold fixture. Mirrors the
+/// shape of `mosaic_stark::canonical::tests::proof_bytes` (private
+/// to that crate) for the smallest sane parameters. We rebuild the
+/// byte layout inline rather than depend on the crate's test-only
+/// helper, which keeps the bench crate's compile graph clean.
+fn build_stark_scaffold_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use mosaic_stark::canonical::{
+        sizes::{DIGEST_LEN, FIXED_HEADER_LEN, POW_NONCE_LEN},
+        FriStarkVerifyingKey, StarkFieldId, FRI_LAYER_OPENING_LEN,
+    };
+
+    let field_id = StarkFieldId::Goldilocks;
+    let log_blowup: u8 = 1;
+    let num_fri_layers: u8 = 4;
+    let num_queries: u16 = 8;
+    let trace_log_height: u16 = 10;
+    let trace_width: u32 = 1;
+
+    // VK: 48-byte fixed serialized form (1 + 4 + 2 + 1 + 32 + 8).
+    let vk = FriStarkVerifyingKey {
+        field_id,
+        trace_width,
+        trace_log_height,
+        log_blowup,
+        air_hash: [0u8; 32],
+        omega_g: [0u8; 8], // canonical Goldilocks generator placeholder
+    }
+    .to_bytes();
+
+    // Proof: fixed header + commits + per-section length-prefixed
+    // tails + pow nonce. Mirrors the layout in mosaic-stark's
+    // canonical::tests::proof_bytes.
+    let ood_bytes = 10 * field_id.field_elem_bytes();
+    let final_bytes = 4 * field_id.field_elem_bytes();
+    // per_query bytes for STRUCTURED query_responses layout (session 8
+    // revision): each query = 2 × (DIGEST_LEN + depth · DIGEST_LEN).
+    let depth = (trace_log_height as usize) + (log_blowup as usize);
+    let per_query_bytes = 2 * (DIGEST_LEN + depth * DIGEST_LEN);
+    let query_bytes = (num_queries as usize) * per_query_bytes;
+    let fri_openings_bytes =
+        (num_queries as usize) * (num_fri_layers as usize) * FRI_LAYER_OPENING_LEN;
+    let auth_paths_bytes =
+        (num_queries as usize) * (num_fri_layers as usize) * 2 * depth * DIGEST_LEN;
+
+    let total = FIXED_HEADER_LEN
+        + 2 * DIGEST_LEN
+        + (num_fri_layers as usize) * DIGEST_LEN
+        + 4
+        + ood_bytes
+        + 4
+        + final_bytes
+        + 4
+        + query_bytes
+        + 4
+        + fri_openings_bytes
+        + 4
+        + auth_paths_bytes
+        + POW_NONCE_LEN;
+
+    let mut proof = vec![0u8; total];
+    // Header: field_id || log_blowup || num_fri_layers || pow_bits ||
+    // num_queries (LE) || trace_log_height (LE) || trace_width (LE).
+    proof[0] = field_id as u8;
+    proof[1] = log_blowup;
+    proof[2] = num_fri_layers;
+    proof[3] = 0; // pow_bits
+    proof[4..6].copy_from_slice(&num_queries.to_le_bytes());
+    proof[6..8].copy_from_slice(&trace_log_height.to_le_bytes());
+    proof[8..12].copy_from_slice(&trace_width.to_le_bytes());
+
+    // Length prefixes for the variable tails.
+    let mut off = FIXED_HEADER_LEN + 2 * DIGEST_LEN + (num_fri_layers as usize) * DIGEST_LEN;
+    proof[off..off + 4].copy_from_slice(&(ood_bytes as u32).to_le_bytes());
+    off += 4 + ood_bytes;
+    proof[off..off + 4].copy_from_slice(&(final_bytes as u32).to_le_bytes());
+    off += 4 + final_bytes;
+    proof[off..off + 4].copy_from_slice(&(query_bytes as u32).to_le_bytes());
+    off += 4 + query_bytes;
+    proof[off..off + 4].copy_from_slice(&(fri_openings_bytes as u32).to_le_bytes());
+    off += 4 + fri_openings_bytes;
+    proof[off..off + 4].copy_from_slice(&(auth_paths_bytes as u32).to_le_bytes());
+    // pow_nonce trailing 8 bytes default to 0 (no grinding required at
+    // pow_bits = 0).
+
+    let public_inputs = Vec::new();
     (vk, proof, public_inputs)
 }
 
@@ -749,6 +849,15 @@ async fn main() -> ExitCode {
                     PROOF_SYSTEM_ID_NOVA,
                     build_nova_scaffold_fixture(),
                     1_300_000,
+                )
+                .await
+            },
+            "fri_stark_goldilocks_scaffold" => {
+                bench_phase3_scaffold(
+                    target,
+                    PROOF_SYSTEM_ID_FRI_STARK,
+                    build_stark_scaffold_fixture(),
+                    8_500_000,
                 )
                 .await
             },
