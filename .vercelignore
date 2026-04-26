@@ -1,0 +1,51 @@
+# Vercel ignore — keep the deployment surface minimal.
+#
+# Mosaic is primarily a Rust verifier workspace; the Next.js site
+# under `site/` is the only piece Vercel needs. Everything below is
+# either a compiled artifact, an upstream test fixture, or
+# documentation that Vercel doesn't need to upload to its build
+# environment.
+
+# Rust workspace
+target/
+crates/
+tests/
+Cargo.toml
+Cargo.lock
+rust-toolchain.toml
+
+# Solana SBF artifacts
+*.so
+test-ledger/
+.deploy/
+
+# Documentation we don't ship to Vercel
+docs/
+ADR/
+audit-pack/
+site-static-backup/
+
+# Dev tooling unrelated to the site
+.cargo/
+fuzz/
+benches/
+.github/
+supply-chain/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Markdown that lives at the repo root but doesn't belong in the
+# Vercel deployment surface
+README.md
+CHANGELOG.md
+AUDIT.md
+SECURITY.md
+CONTRIBUTING.md
+LICENSE-APACHE
+LICENSE-MIT
+NOTICE
