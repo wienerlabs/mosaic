@@ -91,17 +91,20 @@ pub fn compute_t_from_chunks(chunk_evals: &[Fr], xi: &Fr, k: u32) -> Result<Fr, 
     let domain_size: u64 = 1u64 << k;
     let xi_n = fr_pow_u64(xi, domain_size);
 
-    // Horner-style accumulation from highest-index chunk down:
-    //   t(ξ) = h_0 + ξ^n·(h_1 + ξ^n·(h_2 + ... + ξ^n·h_{m-1}))
+    // Polynomial reconstruction: t(ξ) = Σ h_i · (ξ^n)^i.
     //
-    // Iterating from the last chunk to the first keeps the
-    // intermediate results small and avoids allocating a ξ-powers
-    // vector.
-    let mut acc = Fr::from(0u64);
-    for h_i in chunk_evals.iter().rev() {
-        acc = acc * xi_n + h_i;
-    }
-    Ok(acc)
+    // The "evaluation point" for this Horner reduction is ξ^n
+    // rather than ξ — each chunk is the i-th coefficient of the
+    // polynomial that takes ξ^n as its variable. Session 64
+    // migrated this site from an inline Horner loop to the shared
+    // `mosaic_zk_primitives::field::fr_horner_eval` primitive
+    // (added in session 63), giving the same audit-grade soundness
+    // pin every other Phase-3 polynomial-eval site will get as it
+    // migrates.
+    Ok(mosaic_zk_primitives::field::fr_horner_eval(
+        chunk_evals,
+        &xi_n,
+    ))
 }
 
 /// Combined vanishing-identity check:
