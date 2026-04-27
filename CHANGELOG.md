@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — sessions 47-49 (post-v0.8.1, audit-coverage extension)
+### Planned beyond v0.8.2-fuzz-bench-coverage
+
+- Fixture-driven differential testing for the four Phase-3 bodies
+  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  **Last named pre-audit gap on the Phase-3 verifier track.**
+- `mosaic-program::chunked::dispatch` integration tests via
+  `solana-program-test` with synthesized `AccountInfo`.
+- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
+  layout breaking change).
+- External security audit commission.
+
+## [0.8.2-fuzz-bench-coverage] — 2026-04-27
+
+**Audit-coverage extension: bench + fuzz dimension.** Sessions 47-59
+extend the v0.8.1 proptest sweep with two complementary measurement
+surfaces:
+
+- **Benches** — `bpf-bench` grew from 3 to 7 systems (HyperPlonk,
+  Halo2, Nova, FRI-STARK BPF benches added in sessions 47, 49); a
+  new `phase3_host` Criterion benchmark covers the same 4 Phase-3
+  systems plus Groth16 on the host side (session 51).
+- **Fuzz harnesses** — `mosaic-fuzz` grew from 3 to 23 targets
+  across 6 production verifiers in 4 dimensions per system: proof
+  bytes, VK bytes, public-input bytes, and a length-prefixed
+  combined-slot fuzzer that explores cross-slot interaction
+  surface (sessions 54-59).
+
+`mosaic-core` (the workspace foundation crate) was lifted from 0
+to 16 lib tests with the `ALL_VARIANTS` const table that external
+indexers can copy as the source of truth for the on-chain ABI
+(session 52).
+
+No behaviour changes — test, bench, and fuzz code only, plus
+README / AUDIT / CHANGELOG entries.
+
+### Added — sessions 47-49 (audit-coverage extension, first wave)
 
 **Phase-3 BPF bench coverage + arkworks adapter property tests.**
 Pushes the `bpf-bench` regression harness from 3 to 7 measured
@@ -229,17 +264,6 @@ across all 6 production verifier surfaces:
     fuzz_halo2_{proof_bytes, vk_bytes, public_inputs, combined}
     fuzz_nova_{proof_bytes, vk_bytes, public_inputs, combined}
     fuzz_stark_{proof_bytes, vk_bytes, public_inputs, combined}
-
-### Planned beyond session 59
-
-- Fixture-driven differential testing for the four Phase-3 bodies
-  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
-  **Last named pre-audit gap on the Phase-3 verifier track.**
-- `mosaic-program::chunked::dispatch` integration tests via
-  `solana-program-test` with synthesized `AccountInfo`.
-- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
-  layout breaking change).
-- External security audit commission.
 
 ## [0.8.1-audit-coverage] — 2026-04-27
 
