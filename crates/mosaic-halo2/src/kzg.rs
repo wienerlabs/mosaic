@@ -309,20 +309,21 @@ pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
     // (added in session 77). Both ξ and ξω sides use the same
     // per-side prefix of `v_powers` to weight the corresponding
     // evals slice.
-    let scalars_xi: Vec<[u8; FR_LEN]> = v_powers[..commits_xi.len()]
-        .iter()
-        .map(fr_to_canonical_bytes)
-        .collect();
-    let c_xi_batched = msm_g1(backend, commits_xi, &scalars_xi)?;
+    // Session 83: scalar byte conversion + msm_g1 collapsed into
+    // one `msm_g1_fr` call (added in session 82). Removes the
+    // intermediate `Vec<[u8; 32]>` scalars vector at both call
+    // sites; helper performs the conversion internally.
+    let c_xi_batched =
+        mosaic_zk_primitives::msm::msm_g1_fr(backend, commits_xi, &v_powers[..commits_xi.len()])?;
     let y_xi_batched =
         mosaic_zk_primitives::field::fr_inner_product(&v_powers[..evals_xi.len()], evals_xi)?;
 
     // MSM at ξω.
-    let scalars_xi_omega: Vec<[u8; FR_LEN]> = v_powers[..commits_xi_omega.len()]
-        .iter()
-        .map(fr_to_canonical_bytes)
-        .collect();
-    let c_xi_omega_batched = msm_g1(backend, commits_xi_omega, &scalars_xi_omega)?;
+    let c_xi_omega_batched = mosaic_zk_primitives::msm::msm_g1_fr(
+        backend,
+        commits_xi_omega,
+        &v_powers[..commits_xi_omega.len()],
+    )?;
     let y_xi_omega_batched = mosaic_zk_primitives::field::fr_inner_product(
         &v_powers[..evals_xi_omega.len()],
         evals_xi_omega,

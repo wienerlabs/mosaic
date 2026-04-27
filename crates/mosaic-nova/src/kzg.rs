@@ -159,19 +159,13 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
 
     // v-powers: [1, v, v², v³, v⁴].
     //
-    // Session 74: lifted from a hand-unrolled accumulator to the
-    // shared `mosaic_zk_primitives::field::powers_of` primitive
-    // (added in session 72). Returns a `Vec<Fr>` of length 5 here;
-    // we materialize the byte form into a fixed-size array for
-    // `msm_g1`'s `&[[u8; 32]; 5]` call site.
+    // Session 74: ν-powers via `powers_of` (audit-pinned helper).
+    // Session 83: byte-conversion + MSM call collapsed into one
+    // `msm_g1_fr` call (audit-pinned helper). The intermediate
+    // `scalars: [[u8; FR_LEN]; 5]` array is no longer needed at
+    // this call site — `msm_g1_fr` performs the conversion
+    // internally over the `Vec<Fr>` returned by `powers_of`.
     let v_powers = mosaic_zk_primitives::field::powers_of(v, 5);
-    let scalars: [[u8; FR_LEN]; 5] = [
-        fr_to_canonical_bytes(&v_powers[0]),
-        fr_to_canonical_bytes(&v_powers[1]),
-        fr_to_canonical_bytes(&v_powers[2]),
-        fr_to_canonical_bytes(&v_powers[3]),
-        fr_to_canonical_bytes(&v_powers[4]),
-    ];
     let commits: [&[u8]; 5] = [
         &vk.a_comm,
         &vk.b_comm,
@@ -179,7 +173,7 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
         proof.e_comm,
         proof.w_comm,
     ];
-    let c_batched = msm_g1(backend, &commits, &scalars)?;
+    let c_batched = mosaic_zk_primitives::msm::msm_g1_fr(backend, &commits, &v_powers)?;
 
     // Session 80: lifted from a hand-unrolled 5-term weighted sum
     // to the shared `mosaic_zk_primitives::field::fr_inner_product`
