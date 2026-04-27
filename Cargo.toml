@@ -26,7 +26,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.8.2-fuzz-bench-coverage"
+version = "0.8.3-shared-primitive-lift"
 edition = "2021"
 rust-version = "1.85.0"
 license = "Apache-2.0 OR MIT"
@@ -40,18 +40,18 @@ categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
 # Workspace member crates
-mosaic-core = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-core", default-features = false }
-mosaic-zk-primitives = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-zk-primitives", default-features = false }
-mosaic-groth16 = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-groth16", default-features = false }
-mosaic-plonk = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-plonk", default-features = false }
-mosaic-hyperplonk = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-hyperplonk", default-features = false }
-mosaic-halo2 = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-halo2", default-features = false }
-mosaic-stark = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-stark", default-features = false }
-mosaic-nova = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-nova", default-features = false }
-mosaic-serde = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-serde", default-features = false }
-mosaic-chunked = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-chunked", default-features = false }
-mosaic-program = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-program" }
-mosaic-sdk = { version = "0.8.2-fuzz-bench-coverage", path = "crates/mosaic-sdk" }
+mosaic-core = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-core", default-features = false }
+mosaic-zk-primitives = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-zk-primitives", default-features = false }
+mosaic-groth16 = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-groth16", default-features = false }
+mosaic-plonk = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-plonk", default-features = false }
+mosaic-hyperplonk = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-hyperplonk", default-features = false }
+mosaic-halo2 = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-halo2", default-features = false }
+mosaic-stark = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-stark", default-features = false }
+mosaic-nova = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-nova", default-features = false }
+mosaic-serde = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-serde", default-features = false }
+mosaic-chunked = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-chunked", default-features = false }
+mosaic-program = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-program" }
+mosaic-sdk = { version = "0.8.3-shared-primitive-lift", path = "crates/mosaic-sdk" }
 
 # Solana — pinned to 2.x; Solana 3.0 CLI is backward-compatible with 2.x program SDK.
 # We deliberately avoid the unstable 3.x API surface during phase 1 to keep MSRV stable.

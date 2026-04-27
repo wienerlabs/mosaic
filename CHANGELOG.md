@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned beyond v0.8.3-shared-primitive-lift
+
+- Fixture-driven differential testing for the four Phase-3 bodies
+  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  **Last named pre-audit gap on the Phase-3 verifier track.**
+- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
+  layout breaking change).
+- `mosaic-program::chunked::dispatch` integration tests via
+  `solana-program-test` with synthesized `AccountInfo`.
+- External security audit commission.
+
+## [0.8.3-shared-primitive-lift] — 2026-04-27
+
+**Shared-primitive consolidation + CI activation.** Sessions 61-68
+extend the v0.8.2 fuzz/bench coverage with two cross-cutting work
+streams:
+
+- **Shared primitives 7 + 8** (`fr_horner_eval`, `verify_n_pair_pairing`)
+  added to `mosaic-zk-primitives`, joining the six lifted in
+  sessions 21-35.
+- **Consumer migrations** in mosaic-{hyperplonk, halo2} replace
+  inline Horner loops + 384-byte alt_bn128_pairing buffer
+  construction with calls to the shared helpers. After the sweep,
+  every BN254 polynomial-eval site and every BN254 pairing site
+  in the workspace goes through one of the eight audit-grade
+  primitives.
+- **CI workflow expansion** wires every sessions-47-59 bench +
+  fuzz harness into GitHub Actions matrices. PR mode runs a
+  representative subset (~25 min wall-clock); nightly runs the
+  full 23-target fuzz inventory at 60 min/harness.
+
+No on-chain ABI or behaviour changes — refactor + tests +
+infrastructure only.
+
 ### Added — sessions 61-64 (post-v0.8.2)
 
 #### Session 61 — CI workflow expansion
@@ -85,16 +119,19 @@ in `mosaic-zk-primitives` covering Fr arithmetic, transcript
 challenge derivation, KZG opening LHS construction, generic
 pairing verification, and Horner polynomial evaluation.
 
-### Planned beyond v0.8.2-fuzz-bench-coverage
+#### Session 68 — last in-tree pairing-helper consumer migration
+`mosaic-hyperplonk::kzg::verify_kzg_batched_opening` migrated
+from an inline 384-byte `alt_bn128_pairing` buffer + return-byte
+inspection to the shared `verify_two_pair_pairing` (which, per
+session 66, now itself delegates to `verify_n_pair_pairing` with
+`N=2`). HyperPlonk was the last in-tree consumer that hand-rolled
+the buffer construction; mosaic-{halo2, nova} already used the
+helper.
 
-- Fixture-driven differential testing for the four Phase-3 bodies
-  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
-  **Last named pre-audit gap on the Phase-3 verifier track.**
-- `mosaic-program::chunked::dispatch` integration tests via
-  `solana-program-test` with synthesized `AccountInfo`.
-- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
-  layout breaking change).
-- External security audit commission.
+After session 68 every BN254 pairing site in the workspace goes
+through one centralized audit-grade primitive — a future
+soundness-critical change (e.g. additional G2 length validation
+or a different return-code convention) needs only one edit.
 
 ## [0.8.2-fuzz-bench-coverage] — 2026-04-27
 
