@@ -43,6 +43,48 @@ lib tests still pass; the migration is byte-identical at the Fr
 level. Tracked as the first of 5+ in-tree consumer sites that
 will gradually move to the shared primitive.
 
+#### Session 65 — second `fr_horner_eval` consumer migration
+`mosaic-halo2::vanishing::compute_t_from_chunks` migrated. The
+"evaluation point" for this Horner reduction is `ξ^n` rather
+than `ξ` (each chunk is the i-th coefficient of the polynomial
+that takes `ξ^n` as its variable). 75 halo2 lib tests still pass.
+
+Per-site survey of remaining BN254-Fr Horner sites in the
+workspace after sessions 64-65: zero. mosaic-stark uses the
+Goldilocks field, not BN254 Fr; the shared primitive doesn't
+apply there.
+
+#### Session 66 — `verify_n_pair_pairing` 8th shared primitive
+Generalizes `verify_two_pair_pairing` (session 25) from a fixed
+2-pair API to an arbitrary-N-pair API. `verify_two_pair_pairing`
+rewritten to delegate to the new generic version with `N=2`.
+
+Why both APIs
+
+- 2-pair specialization stays in the workspace for the hot
+  canonical KZG opening pattern (avoids a slice allocation by
+  passing fixed-arity arguments).
+- N-pair generic version lifts the inline pair-list construction
+  pattern that surfaces in Halo2's multi-poly batched opening
+  (session 17) and Nova's Spartan-batched 5-way opening (session
+  22). Both currently inline a loop that concatenates pair bytes
+  into the syscall input buffer; future migrations can replace
+  the loops with `verify_n_pair_pairing` calls.
+
++4 unit tests for the new primitive (mosaic-zk-primitives lib
+total 70 → 74):
+
+- empty-pair vacuous identity case
+- 2-pair specialization equivalence with the new generic API
+- 3-pair canceling combination
+  `e(G1,G2)·e(G1,G2)·e(-2G1,G2) = e(0,G2) = 1`
+- pre-syscall G2-length validation pass
+
+After sessions 63-66 the shared-primitive count is **8 helpers**
+in `mosaic-zk-primitives` covering Fr arithmetic, transcript
+challenge derivation, KZG opening LHS construction, generic
+pairing verification, and Horner polynomial evaluation.
+
 ### Planned beyond v0.8.2-fuzz-bench-coverage
 
 - Fixture-driven differential testing for the four Phase-3 bodies

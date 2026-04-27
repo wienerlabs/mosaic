@@ -56,7 +56,7 @@ frozen CU budgets.
 | `mosaic-chunked` instruction handlers | ✅ Production | — |
 | Reference Solana program | ✅ 319 KB SBF ELF (30.4% of 1 MB cap; 12 cryptographic gates wired) | — |
 | Differential test harness (arkworks + snarkjs fixture) | ✅ Production (Groth16 + PLONK; Phase-3 extension tracked) | — |
-| Property-test coverage (proptest, sessions 36-52) | ✅ 534 lib tests across 12 crates (+137 proptest in audit-coverage sweep) | — |
+| Property-test coverage (proptest, sessions 36-66) | ✅ 544 lib tests across 12 crates (+147 proptest + shared-primitive coverage in audit-coverage sweep) | — |
 | BPF CU regression bench (`bpf-bench`) | ✅ 7 systems: Groth16 (single + batch), KZG-PLONK, HyperPlonk, Halo2, Nova, FRI-STARK | — |
 | Host criterion bench (wall-clock baseline) | ✅ 5 systems: Groth16, HyperPlonk, Halo2, Nova, FRI-STARK | — |
 | Fuzz harnesses (sessions 54-59) | ✅ 23 targets across all 6 production verifiers (5 proof-bytes + 5 vk-bytes + 5 public-inputs + 5 combined-slot for PLONK + 4 Phase-3, plus 3 original Groth16) | — |
