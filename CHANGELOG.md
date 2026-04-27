@@ -7,17 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.8.4-primitive-consumer-coverage
+### Added — sessions 78-80 (post-v0.8.4)
+
+#### Session 78 — Halo2 fr_inner_product migration (×2 sites)
+mosaic-halo2::kzg::verify_two_point_batched_opening migrated.
+Both ξ-side and ξω-side y-batched accumulator loops now use
+`fr_inner_product(&v_powers[..len], evals)`. After session 78
+the consumer audit was 3 sites: hyperplonk + halo2(×2).
+
+#### Session 79 — `v0.8.4-primitive-consumer-coverage` release
+Sessions 60-78 milestone tagged. CHANGELOG promoted [Unreleased]
+→ [0.8.4-primitive-consumer-coverage] entry preserving the
+10-primitive inventory + 7-migration audit table. README badge
+bumped.
+
+#### Session 80 — Nova fr_inner_product migration (deferred from s77)
+mosaic-nova::kzg::verify_spartan_batched_opening migrated.
+Hand-unrolled 5-term `v_powers[0]*a_eval + … + v_powers[4]*w_eval`
+chain replaced with `fr_inner_product(&v_powers, &evals)?`.
+Byte-identical at the Fr level; 59 nova lib tests still pass.
+
+After session 80 the `fr_inner_product` consumer audit is
+**4 production sites**:
+- mosaic-hyperplonk::kzg                        (s77)
+- mosaic-halo2::kzg::verify_two_point ξ-side    (s78)
+- mosaic-halo2::kzg::verify_two_point ξω-side   (s78)
+- mosaic-nova::kzg::verify_spartan              (s80)
+
+Every BN254 weighted-sum site in the workspace now goes through
+the shared primitive. The "Planned beyond v0.8.4" block loses
+its third item.
+
+### Planned beyond sessions 78-80
 
 - Fixture-driven differential testing for the four Phase-3 bodies
   (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
   **Last named pre-audit gap on the Phase-3 verifier track.**
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
-- mosaic-nova::kzg::verify_spartan_batched_opening migration to
-  fr_inner_product (deferred from session 77; the explicit 5-term
-  unrolled chain is more legible inline at N=5 than the helper
-  call's collect-into-Vec dance).
 - External security audit commission.
 
 ## [0.8.4-primitive-consumer-coverage] — 2026-04-28
