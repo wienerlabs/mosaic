@@ -284,6 +284,59 @@ pub fn msm_g1<B: SyscallBackend + ?Sized>(
     Ok(acc)
 }
 
+/// MSM over G1 with arkworks `Fr` scalars. Wrapper that converts
+/// each scalar to canonical 32-byte big-endian form on the fly,
+/// then delegates to [`msm_g1`].
+///
+/// ## Why a shared primitive
+///
+/// Every Phase-3 batched-opening verifier that builds a ν-powers
+/// vector then converts it to bytes for `msm_g1` repeats the same
+/// pattern (HyperPlonk session 3e, Halo2 session 17, Nova session
+/// 22):
+///
+/// ```text
+/// let nu_powers = powers_of(&nu, n);                          // session 72
+/// let scalars: Vec<[u8; 32]> = nu_powers.iter()
+///     .map(fr_to_canonical_bytes)
+///     .collect();
+/// let c_batched = msm_g1(backend, points, &scalars)?;
+/// ```
+///
+/// This primitive collapses the 3-line conversion + call into one:
+///
+/// ```text
+/// let c_batched = msm_g1_fr(backend, points, &nu_powers)?;
+/// ```
+///
+/// Same syscall cost (n × G1Mul + (n-1) × G1Add) — only the byte-
+/// conversion stage is hoisted into the helper. Audit-grade
+/// soundness pin: the helper's signature forces every caller through
+/// the same `fr_to_canonical_bytes` path that the rest of the
+/// workspace uses, so a future change to the canonical Fr encoding
+/// (e.g. LE flip per SIMD-0204) needs only one edit here rather
+/// than at every consumer.
+///
+/// ## Errors
+///
+/// Same error surface as [`msm_g1`].
+///
+/// Session 82 (post-v0.8.4): eleventh shared primitive.
+pub fn msm_g1_fr<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    points: &[&[u8]],
+    scalars_fr: &[ark_bn254::Fr],
+) -> Result<[u8; 64], OnChainError> {
+    if points.len() != scalars_fr.len() {
+        return Err(OnChainError::PublicInputCountMismatch);
+    }
+    let scalars_bytes: Vec<[u8; 32]> = scalars_fr
+        .iter()
+        .map(crate::field::fr_to_canonical_bytes)
+        .collect();
+    msm_g1(backend, points, &scalars_bytes)
+}
+
 /// One G1 scalar multiplication: `k · P`. Wraps the syscall with wire-
 /// format length checks.
 ///
@@ -693,6 +746,44 @@ mod tests {
         let short_g2 = [0u8; 127];
         let r = verify_n_pair_pairing(&backend, &[(&g1, &g2[..]), (&g1, &short_g2[..])]);
         assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
+    }
+
+    // ---- msm_g1_fr (session 82) ----
+
+    #[test]
+    fn msm_g1_fr_empty_returns_zero() {
+        let backend = HostBackend::new();
+        let r = msm_g1_fr(&backend, &[], &[]).unwrap();
+        assert_eq!(r, G1_ZERO);
+    }
+
+    #[test]
+    fn msm_g1_fr_rejects_length_mismatch() {
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let r = msm_g1_fr(&backend, &[&g1[..]], &[]);
+        assert!(matches!(r, Err(OnChainError::PublicInputCountMismatch)));
+    }
+
+    #[test]
+    fn msm_g1_fr_matches_msm_g1_via_byte_conversion() {
+        // The Fr-aware helper must be byte-equivalent to manually
+        // converting each Fr to canonical bytes and calling msm_g1
+        // directly.
+        let backend = HostBackend::new();
+        let mut rng = seeded_rng(123);
+        let p1 = ark_g1_to_canonical(&G1Projective::rand(&mut rng).into_affine());
+        let p2 = ark_g1_to_canonical(&G1Projective::rand(&mut rng).into_affine());
+        let s1 = Fr::rand(&mut rng);
+        let s2 = Fr::rand(&mut rng);
+
+        let via_helper = msm_g1_fr(&backend, &[&p1[..], &p2[..]], &[s1, s2]).unwrap();
+
+        let s1_bytes = fr_to_bytes_be(&s1);
+        let s2_bytes = fr_to_bytes_be(&s2);
+        let via_direct = msm_g1(&backend, &[&p1[..], &p2[..]], &[s1_bytes, s2_bytes]).unwrap();
+
+        assert_eq!(via_helper, via_direct);
     }
 
     // ---- Property-based tests (session 34) ----

@@ -104,22 +104,12 @@ pub fn verify_batched_opening<B: SyscallBackend + ?Sized>(
 
     // 2. Compute ν^i for i=0..12 — the MSM scalars.
     //
-    // Session 72: lifted from an inline accumulator loop to the
-    // shared `mosaic_zk_primitives::field::powers_of` primitive,
-    // which is property-tested against `fr_pow_u64` at every index
-    // (prop_powers_of_matches_pow). The shared helper returns a
-    // `Vec<Fr>` rather than an array, so the byte conversion
-    // collects into a Vec — same total allocation as the array
-    // version because `nu_powers_bytes` was already array-of-arrays
-    // for `msm_g1`'s `&[[u8; 32]]` signature.
+    // Session 72: ν-powers via `powers_of` (audit-pinned helper).
+    // Session 82: byte-conversion + MSM call collapsed into one
+    // `msm_g1_fr` call (audit-pinned helper). The intermediate
+    // `nu_powers_bytes` array is no longer needed at this call
+    // site — `msm_g1_fr` performs the conversion internally.
     let nu_powers = mosaic_zk_primitives::field::powers_of(&nu, 12);
-    let nu_powers_bytes: [[u8; 32]; 12] = {
-        let mut out = [[0u8; 32]; 12];
-        for i in 0..12 {
-            out[i] = fr_to_canonical_bytes(&nu_powers[i]);
-        }
-        out
-    };
 
     // 3. MSM over 12 commitments. Order matches `final_evals_index`:
     //    (a, b, c, z, q_m, q_l, q_r, q_o, q_c, σ_1, σ_2, σ_3).
@@ -137,7 +127,7 @@ pub fn verify_batched_opening<B: SyscallBackend + ?Sized>(
         &vk.sigma_2_g1,
         &vk.sigma_3_g1,
     ];
-    let c_batched = msm_g1(backend, &commits, &nu_powers_bytes)?;
+    let c_batched = mosaic_zk_primitives::msm::msm_g1_fr(backend, &commits, &nu_powers)?;
 
     // 4. Batched evaluation value: Σ ν^i · e_i.
     //
