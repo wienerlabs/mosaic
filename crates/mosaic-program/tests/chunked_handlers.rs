@@ -434,6 +434,85 @@ async fn cancel_expired_before_expiry_rejected() {
     );
 }
 
+/// Session 75: chunked-upload state machine reaches the verifier
+/// dispatch path correctly. Drives the full lifecycle —
+/// init → append → finalize-with-correct-hash → dispatch_verify —
+/// against a sham VK account whose 16-byte payload doesn't match
+/// any verifier's expected length. The test asserts the error
+/// surfaces from `dispatch_verify` (not from the chunked state
+/// machine), proving the post-finalize verifier hand-off works.
+///
+/// The expected error code is `VerifyingKeyLengthMismatch (0x02)`
+/// — Groth16's canonical VK requires `≥ 224 + 64*n` bytes (header
+/// + IC vector); 16 bytes is structurally too small.
+///
+/// This complements:
+/// - `commit_with_wrong_hash_rejected` — earlier checkpoint, fails
+///   before dispatch_verify is reached.
+/// - `verify_proof_sbf.rs::verify_groth16_happy_path` — single-tx
+///   VerifyProof path with real fixtures, no chunking.
+///
+/// A real chunked + happy-path test would need to upload genuine
+/// Groth16 proof bytes and a genuine VK account; that's deferred
+/// to the fixture-driven differential testing item in the
+/// audit-coverage planned-beyond list.
+#[tokio::test]
+async fn commit_and_verify_dispatches_to_verifier() {
+    let (mut banks, payer, blockhash) = setup().await;
+    let session_id = [88_u8; 32];
+    let total_len = 2_u32;
+    let h_0 = compute_h0(&session_id, total_len, PROOF_SYSTEM_GROTH16);
+    let (session_pda, _bump) = derive_session_pda(&session_id, &payer.pubkey());
+
+    // Sham VK account: 16 bytes of zeros, payable but structurally
+    // too small for any verifier's canonical VK envelope.
+    let vk_keypair = Keypair::new();
+    let create_vk = solana_sdk::system_instruction::create_account(
+        &payer.pubkey(),
+        &vk_keypair.pubkey(),
+        1_000_000,
+        16,
+        &system_program::ID,
+    );
+
+    // Append a single 2-byte chunk so total_len matches.
+    let init_ix = build_initialize_session_ix(
+        &payer.pubkey(),
+        &session_pda,
+        &session_id,
+        total_len,
+        PROOF_SYSTEM_GROTH16,
+        &h_0,
+    );
+    let chunk = [0u8, 0];
+    let append_ix = build_append_chunk_ix(&payer.pubkey(), &session_pda, 0, &chunk);
+
+    // Compute the canonical rolling hash so the commit-and-verify
+    // length + hash checks both pass and we reach dispatch_verify.
+    let h_1 = compute_next_hash(&h_0, &chunk);
+    let commit_ix = build_commit_and_verify_ix(
+        &payer.pubkey(),
+        &session_pda,
+        &vk_keypair.pubkey(),
+        &h_1,
+        &[],
+    );
+
+    let tx = Transaction::new_signed_with_payer(
+        &[create_vk, init_ix, append_ix, commit_ix],
+        Some(&payer.pubkey()),
+        &[&payer, &vk_keypair],
+        blockhash,
+    );
+    let err = banks.process_transaction(tx).await.unwrap_err();
+    let s = format!("{err:?}");
+    // Custom(2) == OnChainError::VerifyingKeyLengthMismatch.
+    assert!(
+        s.contains("Custom(2)") || s.contains("0x2"),
+        "expected VerifyingKeyLengthMismatch (0x02) from dispatch_verify, got: {s}",
+    );
+}
+
 #[tokio::test]
 async fn double_init_rejected() {
     let (mut banks, payer, blockhash) = setup().await;
