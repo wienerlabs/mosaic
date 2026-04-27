@@ -173,12 +173,7 @@ pub fn lagrange_basis_one(xi: &Fr, n: u64) -> Result<Fr, OnChainError> {
 ///   makes the denominator zero at that specific root of unity. For a
 ///   random Fiat-Shamir challenge this hits with probability `~n/r`
 ///   (at most `n` roots over a field of size `~2^254`).
-pub fn lagrange_basis_at(
-    xi: &Fr,
-    i: u64,
-    n: u64,
-    omega: &Fr,
-) -> Result<Fr, OnChainError> {
+pub fn lagrange_basis_at(xi: &Fr, i: u64, n: u64, omega: &Fr) -> Result<Fr, OnChainError> {
     let xi_n = fr_pow_u64(xi, n);
     let omega_i = fr_pow_u64(omega, i);
     let numerator = omega_i * (xi_n - Fr::one());
@@ -262,6 +257,46 @@ pub fn decode_public_inputs(bytes: &[u8]) -> Result<Vec<Fr>, OnChainError> {
         out.push(fr_from_canonical_bytes(chunk)?);
     }
     Ok(out)
+}
+
+/// Evaluate a polynomial via the Horner scheme.
+///
+/// Given coefficients `[a_0, a_1, …, a_{n-1}]` representing
+/// `p(X) = a_0 + a_1·X + a_2·X² + … + a_{n-1}·X^{n-1}`, returns
+/// `p(x)` computed in `n - 1` multiplications and `n - 1` additions:
+///
+/// ```text
+/// p(x) = ((…((a_{n-1} · x) + a_{n-2}) · x + a_{n-3}) · x + … ) · x + a_0
+/// ```
+///
+/// Empty coefficient slice returns `Fr::zero()` (vacuously the zero
+/// polynomial).
+///
+/// ## Why a shared primitive
+///
+/// All four Phase-3 verifier crates evaluate polynomials in Fr at
+/// challenge points: HyperPlonk for round polynomials in the
+/// sumcheck, Halo2 for the quotient polynomial reconstruction
+/// `t(ξ) = Σ ξ^(k·i) · h_i(ξ)`, Nova for the cross-term residual,
+/// FRI-STARK for the final-poly low-degree check. Each currently
+/// inlines a Horner loop. Lifting it here gives a single
+/// audit-grade implementation.
+///
+/// Session 63 (post-v0.8.2): seventh shared primitive joining
+/// `fr_from_be_bytes_reduced`, `fr_be_from_u64`,
+/// `derive_fr_challenge`, `verify_two_pair_pairing`,
+/// `commitment_minus_scalar_g1`, `compute_kzg_opening_lhs`.
+#[must_use]
+pub fn fr_horner_eval(coeffs: &[Fr], x: &Fr) -> Fr {
+    if coeffs.is_empty() {
+        return Fr::zero();
+    }
+    // Iterate from the highest-degree coefficient down to a_0.
+    let mut acc = *coeffs.last().expect("coeffs non-empty by guard above");
+    for c in coeffs.iter().rev().skip(1) {
+        acc = acc * x + c;
+    }
+    acc
 }
 
 #[cfg(test)]
@@ -520,6 +555,99 @@ mod tests {
             let encoded = fr_to_canonical_bytes(&reduced);
             let decoded = fr_from_canonical_bytes(&encoded).unwrap();
             prop_assert_eq!(reduced, decoded);
+        }
+
+        // ───────────────────────────────────────────────────────────
+        // Session 63 — `fr_horner_eval` properties
+        // ───────────────────────────────────────────────────────────
+
+        /// Horner-scheme evaluation matches the naive
+        /// sum-of-products implementation for any polynomial up to
+        /// degree 8 and any in-range Fr challenge point.
+        ///
+        /// This is the soundness invariant that justifies the lift:
+        /// callers can replace inline Horner loops with this helper
+        /// without changing the result by even one Fr element.
+        #[test]
+        fn prop_horner_matches_naive_eval(
+            seed in 0u64..=u64::MAX,
+            n_coeffs in 0usize..=8,
+            x_seed in 0u64..=u64::MAX,
+        ) {
+            let mut rng = seeded_rng(seed);
+            let coeffs: Vec<Fr> = (0..n_coeffs).map(|_| Fr::rand(&mut rng)).collect();
+            let x = Fr::from(x_seed);
+
+            // Naive sum-of-products: Σ a_i · x^i.
+            let mut naive = Fr::zero();
+            let mut x_pow = Fr::one();
+            for c in &coeffs {
+                naive += *c * x_pow;
+                x_pow *= x;
+            }
+
+            let horner = fr_horner_eval(&coeffs, &x);
+            prop_assert_eq!(horner, naive);
+        }
+
+        /// Empty coefficient slice evaluates to zero (vacuous polynomial).
+        #[test]
+        fn prop_horner_empty_is_zero(x_seed in 0u64..=u64::MAX) {
+            let x = Fr::from(x_seed);
+            let result = fr_horner_eval(&[], &x);
+            prop_assert_eq!(result, Fr::zero());
+        }
+
+        /// Constant polynomial `p(X) = c` evaluates to `c` everywhere.
+        #[test]
+        fn prop_horner_constant_polynomial(
+            c_seed in 0u64..=u64::MAX,
+            x_seed in 0u64..=u64::MAX,
+        ) {
+            let c = Fr::from(c_seed);
+            let x = Fr::from(x_seed);
+            prop_assert_eq!(fr_horner_eval(&[c], &x), c);
+        }
+
+        /// Linear polynomial `p(X) = a + b·X` evaluates to `a + b·x`.
+        #[test]
+        fn prop_horner_linear_polynomial(
+            a_seed in 0u64..=u64::MAX,
+            b_seed in 0u64..=u64::MAX,
+            x_seed in 0u64..=u64::MAX,
+        ) {
+            let a = Fr::from(a_seed);
+            let b = Fr::from(b_seed);
+            let x = Fr::from(x_seed);
+            let expected = a + b * x;
+            prop_assert_eq!(fr_horner_eval(&[a, b], &x), expected);
+        }
+
+        /// Evaluating any polynomial at `x = 0` returns the constant
+        /// term `a_0`. Pins the Horner reduction's terminal step.
+        #[test]
+        fn prop_horner_at_zero_returns_constant(
+            seed in 0u64..=u64::MAX,
+            n_coeffs in 1usize..=8,
+        ) {
+            let mut rng = seeded_rng(seed);
+            let coeffs: Vec<Fr> = (0..n_coeffs).map(|_| Fr::rand(&mut rng)).collect();
+            let zero = Fr::zero();
+            prop_assert_eq!(fr_horner_eval(&coeffs, &zero), coeffs[0]);
+        }
+
+        /// Evaluating any polynomial at `x = 1` returns the sum of
+        /// coefficients `Σ a_i`. Pins the Horner accumulation pattern.
+        #[test]
+        fn prop_horner_at_one_returns_sum(
+            seed in 0u64..=u64::MAX,
+            n_coeffs in 1usize..=8,
+        ) {
+            let mut rng = seeded_rng(seed);
+            let coeffs: Vec<Fr> = (0..n_coeffs).map(|_| Fr::rand(&mut rng)).collect();
+            let one = Fr::one();
+            let expected: Fr = coeffs.iter().copied().sum();
+            prop_assert_eq!(fr_horner_eval(&coeffs, &one), expected);
         }
     }
 }
