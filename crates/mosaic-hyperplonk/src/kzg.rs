@@ -45,17 +45,13 @@ use crate::canonical::{
     sizes::{FR_LEN, G1_LEN},
     HyperPlonkProof, HyperPlonkVerifyingKey,
 };
-use alloc::vec::Vec;
 use ark_bn254::Fr;
 use ark_ff::One;
-use mosaic_core::{
-    syscall::{AltBn128Op, InputEndianness, SyscallBackend},
-    OnChainError,
-};
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
-    msm::{compute_kzg_opening_lhs, msm_g1, negate_g1},
+    msm::{compute_kzg_opening_lhs, msm_g1, negate_g1, verify_two_pair_pairing},
     transcript::Transcript,
 };
 
@@ -166,24 +162,16 @@ pub fn verify_batched_opening<B: SyscallBackend + ?Sized>(
     // 6. Pairing check with 2 pairs:
     //    Pair 1: (A1, [1]_G2)
     //    Pair 2: (-opening, [x]_G2)
+    //
+    // Session 68: lifted from an inline pair-buffer concatenation
+    // to the shared `verify_two_pair_pairing` primitive (sessions
+    // 25 + 66). HyperPlonk was the last in-tree consumer that
+    // built the 384-byte input + interpreted the syscall return
+    // bytes inline; the migration brings it in line with
+    // mosaic-{halo2, nova} which already used the helper.
     let neg_opening = negate_g1(&opening_arr);
     let g2_gen = g2_generator_bytes();
-
-    let mut pairing_input: Vec<u8> = Vec::with_capacity(2 * (G1_LEN + 128));
-    pairing_input.extend_from_slice(&a1);
-    pairing_input.extend_from_slice(&g2_gen);
-    pairing_input.extend_from_slice(&neg_opening);
-    pairing_input.extend_from_slice(&vk.x2_g2);
-
-    let result = backend.alt_bn128_group_op(
-        AltBn128Op::Pairing,
-        InputEndianness::BigEndian,
-        &pairing_input,
-    )?;
-    if result.len() != 32 || result[31] != 0x01 {
-        return Err(OnChainError::PairingCheckFailed);
-    }
-    Ok(())
+    verify_two_pair_pairing(backend, &a1, &g2_gen, &neg_opening, &vk.x2_g2)
 }
 
 #[cfg(test)]
