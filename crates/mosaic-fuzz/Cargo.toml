@@ -116,5 +116,15 @@ path = "fuzz_targets/fuzz_stark_vk_bytes.rs"
 test = false
 doc = false
 
+# ───────────────────────────────────────────────────────────────────────
+# Session 56 — combined-slot fuzzer (cross-slot interaction surface)
+# ───────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "fuzz_halo2_combined"
+path = "fuzz_targets/fuzz_halo2_combined.rs"
+test = false
+doc = false
+
 [lints]
 workspace = true
