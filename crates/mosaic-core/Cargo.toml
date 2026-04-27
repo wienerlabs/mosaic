@@ -42,6 +42,10 @@ light-poseidon = { workspace = true, optional = true }
 # Logging — strictly opt-in.
 tracing = { workspace = true, optional = true }
 
+[dev-dependencies]
+proptest = { workspace = true }
+borsh = { workspace = true, features = ["std"] }
+
 [features]
 default = []
 std = ["thiserror", "borsh/std", "arrayvec/std", "zeroize/std", "subtle/std"]

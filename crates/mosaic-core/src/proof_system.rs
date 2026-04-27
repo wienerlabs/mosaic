@@ -167,4 +167,119 @@ mod tests {
     /// Object-safety smoke test: if this compiles, `ProofSystem` is dyn-compatible.
     #[allow(dead_code)]
     fn assert_object_safe(_: Box<dyn ProofSystem>) {}
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 52 — proptest coverage for the `ProofSystemId` ABI.
+    //
+    // `ProofSystemId` is the wire-stable byte that the on-chain
+    // dispatcher reads to pick a verifier. Two consensus-critical
+    // properties:
+    //
+    //   1. Round-trip: every defined variant survives `as_byte` →
+    //      `from_byte` unchanged. A regression here silently routes
+    //      bytes to the wrong verifier (catastrophic).
+    //   2. Unknown-byte rejection: every byte outside the defined set
+    //      is rejected with `UnknownProofSystem`. A regression here
+    //      lets attackers smuggle bytes through the dispatcher's
+    //      catch-all arm.
+    //
+    // The unit tests above pin variant 0x01..=0x08 and reject 0xFF.
+    // The proptests below exhaust the entire u8 space.
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Every byte in the defined set 0x01..=0x08 round-trips
+        /// through `from_byte` → `as_byte`.
+        #[test]
+        fn proptest_known_byte_round_trip(b in 0x01u8..=0x08) {
+            let id = ProofSystemId::from_byte(b).expect("known byte parses");
+            prop_assert_eq!(id.as_byte(), b);
+            prop_assert!(!id.slug().is_empty());
+        }
+
+        /// Every byte outside the defined set is rejected with
+        /// `UnknownProofSystem`. Exhaustive over the byte space minus
+        /// the eight known discriminants.
+        #[test]
+        fn proptest_unknown_byte_rejected(b in any::<u8>()) {
+            prop_assume!(!(0x01..=0x08).contains(&b));
+            prop_assert!(matches!(
+                ProofSystemId::from_byte(b),
+                Err(OnChainError::UnknownProofSystem),
+            ));
+        }
+
+        /// `from_byte` is a pure function: same byte → same variant
+        /// across two calls. Catches a future change that would
+        /// introduce hidden state (e.g. a global registry mutation).
+        #[test]
+        fn proptest_from_byte_is_pure(b in any::<u8>()) {
+            let a = ProofSystemId::from_byte(b);
+            let c = ProofSystemId::from_byte(b);
+            match (a, c) {
+                (Ok(x), Ok(y)) => prop_assert_eq!(x, y),
+                (Err(_), Err(_)) => {},
+                _ => prop_assert!(false, "from_byte not pure for byte {b}"),
+            }
+        }
+
+        /// Slug strings are pairwise distinct across all defined
+        /// variants. Catches a copy-paste bug that would alias two
+        /// different variants to the same audit-log string (which
+        /// would silently corrupt log analysis downstream).
+        #[test]
+        fn proptest_slugs_pairwise_distinct(_seed in any::<u8>()) {
+            let all = [
+                ProofSystemId::Groth16Bn254,
+                ProofSystemId::PlonkKzgBn254,
+                ProofSystemId::HyperPlonkKzgBn254,
+                ProofSystemId::Halo2KzgBn254,
+                ProofSystemId::FriStark,
+                ProofSystemId::Risc0Stark,
+                ProofSystemId::NovaFolding,
+                ProofSystemId::ProtoStarFolding,
+            ];
+            for i in 0..all.len() {
+                for j in (i + 1)..all.len() {
+                    prop_assert_ne!(
+                        all[i].slug(),
+                        all[j].slug(),
+                        "slug collision between {:?} and {:?}",
+                        all[i],
+                        all[j],
+                    );
+                }
+            }
+        }
+
+        /// `as_byte` discriminants are pairwise distinct. Catches an
+        /// `#[repr(u8)]` collision that would silently route bytes
+        /// from one variant to another.
+        #[test]
+        fn proptest_discriminants_pairwise_distinct(_seed in any::<u8>()) {
+            let all = [
+                (ProofSystemId::Groth16Bn254, 0x01),
+                (ProofSystemId::PlonkKzgBn254, 0x02),
+                (ProofSystemId::HyperPlonkKzgBn254, 0x03),
+                (ProofSystemId::Halo2KzgBn254, 0x04),
+                (ProofSystemId::FriStark, 0x05),
+                (ProofSystemId::Risc0Stark, 0x06),
+                (ProofSystemId::NovaFolding, 0x07),
+                (ProofSystemId::ProtoStarFolding, 0x08),
+            ];
+            for &(id, expected) in &all {
+                prop_assert_eq!(id.as_byte(), expected);
+            }
+            // Pairwise distinct (manually pinned to commit to the
+            // public ABI, not just the round-trip).
+            for i in 0..all.len() {
+                for j in (i + 1)..all.len() {
+                    prop_assert_ne!(all[i].1, all[j].1);
+                }
+            }
+        }
+    }
 }

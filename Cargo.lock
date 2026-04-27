@@ -3083,6 +3083,7 @@ dependencies = [
  "arrayvec",
  "borsh 1.6.1",
  "light-poseidon 0.3.0",
+ "proptest",
  "sha2 0.10.9",
  "solana-bn254",
  "solana-keccak-hasher",

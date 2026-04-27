@@ -129,9 +129,7 @@ pub mod solana {
         AltBn128Compress, AltBn128Op, InputEndianness, OnChainError, PoseidonParameters,
         SyscallBackend, Vec,
     };
-    use solana_bn254::prelude::{
-        alt_bn128_addition, alt_bn128_multiplication, alt_bn128_pairing,
-    };
+    use solana_bn254::prelude::{alt_bn128_addition, alt_bn128_multiplication, alt_bn128_pairing};
 
     /// Stateless SBF syscall backend. Construct with [`SolanaSyscallBackend::new`].
     #[derive(Copy, Clone, Debug, Default)]
@@ -161,8 +159,9 @@ pub mod solana {
                 AltBn128Op::G1Add => {
                     alt_bn128_addition(input).map_err(|_| OnChainError::AltBn128SyscallFailed)
                 },
-                AltBn128Op::G1Mul => alt_bn128_multiplication(input)
-                    .map_err(|_| OnChainError::AltBn128SyscallFailed),
+                AltBn128Op::G1Mul => {
+                    alt_bn128_multiplication(input).map_err(|_| OnChainError::AltBn128SyscallFailed)
+                },
                 AltBn128Op::Pairing => {
                     alt_bn128_pairing(input).map_err(|_| OnChainError::AltBn128SyscallFailed)
                 },
@@ -268,14 +267,8 @@ pub mod host {
         let (x_bytes, y_bytes) = bytes.split_at(64);
         let (x_c1, x_c0) = x_bytes.split_at(32);
         let (y_c1, y_c0) = y_bytes.split_at(32);
-        let x = Fq2::new(
-            decode_fq(x_c0, endianness)?,
-            decode_fq(x_c1, endianness)?,
-        );
-        let y = Fq2::new(
-            decode_fq(y_c0, endianness)?,
-            decode_fq(y_c1, endianness)?,
-        );
+        let x = Fq2::new(decode_fq(x_c0, endianness)?, decode_fq(x_c1, endianness)?);
+        let y = Fq2::new(decode_fq(y_c0, endianness)?, decode_fq(y_c1, endianness)?);
         let point = G2Affine::new_unchecked(x, y);
         if !point.is_on_curve() || !point.is_in_correct_subgroup_assuming_on_curve() {
             return Err(OnChainError::PointNotOnCurve);

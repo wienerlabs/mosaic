@@ -92,7 +92,9 @@ impl<'a> BumpArena<'a> {
         let mut start = self.cursor;
         let misalign = start & align.saturating_sub(1);
         if misalign != 0 {
-            start = start.checked_add(align - misalign).ok_or(OnChainError::HeapExhausted)?;
+            start = start
+                .checked_add(align - misalign)
+                .ok_or(OnChainError::HeapExhausted)?;
         }
         let end = start.checked_add(len).ok_or(OnChainError::HeapExhausted)?;
         if end > self.buffer.len() {

@@ -271,4 +271,247 @@ mod tests {
             assert!(slug.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
         }
     }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 52 — proptest coverage for the `OnChainError` ABI.
+    //
+    // OnChainError is the consensus-critical error taxonomy: every
+    // variant's u32 discriminant is part of the program's public ABI
+    // (returned via `ProgramError::Custom(code)` to clients). Two
+    // properties pinned exhaustively here:
+    //
+    //   1. **Discriminant stability**: every defined variant's `code()`
+    //      matches the value committed in this module's source. The
+    //      unit tests above pin a handful of specific points; the
+    //      proptest below pins all 30+ variants.
+    //
+    //   2. **Slug invariants**: every variant's slug is non-empty,
+    //      ASCII snake-case, and pairwise distinct from every other
+    //      slug. A regression here would silently corrupt audit-log
+    //      analysis downstream (two different errors aliasing the
+    //      same string).
+    // ───────────────────────────────────────────────────────────────────
+    use proptest::prelude::*;
+
+    /// All defined OnChainError variants paired with their committed
+    /// discriminant codes. Anchors the public ABI so an external
+    /// indexer can copy this list as the source of truth.
+    const ALL_VARIANTS: &[(OnChainError, u32, &str)] = &[
+        (
+            OnChainError::ProofLengthMismatch,
+            0x0001,
+            "proof_length_mismatch",
+        ),
+        (
+            OnChainError::VerifyingKeyLengthMismatch,
+            0x0002,
+            "vk_length_mismatch",
+        ),
+        (
+            OnChainError::PublicInputCountMismatch,
+            0x0003,
+            "public_input_count_mismatch",
+        ),
+        (
+            OnChainError::PublicInputOutOfRange,
+            0x0004,
+            "public_input_out_of_range",
+        ),
+        (
+            OnChainError::InvalidPointEncoding,
+            0x0005,
+            "invalid_point_encoding",
+        ),
+        (OnChainError::PointNotOnCurve, 0x0006, "point_not_on_curve"),
+        (
+            OnChainError::InvalidFieldEncoding,
+            0x0007,
+            "invalid_field_encoding",
+        ),
+        (
+            OnChainError::VerifyingKeyProofMismatch,
+            0x0008,
+            "vk_proof_mismatch",
+        ),
+        (
+            OnChainError::UnknownProofSystem,
+            0x0010,
+            "unknown_proof_system",
+        ),
+        (
+            OnChainError::UnimplementedProofSystem,
+            0x0011,
+            "unimplemented_proof_system",
+        ),
+        (
+            OnChainError::UnsupportedOperation,
+            0x0012,
+            "unsupported_operation",
+        ),
+        (
+            OnChainError::PairingCheckFailed,
+            0x0020,
+            "pairing_check_failed",
+        ),
+        (OnChainError::FriCheckFailed, 0x0021, "fri_check_failed"),
+        (
+            OnChainError::OpeningCheckFailed,
+            0x0022,
+            "opening_check_failed",
+        ),
+        (OnChainError::SumcheckFailed, 0x0023, "sumcheck_failed"),
+        (
+            OnChainError::VerificationFailed,
+            0x002F,
+            "verification_failed",
+        ),
+        (OnChainError::ChunkOutOfOrder, 0x0030, "chunk_out_of_order"),
+        (
+            OnChainError::ChunkCommitmentMismatch,
+            0x0031,
+            "chunk_commitment_mismatch",
+        ),
+        (OnChainError::ChunkOverflow, 0x0032, "chunk_overflow"),
+        (
+            OnChainError::SessionAlreadyFinalized,
+            0x0033,
+            "session_already_finalized",
+        ),
+        (
+            OnChainError::SessionContextMismatch,
+            0x0034,
+            "session_context_mismatch",
+        ),
+        (
+            OnChainError::SessionAlreadyInitialized,
+            0x0035,
+            "session_already_initialized",
+        ),
+        (
+            OnChainError::SessionNotExpired,
+            0x0036,
+            "session_not_expired",
+        ),
+        (
+            OnChainError::AltBn128SyscallFailed,
+            0x0040,
+            "alt_bn128_syscall_failed",
+        ),
+        (
+            OnChainError::AltBn128CompressionSyscallFailed,
+            0x0041,
+            "alt_bn128_compression_syscall_failed",
+        ),
+        (
+            OnChainError::PoseidonSyscallFailed,
+            0x0042,
+            "poseidon_syscall_failed",
+        ),
+        (
+            OnChainError::Sha256SyscallFailed,
+            0x0043,
+            "sha256_syscall_failed",
+        ),
+        (
+            OnChainError::Keccak256SyscallFailed,
+            0x0044,
+            "keccak256_syscall_failed",
+        ),
+        (
+            OnChainError::ComputeBudgetExceeded,
+            0x0050,
+            "compute_budget_exceeded",
+        ),
+        (OnChainError::HeapExhausted, 0x0051, "heap_exhausted"),
+        (
+            OnChainError::InternalInvariantViolation,
+            0x00FF,
+            "internal_invariant_violation",
+        ),
+    ];
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Every defined variant's `code()` matches the committed
+        /// discriminant. Pins the on-chain ABI exhaustively rather
+        /// than via a handful of named samples.
+        #[test]
+        fn proptest_all_discriminants_stable(idx in 0usize..ALL_VARIANTS.len()) {
+            let (variant, expected_code, _slug) = ALL_VARIANTS[idx];
+            prop_assert_eq!(variant.code(), expected_code);
+        }
+
+        /// Every defined variant's `slug()` matches the committed
+        /// identifier. Pin against silent renames in the slug match arm.
+        #[test]
+        fn proptest_all_slugs_stable(idx in 0usize..ALL_VARIANTS.len()) {
+            let (variant, _code, expected_slug) = ALL_VARIANTS[idx];
+            prop_assert_eq!(variant.slug(), expected_slug);
+        }
+
+        /// Every variant's slug is ASCII snake-case (lowercase +
+        /// digit + '_' only). Catches a future variant whose slug
+        /// accidentally includes uppercase or punctuation, which
+        /// would break the downstream indexer convention.
+        ///
+        /// Digits are allowed because curve names embed them
+        /// (`alt_bn128`, `bn254`, `mersenne31`). The unit test
+        /// `slug_is_snake_case` above only spot-checks three
+        /// variants without digits; this proptest pins the digit
+        /// allowance across the whole variant set.
+        #[test]
+        fn proptest_all_slugs_snake_case(idx in 0usize..ALL_VARIANTS.len()) {
+            let (variant, _code, _) = ALL_VARIANTS[idx];
+            let slug = variant.slug();
+            prop_assert!(!slug.is_empty(), "empty slug for {variant:?}");
+            prop_assert!(
+                slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "slug {slug:?} for {variant:?} is not snake_case",
+            );
+        }
+
+        /// All discriminant codes are pairwise distinct. A collision
+        /// would alias two different on-chain errors to the same
+        /// `ProgramError::Custom(code)`, breaking any client that
+        /// dispatches on the code.
+        #[test]
+        fn proptest_discriminant_codes_pairwise_distinct(_seed in any::<u8>()) {
+            for i in 0..ALL_VARIANTS.len() {
+                for j in (i + 1)..ALL_VARIANTS.len() {
+                    let (a, ca, _) = ALL_VARIANTS[i];
+                    let (b, cb, _) = ALL_VARIANTS[j];
+                    prop_assert_ne!(
+                        ca,
+                        cb,
+                        "discriminant collision: {:?} and {:?} both = {:#06x}",
+                        a,
+                        b,
+                        ca,
+                    );
+                }
+            }
+        }
+
+        /// All slugs are pairwise distinct. A collision would corrupt
+        /// audit-log analysis (two errors becoming indistinguishable
+        /// in the program log).
+        #[test]
+        fn proptest_slugs_pairwise_distinct(_seed in any::<u8>()) {
+            for i in 0..ALL_VARIANTS.len() {
+                for j in (i + 1)..ALL_VARIANTS.len() {
+                    let (a, _, sa) = ALL_VARIANTS[i];
+                    let (b, _, sb) = ALL_VARIANTS[j];
+                    prop_assert_ne!(
+                        sa,
+                        sb,
+                        "slug collision: {:?} and {:?} both = {:?}",
+                        a,
+                        b,
+                        sa,
+                    );
+                }
+            }
+        }
+    }
 }

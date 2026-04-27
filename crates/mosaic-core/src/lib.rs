@@ -54,9 +54,9 @@ pub mod proof_system;
 pub mod syscall;
 pub mod transcript;
 
-pub use error::{MosaicError, OnChainError};
 #[cfg(feature = "std")]
 pub use error::DiagnosticError;
+pub use error::{MosaicError, OnChainError};
 pub use proof_system::{ProofSystem, ProofSystemId};
 pub use syscall::SyscallBackend;
 pub use transcript::TranscriptHash;
