@@ -19,9 +19,16 @@ cargo-fuzz = true
 [dependencies]
 mosaic-core = { workspace = true, features = ["std", "host-backend"] }
 mosaic-groth16 = { workspace = true, features = ["std", "host-backend"] }
+mosaic-plonk = { workspace = true, features = ["std"] }
+mosaic-hyperplonk = { workspace = true, features = ["std"] }
+mosaic-halo2 = { workspace = true, features = ["std"] }
+mosaic-nova = { workspace = true, features = ["std"] }
+mosaic-stark = { workspace = true, features = ["std", "host-backend"] }
+mosaic-zk-primitives = { workspace = true, features = ["std", "host-backend"] }
 mosaic-serde = { workspace = true, features = ["std", "host-backend"] }
 libfuzzer-sys = { workspace = true }
 arbitrary = { workspace = true }
+ark-bn254 = { workspace = true, features = ["std"] }
 
 [[bin]]
 name = "fuzz_groth16_proof_bytes"
@@ -38,6 +45,40 @@ doc = false
 [[bin]]
 name = "fuzz_public_inputs"
 path = "fuzz_targets/fuzz_public_inputs.rs"
+test = false
+doc = false
+
+# ───────────────────────────────────────────────────────────────────────
+# Session 54 — Phase-2 / Phase-3 fuzz harness expansion
+# ───────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "fuzz_plonk_proof_bytes"
+path = "fuzz_targets/fuzz_plonk_proof_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_hyperplonk_proof_bytes"
+path = "fuzz_targets/fuzz_hyperplonk_proof_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_halo2_proof_bytes"
+path = "fuzz_targets/fuzz_halo2_proof_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_nova_proof_bytes"
+path = "fuzz_targets/fuzz_nova_proof_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_stark_proof_bytes"
+path = "fuzz_targets/fuzz_stark_proof_bytes.rs"
 test = false
 doc = false
 

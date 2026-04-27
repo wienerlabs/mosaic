@@ -3120,10 +3120,17 @@ name = "mosaic-fuzz"
 version = "0.8.1-audit-coverage"
 dependencies = [
  "arbitrary",
+ "ark-bn254 0.5.0",
  "libfuzzer-sys",
  "mosaic-core",
  "mosaic-groth16",
+ "mosaic-halo2",
+ "mosaic-hyperplonk",
+ "mosaic-nova",
+ "mosaic-plonk",
  "mosaic-serde",
+ "mosaic-stark",
+ "mosaic-zk-primitives",
 ]
 
 [[package]]
