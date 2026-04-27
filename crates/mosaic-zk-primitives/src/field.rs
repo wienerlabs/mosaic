@@ -259,6 +259,47 @@ pub fn decode_public_inputs(bytes: &[u8]) -> Result<Vec<Fr>, OnChainError> {
     Ok(out)
 }
 
+/// Compute the inner product `Σ_i a_i · b_i` of two equal-length Fr
+/// slices.
+///
+/// Returns `Err(PublicInputCountMismatch)` if the slices have
+/// different lengths. Empty slices yield `Fr::zero()` (vacuous
+/// empty sum).
+///
+/// ## Why a shared primitive
+///
+/// Multi-poly batched openings build a weighted sum
+/// `y_batched = Σ_i ν^i · e_i` over a list of claimed evaluations
+/// scaled by powers of the batching challenge. HyperPlonk
+/// (session 3e), Nova (session 22), and Halo2 (session 17) all
+/// implement this inline:
+///
+/// ```text
+/// // HyperPlonk:
+/// let mut y_batched = Fr::from(0u64);
+/// for i in 0..12 {
+///     y_batched += nu_powers[i] * e_i;
+/// }
+/// ```
+///
+/// Lifting the loop into one audit-grade helper removes 3 inline
+/// reduction sites + gives every future MSM-style weighted-sum
+/// site one centralized implementation.
+///
+/// ## Errors
+///
+/// - [`OnChainError::PublicInputCountMismatch`] — slice lengths
+///   differ.
+///
+/// Session 77 (post-v0.8.3): tenth shared primitive, joining the
+/// nine from sessions 21-72.
+pub fn fr_inner_product(a: &[Fr], b: &[Fr]) -> Result<Fr, OnChainError> {
+    if a.len() != b.len() {
+        return Err(OnChainError::PublicInputCountMismatch);
+    }
+    Ok(a.iter().zip(b.iter()).map(|(x, y)| *x * y).sum())
+}
+
 /// Compute the first `count` powers of `x`: `[1, x, x², …, x^(count-1)]`.
 ///
 /// Empty `count = 0` returns an empty vector. `count = 1` returns
@@ -756,6 +797,84 @@ mod tests {
             for p in &powers {
                 prop_assert_eq!(*p, Fr::one());
             }
+        }
+
+        // ───────────────────────────────────────────────────────────
+        // Session 77 — `fr_inner_product` properties
+        // ───────────────────────────────────────────────────────────
+
+        /// Empty slices yield `Fr::zero()` (vacuous empty sum).
+        #[test]
+        fn prop_inner_product_empty_is_zero(_seed in 0u64..=u64::MAX) {
+            let result = fr_inner_product(&[], &[]).unwrap();
+            prop_assert_eq!(result, Fr::zero());
+        }
+
+        /// Mismatched-length slices return `PublicInputCountMismatch`.
+        #[test]
+        fn prop_inner_product_mismatched_length_rejected(
+            seed in 0u64..=u64::MAX,
+            len_a in 0usize..=8,
+            len_b in 0usize..=8,
+        ) {
+            prop_assume!(len_a != len_b);
+            let mut rng = seeded_rng(seed);
+            let a: Vec<Fr> = (0..len_a).map(|_| Fr::rand(&mut rng)).collect();
+            let b: Vec<Fr> = (0..len_b).map(|_| Fr::rand(&mut rng)).collect();
+            prop_assert!(matches!(
+                fr_inner_product(&a, &b),
+                Err(OnChainError::PublicInputCountMismatch),
+            ));
+        }
+
+        /// Inner product matches the naive Σ a_i · b_i computation
+        /// for any equal-length pair. **The soundness invariant** that
+        /// justifies the lift: callers can replace inline weighted-sum
+        /// loops with `fr_inner_product` without changing the result.
+        #[test]
+        fn prop_inner_product_matches_naive(
+            seed in 0u64..=u64::MAX,
+            n in 0usize..=8,
+        ) {
+            let mut rng = seeded_rng(seed);
+            let a: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            let b: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            let mut naive = Fr::zero();
+            for i in 0..n {
+                naive += a[i] * b[i];
+            }
+            prop_assert_eq!(fr_inner_product(&a, &b).unwrap(), naive);
+        }
+
+        /// Commutative: `<a, b> == <b, a>`. Catches a future
+        /// asymmetric implementation that would silently change the
+        /// pairing semantics.
+        #[test]
+        fn prop_inner_product_commutative(
+            seed in 0u64..=u64::MAX,
+            n in 0usize..=8,
+        ) {
+            let mut rng = seeded_rng(seed);
+            let a: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            let b: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            prop_assert_eq!(
+                fr_inner_product(&a, &b).unwrap(),
+                fr_inner_product(&b, &a).unwrap(),
+            );
+        }
+
+        /// Inner product against the all-ones vector returns the sum
+        /// of the other slice. Pins the unit-vector case.
+        #[test]
+        fn prop_inner_product_with_ones_is_sum(
+            seed in 0u64..=u64::MAX,
+            n in 0usize..=8,
+        ) {
+            let mut rng = seeded_rng(seed);
+            let a: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            let ones: Vec<Fr> = (0..n).map(|_| Fr::one()).collect();
+            let expected: Fr = a.iter().copied().sum();
+            prop_assert_eq!(fr_inner_product(&a, &ones).unwrap(), expected);
         }
     }
 }

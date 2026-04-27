@@ -140,13 +140,19 @@ pub fn verify_batched_opening<B: SyscallBackend + ?Sized>(
     let c_batched = msm_g1(backend, &commits, &nu_powers_bytes)?;
 
     // 4. Batched evaluation value: Σ ν^i · e_i.
-    let mut y_batched = Fr::from(0u64);
-    for i in 0..12 {
-        let start = i * FR_LEN;
-        let end = start + FR_LEN;
-        let e_i = fr_from_canonical_bytes(&final_evals[start..end])?;
-        y_batched += nu_powers[i] * e_i;
-    }
+    //
+    // Session 77: lifted from inline weighted-sum loop to the
+    // shared `mosaic_zk_primitives::field::fr_inner_product`
+    // primitive. The 12 final-eval Fr values are decoded once into
+    // a Vec, then fed alongside `nu_powers` to the helper.
+    let evals: alloc::vec::Vec<Fr> = (0..12)
+        .map(|i| {
+            let start = i * FR_LEN;
+            let end = start + FR_LEN;
+            fr_from_canonical_bytes(&final_evals[start..end])
+        })
+        .collect::<Result<_, _>>()?;
+    let y_batched = mosaic_zk_primitives::field::fr_inner_product(&nu_powers, &evals)?;
 
     // 5. Compute the LHS G1 point of the pairing check:
     //    A1 = C_batched - y_batched · G1_generator + ξ · opening
