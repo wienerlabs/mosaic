@@ -5,6 +5,12 @@ on:
     paths:
       - "crates/mosaic-core/**"
       - "crates/mosaic-groth16/**"
+      - "crates/mosaic-plonk/**"
+      - "crates/mosaic-hyperplonk/**"
+      - "crates/mosaic-halo2/**"
+      - "crates/mosaic-nova/**"
+      - "crates/mosaic-stark/**"
+      - "crates/mosaic-zk-primitives/**"
       - "crates/mosaic-bench/**"
       - ".github/workflows/bench.yml"
   push:
@@ -12,23 +18,46 @@ on:
     paths:
       - "crates/mosaic-core/**"
       - "crates/mosaic-groth16/**"
+      - "crates/mosaic-plonk/**"
+      - "crates/mosaic-hyperplonk/**"
+      - "crates/mosaic-halo2/**"
+      - "crates/mosaic-nova/**"
+      - "crates/mosaic-stark/**"
+      - "crates/mosaic-zk-primitives/**"
       - "crates/mosaic-bench/**"
   workflow_dispatch:
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # Host-side criterion benches — both Groth16 (production) and
+  # Phase-3 scaffold-acceptance benches. Wall-clock numbers are the
+  # canary for CPU regressions before they hit on-chain CU.
+  # ─────────────────────────────────────────────────────────────────
   criterion:
     name: criterion (host)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bench:
+          - groth16_host
+          - phase3_host
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo bench -p mosaic-bench --bench groth16_host -- --output-format bencher | tee output.txt
+      - run: cargo bench -p mosaic-bench --bench ${{ matrix.bench }} -- --output-format bencher | tee output.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: criterion-output
+          name: criterion-output-${{ matrix.bench }}
           path: output.txt
 
+  # ─────────────────────────────────────────────────────────────────
+  # On-chain CU regression bench — drives the SBF program through
+  # solana-program-test and parses CU consumption from program logs.
+  # Hard-cap exceedance fails CI (ADR-0005); baseline drift logs a
+  # WARN and rolls into the report.
+  # ─────────────────────────────────────────────────────────────────
   bpf-cu:
     name: bpf-bench CU regression
     runs-on: ubuntu-latest
@@ -50,7 +79,8 @@ jobs:
         run: cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
       - name: Run CU regression bench (fails on ADR-0005 hard-cap breach)
         # bpf-bench exit codes:
-        #   0 = within baseline tolerance
+        #   0 = within baseline tolerance (or below first-run baselines for
+        #       the new Phase-3 systems whose baseline_cu is still 0)
         #   1 = hard cap exceeded (ADR-0005 breach)
         #   2 = infra error (fixture / artifact missing)
         run: cargo run --release -p mosaic-bench --bin bpf-bench

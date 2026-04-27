@@ -5,6 +5,12 @@ on:
     paths:
       - "crates/mosaic-core/**"
       - "crates/mosaic-groth16/**"
+      - "crates/mosaic-plonk/**"
+      - "crates/mosaic-hyperplonk/**"
+      - "crates/mosaic-halo2/**"
+      - "crates/mosaic-nova/**"
+      - "crates/mosaic-stark/**"
+      - "crates/mosaic-zk-primitives/**"
       - "crates/mosaic-fuzz/**"
       - ".github/workflows/fuzz.yml"
   schedule:
@@ -12,42 +18,87 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # PR mode — runs a representative subset (one harness per system
+  # surface) for ~5 minutes each. Keeps PR CI under ~30 minutes
+  # wall-clock while still exercising every system at least once.
+  # The full 23-target sweep runs nightly.
+  # ─────────────────────────────────────────────────────────────────
   fuzz-pr:
-    name: PR fuzz (10 min per harness)
+    name: PR fuzz (5 min per harness, representative subset)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         target:
+          # Phase-1 Groth16 (3 originals)
           - fuzz_groth16_proof_bytes
           - fuzz_vk_bytes
           - fuzz_public_inputs
+          # Phase-2 + Phase-3 representative subset (1 per system,
+          # combined-slot variant which exercises every parser path)
+          - fuzz_plonk_combined
+          - fuzz_hyperplonk_combined
+          - fuzz_halo2_combined
+          - fuzz_nova_combined
+          - fuzz_stark_combined
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-fuzz --locked
-      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600
+      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300
         working-directory: crates/mosaic-fuzz
 
+  # ─────────────────────────────────────────────────────────────────
+  # Nightly mode — full 23-target sweep, 1 hour per harness. Total
+  # wall-clock ≈ 23 hours across the matrix (parallel runners cap
+  # at GitHub's free-tier limit of 20 concurrent jobs, so the matrix
+  # finishes in ~1-2 batches).
+  # ─────────────────────────────────────────────────────────────────
   fuzz-nightly:
-    name: Nightly fuzz (4 hours per harness)
+    name: Nightly fuzz (60 min per harness, full inventory)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         target:
+          # Phase-1 Groth16 (3 originals)
           - fuzz_groth16_proof_bytes
           - fuzz_vk_bytes
           - fuzz_public_inputs
+          # Per-system proof-bytes (5)
+          - fuzz_plonk_proof_bytes
+          - fuzz_hyperplonk_proof_bytes
+          - fuzz_halo2_proof_bytes
+          - fuzz_nova_proof_bytes
+          - fuzz_stark_proof_bytes
+          # Per-system vk-bytes (5)
+          - fuzz_plonk_vk_bytes
+          - fuzz_hyperplonk_vk_bytes
+          - fuzz_halo2_vk_bytes
+          - fuzz_nova_vk_bytes
+          - fuzz_stark_vk_bytes
+          # Per-system public-inputs (5)
+          - fuzz_plonk_public_inputs
+          - fuzz_hyperplonk_public_inputs
+          - fuzz_halo2_public_inputs
+          - fuzz_nova_public_inputs
+          - fuzz_stark_public_inputs
+          # Combined-slot fuzzers (5)
+          - fuzz_plonk_combined
+          - fuzz_hyperplonk_combined
+          - fuzz_halo2_combined
+          - fuzz_nova_combined
+          - fuzz_stark_combined
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-fuzz --locked
-      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=14400
+      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=3600
         working-directory: crates/mosaic-fuzz
       - name: Upload corpus on failure
         if: failure()
