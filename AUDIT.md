@@ -3,6 +3,96 @@
 This file records the audit history of the Mosaic codebase. New entries are
 appended in reverse chronological order.
 
+For external review firms: start with
+[`docs/audit-coverage-runbook.md`](docs/audit-coverage-runbook.md)
+— it gives you the local-reproduce + extend recipes for every
+audit-coverage surface listed below.
+
+---
+
+## 2026-04-27 — v0.8.3-shared-primitive-lift release (sessions 60-68)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.8.3-shared-primitive-lift`](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.3-shared-primitive-lift) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Shared-primitive consolidation (sessions 63, 66) + consumer migrations (sessions 64, 65, 68) + CI workflow expansion (session 61) + audit-coverage runbook (session 70) |
+| Findings | Zero soundness regressions; one false positive caught + fixed inline (snake_case digit allowance, session 52) |
+| Status | ✅ Every BN254 polynomial-eval site and every BN254 pairing site in the workspace goes through one of the 8 audit-grade shared primitives |
+
+### What this milestone changes for an external auditor
+
+The workspace now exposes **8 shared primitives** in
+`mosaic-zk-primitives` covering Fr arithmetic, transcript challenge
+derivation, KZG opening LHS construction, generic pairing
+verification, and Horner polynomial evaluation. Every BN254 verifier
+in the workspace (mosaic-{groth16, plonk, hyperplonk, halo2, nova})
+calls into these primitives instead of inlining its own
+implementation. A future soundness-critical change (e.g. tighter
+G2 length validation, a different pairing return-code convention
+if Solana ever changes the alt_bn128 wire format) needs only one
+edit.
+
+CI now runs every sessions-47-59 bench + fuzz harness on every PR
+(representative subset, ~25 min wall-clock) and the full 23-target
+fuzz inventory nightly at 60 min/harness.
+
+### Lib test totals at v0.8.3
+
+  mosaic-core              16
+  mosaic-zk-primitives     74  (+10 since v0.8.2: horner + n-pair)
+  mosaic-groth16           26
+  mosaic-plonk             32
+  mosaic-hyperplonk        82
+  mosaic-halo2             75
+  mosaic-nova              59
+  mosaic-stark            117
+  mosaic-serde             23
+  mosaic-chunked           20
+  mosaic-sdk               13
+  mosaic-program            7
+  ─────────────────────  ───
+  total                   544
+
+### What this milestone does NOT change
+
+No on-chain ABI, behaviour, or wire-format change. The
+shared-primitive lifts are byte-identical refactors verified by
+the existing test suite remaining green across the migration
+commits.
+
+---
+
+## 2026-04-27 — v0.8.2-fuzz-bench-coverage release (sessions 47-59)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.8.2-fuzz-bench-coverage`](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.2-fuzz-bench-coverage) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Bench + fuzz dimension extension of the v0.8.1 audit-coverage milestone |
+| Findings | One false positive caught + fixed inline (HyperPlonk anchor + XOR cancellation, session 58); zero soundness regressions |
+| Status | ✅ All 6 production verifiers covered by both BPF CU bench AND host criterion bench AND a 23-target fuzz harness inventory |
+
+The v0.8.2 milestone has three measurement-surface dimensions:
+
+| Surface | Coverage |
+|---|---|
+| Property tests | 137 across 12 crates (sessions 36-52) |
+| BPF CU bench | 7 systems (sessions 47, 49) |
+| Host criterion bench | 5 systems (session 51) |
+| Fuzz harnesses | 23 targets across 6 systems (sessions 54-59) |
+
+Per-system fuzz inventory at v0.8.2 (carried into v0.8.3):
+
+  Phase-1 Groth16 (3 original)
+    fuzz_groth16_proof_bytes, fuzz_vk_bytes, fuzz_public_inputs
+
+  Phase-2 KZG-PLONK (4)
+    fuzz_plonk_{proof_bytes, vk_bytes, public_inputs, combined}
+
+  Phase-3 HyperPlonk + Halo2 + Nova + FRI-STARK (16)
+    fuzz_<system>_{proof_bytes, vk_bytes, public_inputs, combined}
+
 ---
 
 ## 2026-04-27 — Workspace-wide proptest sweep (sessions 37-42, post-v0.8.0)
