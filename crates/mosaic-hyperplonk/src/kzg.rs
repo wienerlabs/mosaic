@@ -103,10 +103,16 @@ pub fn verify_batched_opening<B: SyscallBackend + ?Sized>(
     let nu = fr_from_canonical_bytes(&nu_bytes)?;
 
     // 2. Compute ν^i for i=0..12 — the MSM scalars.
-    let mut nu_powers = [Fr::one(); 12];
-    for i in 1..12 {
-        nu_powers[i] = nu_powers[i - 1] * nu;
-    }
+    //
+    // Session 72: lifted from an inline accumulator loop to the
+    // shared `mosaic_zk_primitives::field::powers_of` primitive,
+    // which is property-tested against `fr_pow_u64` at every index
+    // (prop_powers_of_matches_pow). The shared helper returns a
+    // `Vec<Fr>` rather than an array, so the byte conversion
+    // collects into a Vec — same total allocation as the array
+    // version because `nu_powers_bytes` was already array-of-arrays
+    // for `msm_g1`'s `&[[u8; 32]]` signature.
+    let nu_powers = mosaic_zk_primitives::field::powers_of(&nu, 12);
     let nu_powers_bytes: [[u8; 32]; 12] = {
         let mut out = [[0u8; 32]; 12];
         for i in 0..12 {

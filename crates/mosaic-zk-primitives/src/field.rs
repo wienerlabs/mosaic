@@ -259,6 +259,47 @@ pub fn decode_public_inputs(bytes: &[u8]) -> Result<Vec<Fr>, OnChainError> {
     Ok(out)
 }
 
+/// Compute the first `count` powers of `x`: `[1, x, x², …, x^(count-1)]`.
+///
+/// Empty `count = 0` returns an empty vector. `count = 1` returns
+/// `[Fr::one()]` (the empty product).
+///
+/// ## Why a shared primitive
+///
+/// Multi-poly batched openings (Halo2 session 17, HyperPlonk session
+/// 3e, Nova Spartan-batched 5-way session 22) all build a vector of
+/// `ν^i` coefficients to weight a list of commitments / evaluations
+/// before the MSM + pairing step. HyperPlonk's `kzg.rs` currently
+/// inlines:
+///
+/// ```text
+/// let mut nu_powers = [Fr::one(); 12];
+/// for i in 1..12 {
+///     nu_powers[i] = nu_powers[i - 1] * nu;
+/// }
+/// ```
+///
+/// Lifting the loop into a shared helper centralizes the audit
+/// surface. Each consumer can either use the returned `Vec<Fr>` for
+/// MSM weighting or feed it back through `fr_horner_eval` for the
+/// equivalent polynomial-evaluation form.
+///
+/// Session 72 (post-v0.8.3): ninth shared primitive, joining the
+/// eight from sessions 21-66.
+#[must_use]
+pub fn powers_of(x: &Fr, count: usize) -> Vec<Fr> {
+    let mut out = Vec::with_capacity(count);
+    if count == 0 {
+        return out;
+    }
+    out.push(Fr::one());
+    for i in 1..count {
+        let next = out[i - 1] * x;
+        out.push(next);
+    }
+    out
+}
+
 /// Evaluate a polynomial via the Horner scheme.
 ///
 /// Given coefficients `[a_0, a_1, …, a_{n-1}]` representing
@@ -648,6 +689,73 @@ mod tests {
             let one = Fr::one();
             let expected: Fr = coeffs.iter().copied().sum();
             prop_assert_eq!(fr_horner_eval(&coeffs, &one), expected);
+        }
+
+        // ───────────────────────────────────────────────────────────
+        // Session 72 — `powers_of` properties
+        // ───────────────────────────────────────────────────────────
+
+        /// `powers_of(x, count)` returns a vector of length `count`.
+        /// Empty case returns empty vector.
+        #[test]
+        fn prop_powers_of_length(
+            x_seed in 0u64..=u64::MAX,
+            count in 0usize..=16,
+        ) {
+            let x = Fr::from(x_seed);
+            let powers = powers_of(&x, count);
+            prop_assert_eq!(powers.len(), count);
+        }
+
+        /// `powers_of(x, count)[0] == Fr::one()` for any `count >= 1`.
+        /// Pins the empty-product convention.
+        #[test]
+        fn prop_powers_of_first_is_one(
+            x_seed in 0u64..=u64::MAX,
+            count in 1usize..=16,
+        ) {
+            let x = Fr::from(x_seed);
+            let powers = powers_of(&x, count);
+            prop_assert_eq!(powers[0], Fr::one());
+        }
+
+        /// Recurrence: `powers[i] == powers[i-1] · x` for `1 ≤ i < count`.
+        /// Pins the multiplicative-step invariant.
+        #[test]
+        fn prop_powers_of_recurrence(
+            x_seed in 0u64..=u64::MAX,
+            count in 2usize..=16,
+        ) {
+            let x = Fr::from(x_seed);
+            let powers = powers_of(&x, count);
+            for i in 1..count {
+                prop_assert_eq!(powers[i], powers[i - 1] * x);
+            }
+        }
+
+        /// Closed form: `powers[i] == x^i` (cross-checked against
+        /// `fr_pow_u64`). Catches any future implementation that
+        /// silently computes the wrong sequence (e.g. off-by-one
+        /// or `x^(i+1)` shift).
+        #[test]
+        fn prop_powers_of_matches_pow(
+            x_seed in 0u64..=u64::MAX,
+            count in 0usize..=16,
+        ) {
+            let x = Fr::from(x_seed);
+            let powers = powers_of(&x, count);
+            for (i, p) in powers.iter().enumerate() {
+                prop_assert_eq!(*p, fr_pow_u64(&x, i as u64));
+            }
+        }
+
+        /// Identity case: `powers_of(Fr::one(), count) == [1, 1, …, 1]`.
+        #[test]
+        fn prop_powers_of_one_is_all_ones(count in 0usize..=16) {
+            let powers = powers_of(&Fr::one(), count);
+            for p in &powers {
+                prop_assert_eq!(*p, Fr::one());
+            }
         }
     }
 }
