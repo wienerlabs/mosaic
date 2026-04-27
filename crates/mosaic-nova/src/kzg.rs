@@ -158,12 +158,13 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
     let w_eval = fr_from_canonical_bytes(proof.w_eval)?;
 
     // v-powers: [1, v, v², v³, v⁴].
-    let one = Fr::from(1u64);
-    let v1 = *v;
-    let v2 = v1 * v1;
-    let v3 = v2 * v1;
-    let v4 = v3 * v1;
-    let v_powers: [Fr; 5] = [one, v1, v2, v3, v4];
+    //
+    // Session 74: lifted from a hand-unrolled accumulator to the
+    // shared `mosaic_zk_primitives::field::powers_of` primitive
+    // (added in session 72). Returns a `Vec<Fr>` of length 5 here;
+    // we materialize the byte form into a fixed-size array for
+    // `msm_g1`'s `&[[u8; 32]; 5]` call site.
+    let v_powers = mosaic_zk_primitives::field::powers_of(v, 5);
     let scalars: [[u8; FR_LEN]; 5] = [
         fr_to_canonical_bytes(&v_powers[0]),
         fr_to_canonical_bytes(&v_powers[1]),

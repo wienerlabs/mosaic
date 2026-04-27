@@ -293,13 +293,15 @@ pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
     }
 
     // v-powers: [1, v, v^2, …, v^{m-1}] for the longer side.
+    //
+    // Session 74: lifted from an inline accumulator loop to the
+    // shared `mosaic_zk_primitives::field::powers_of` primitive
+    // (added in session 72). Property-tested against `fr_pow_u64`
+    // at every index (prop_powers_of_matches_pow), so this call
+    // site inherits the same audit-grade soundness pin every
+    // other ν-powers consumer in the workspace gets.
     let max_len = commits_xi.len().max(commits_xi_omega.len());
-    let mut v_powers = Vec::with_capacity(max_len);
-    let mut acc = Fr::from(1u64);
-    for _ in 0..max_len {
-        v_powers.push(acc);
-        acc *= v;
-    }
+    let v_powers = mosaic_zk_primitives::field::powers_of(v, max_len);
 
     // MSM at ξ: C_batched = Σ v^i · commits_xi[i]; y_batched = Σ v^i · evals_xi[i].
     let scalars_xi: Vec<[u8; FR_LEN]> = v_powers[..commits_xi.len()]
