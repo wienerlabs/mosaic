@@ -82,5 +82,39 @@ path = "fuzz_targets/fuzz_stark_proof_bytes.rs"
 test = false
 doc = false
 
+# ───────────────────────────────────────────────────────────────────────
+# Session 55 — Per-system VK fuzz harnesses
+# ───────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "fuzz_plonk_vk_bytes"
+path = "fuzz_targets/fuzz_plonk_vk_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_hyperplonk_vk_bytes"
+path = "fuzz_targets/fuzz_hyperplonk_vk_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_halo2_vk_bytes"
+path = "fuzz_targets/fuzz_halo2_vk_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_nova_vk_bytes"
+path = "fuzz_targets/fuzz_nova_vk_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_stark_vk_bytes"
+path = "fuzz_targets/fuzz_stark_vk_bytes.rs"
+test = false
+doc = false
+
 [lints]
 workspace = true
