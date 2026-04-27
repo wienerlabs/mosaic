@@ -3040,7 +3040,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-bench"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "anyhow",
  "ark-bn254 0.5.0",
@@ -3063,7 +3063,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-chunked"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "borsh 1.6.1",
  "bytemuck",
@@ -3073,7 +3073,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-core"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
@@ -3098,7 +3098,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-differential-tests"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
@@ -3117,7 +3117,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-fuzz"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "arbitrary",
  "ark-bn254 0.5.0",
@@ -3135,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-groth16"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "arrayvec",
  "borsh 1.6.1",
@@ -3147,7 +3147,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-halo2"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
@@ -3159,7 +3159,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-hyperplonk"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
@@ -3171,7 +3171,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-nova"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
@@ -3183,7 +3183,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-plonk"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
@@ -3198,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-program"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "borsh 1.6.1",
  "mosaic-chunked",
@@ -3218,7 +3218,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-sdk"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "anyhow",
  "borsh 1.6.1",
@@ -3241,7 +3241,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-serde"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",
@@ -3263,7 +3263,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-stark"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "mosaic-core",
  "proptest",
@@ -3271,7 +3271,7 @@ dependencies = [
 
 [[package]]
 name = "mosaic-zk-primitives"
-version = "0.8.3-shared-primitive-lift"
+version = "0.8.4-primitive-consumer-coverage"
 dependencies = [
  "ark-bn254 0.5.0",
  "ark-ec 0.5.0",

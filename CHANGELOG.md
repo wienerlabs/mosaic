@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned beyond v0.8.4-primitive-consumer-coverage
+
+- Fixture-driven differential testing for the four Phase-3 bodies
+  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  **Last named pre-audit gap on the Phase-3 verifier track.**
+- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
+  layout breaking change).
+- mosaic-nova::kzg::verify_spartan_batched_opening migration to
+  fr_inner_product (deferred from session 77; the explicit 5-term
+  unrolled chain is more legible inline at N=5 than the helper
+  call's collect-into-Vec dance).
+- External security audit commission.
+
+## [0.8.4-primitive-consumer-coverage] — 2026-04-28
+
+**Primitive consolidation reaches the production verifier surface.**
+Sessions 60-78 add 4 more shared primitives (7-10), migrate every
+remaining inline weighted-sum / Horner / pairing site in the
+workspace to the shared helpers, ship a runbook for external
+auditors, wire the v0.8.2 bench + fuzz harnesses into CI matrices,
+and add the 8th chunked-handlers integration test that proves the
+verifier dispatch path is reached end-to-end from the chunked
+upload protocol.
+
+| Surface | v0.8.3 | v0.8.4 |
+|---|---|---|
+| Shared primitives | 8 | **10** |
+| Consumer migrations using shared helpers | 0 explicit | 7 sites |
+| chunked-handlers integration tests | 7 | 8 |
+| Audit runbook | — | `docs/audit-coverage-runbook.md` |
+| CI matrix coverage | partial | full (PR + nightly) |
+
+The 4 new shared primitives:
+- `fr_horner_eval` (s63) — polynomial Horner evaluation
+- `verify_n_pair_pairing` (s66) — N-pair generic pairing
+- `powers_of` (s72) — geometric sequence
+- `fr_inner_product` (s77) — dot product
+
+Combined with the 6 from sessions 21-35
+(fr_from_be_bytes_reduced, fr_be_from_u64,
+derive_fr_challenge, verify_two_pair_pairing,
+commitment_minus_scalar_g1, compute_kzg_opening_lhs), the
+mosaic-zk-primitives crate now ships **10 audit-grade helpers**.
+
+The 7 consumer migrations (sessions 64, 65, 68, 72, 74×2, 77, 78×2):
+- mosaic-hyperplonk::sumcheck::eval_at → fr_horner_eval (s64)
+- mosaic-halo2::vanishing::compute_t_from_chunks → fr_horner_eval (s65)
+- mosaic-hyperplonk::kzg pairing → verify_two_pair_pairing (s68)
+- mosaic-hyperplonk::kzg ν-powers → powers_of (s72)
+- mosaic-halo2::kzg ν-powers → powers_of (s74)
+- mosaic-nova::kzg ν-powers → powers_of (s74)
+- mosaic-hyperplonk::kzg y-batched → fr_inner_product (s77)
+- mosaic-halo2::kzg y-batched (×2 sites) → fr_inner_product (s78)
+
+After the migrations every BN254 polynomial-eval site, every BN254
+pairing site, every BN254 ν-powers site, and every BN254 weighted-
+sum site in the workspace goes through one of the 10 audit-grade
+shared primitives.
+
+No on-chain ABI or behaviour changes — refactor + tests + CI
+infrastructure + docs only.
+
 ### Added — sessions 70-72 (post-v0.8.3)
 
 #### Session 70 — audit-coverage runbook
@@ -96,7 +158,9 @@ happy-path test (genuine Groth16 proof + VK uploaded via chunked
 flow); that's deferred to the fixture-driven differential testing
 item.
 
-### Planned beyond v0.8.3-shared-primitive-lift
+### (Planning block superseded by v0.8.4 release entry above.)
+
+#### v0.8.3 planning block (kept for historical reference)
 
 - Fixture-driven differential testing for the four Phase-3 bodies
   (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
