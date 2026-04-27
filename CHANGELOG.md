@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — sessions 70-72 (post-v0.8.3)
+
+#### Session 70 — audit-coverage runbook
+`docs/audit-coverage-runbook.md` — entry point for an external
+review firm that wants to reproduce the Mosaic audit-coverage
+matrix locally and extend it with their own tests. Covers:
+- Coverage matrix at v0.8.3 with per-surface session ranges.
+- Local-reproduce recipes (property tests, BPF CU bench, host
+  criterion bench, fuzz harnesses).
+- Extension recipes (add a new property test, fuzz harness,
+  bench, shared primitive).
+- Three explicit caveats about what the coverage does NOT pin
+  (real prover output, full Phase-3 cryptographic soundness,
+  chunked dispatch integration).
+
+#### Session 71 — AUDIT.md release entries
+Recorded both v0.8.2 and v0.8.3 release milestones in AUDIT.md
+with per-release scope, findings, and lib-test counts. Top-of-
+file pointer to `docs/audit-coverage-runbook.md` so external
+reviewers find the local-reproduce workflow immediately.
+
+#### Session 72 — `powers_of` 9th shared primitive + first consumer
+`mosaic_zk_primitives::field::powers_of` lifts the multi-poly
+batched-opening ν-powers accumulator loop that surfaces in
+HyperPlonk session 3e, Halo2 session 17, and Nova Spartan
+session 22.
+
++5 proptest tests (mosaic-zk-primitives lib total 74 → 79):
+- prop_powers_of_length / prop_powers_of_first_is_one /
+  prop_powers_of_recurrence / prop_powers_of_one_is_all_ones
+- prop_powers_of_matches_pow — closed-form cross-check against
+  `fr_pow_u64`. The soundness invariant that justifies the lift.
+
+First consumer migration: `mosaic_hyperplonk::kzg` replaces an
+inline 11-step accumulator loop with `powers_of(&nu, 12)`. 82
+hyperplonk lib tests still pass; byte-identical refactor.
+
+After session 72 the shared-primitive count is **9 helpers** in
+mosaic-zk-primitives.
+
 ### Planned beyond v0.8.3-shared-primitive-lift
 
 - Fixture-driven differential testing for the four Phase-3 bodies
