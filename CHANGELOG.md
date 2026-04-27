@@ -169,16 +169,72 @@ After sessions 54-56 the fuzz harness inventory is **14 targets**:
 - 5 per-system vk_bytes (same five)
 - 1 combined-slot Halo2
 
-### Planned beyond session 56
+### Added — sessions 58-59 (fuzz harness completion)
+
+#### Session 58 — per-system public-input fuzzers
+Added 5 more harnesses targeting the public-input parser of each
+Phase-2 / Phase-3 system: `fuzz_{plonk, hyperplonk, halo2, nova,
+stark}_public_inputs`. Each pins its system's PI invariants:
+
+- PLONK + HyperPlonk + Halo2 + Nova: `len % 32 == 0`,
+  `len / 32 == vk.n_public`, every 32-byte chunk in Fr range.
+- STARK: length must be a multiple of
+  `field_id.field_elem_bytes()` (8 for Goldilocks, 4 for
+  BabyBear / Mersenne31).
+
+Halo2's PI feeds round-1 of the Fiat-Shamir absorb sequence — a
+regression in PI parsing would cascade into every challenge and
+break the verifier's identity check. The session-37 challenges
+proptests already pin the cascade for valid PI; this fuzzer pins
+the rejection path for invalid PI across the full byte-buffer space.
+
+#### Session 59 — combined-slot fuzzers for the remaining 4 systems
+Adds combined-slot harnesses for PLONK, HyperPlonk, Nova, and
+FRI-STARK, completing the cross-slot interaction surface coverage
+the session-56 Halo2 template demonstrated. Refactored the
+`split_three_slots` helper out of the Halo2 dump-target into
+`mosaic-fuzz::lib` so all 5 combined-fuzzer binaries share the
+same length-prefix parser.
+
+Each new combined fuzzer pins system-specific cross-checks that
+single-slot harnesses can't reach (because both slots must lie
+in a coordinated way for the bug to surface):
+
+- PLONK: 744 B / 768 B fixed envelopes (narrowest cross-slot
+  surface; value is in catching parser confusions between the
+  two envelopes).
+- HyperPlonk: `vk.num_variables == proof.sumcheck_rounds`
+  cross-check.
+- Nova: `vk.variant == proof.variant` (FoldingVariant 3-way) +
+  `vk.n_public == proof.n_public == public_inputs.len() / 32`.
+- STARK: richest cross-check fingerprint of any verifier:
+  `vk.field_id == proof.field_id`,
+  `vk.trace_log_height == proof.trace_log_height`,
+  `vk.trace_width == proof.trace_width`,
+  `vk.log_blowup == proof.log_blowup`. A coordinated lie on any
+  of these would route the verifier to a wrong-shape Merkle path
+  or FRI fold chain.
+
+After sessions 58-59 the fuzz harness inventory is **23 targets**
+across all 6 production verifier surfaces:
+
+  Phase-1 Groth16 (3 original)
+    fuzz_groth16_proof_bytes, fuzz_vk_bytes, fuzz_public_inputs
+
+  Phase-2 KZG-PLONK (4)
+    fuzz_plonk_{proof_bytes, vk_bytes, public_inputs, combined}
+
+  Phase-3 HyperPlonk + Halo2 + Nova + FRI-STARK (16)
+    fuzz_hyperplonk_{proof_bytes, vk_bytes, public_inputs, combined}
+    fuzz_halo2_{proof_bytes, vk_bytes, public_inputs, combined}
+    fuzz_nova_{proof_bytes, vk_bytes, public_inputs, combined}
+    fuzz_stark_{proof_bytes, vk_bytes, public_inputs, combined}
+
+### Planned beyond session 59
 
 - Fixture-driven differential testing for the four Phase-3 bodies
   (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
   **Last named pre-audit gap on the Phase-3 verifier track.**
-- Per-system public-input fuzzers (PLONK + Phase-3) — near-trivial
-  follow-up to session 55, deferred only to keep commit boundaries
-  clean.
-- Combined-slot fuzzers for the remaining 4 systems (HyperPlonk,
-  Nova, STARK, PLONK) — copy of the session-56 Halo2 template.
 - `mosaic-program::chunked::dispatch` integration tests via
   `solana-program-test` with synthesized `AccountInfo`.
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical

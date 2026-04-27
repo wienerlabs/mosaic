@@ -37,40 +37,11 @@
 
 use libfuzzer_sys::fuzz_target;
 use mosaic_core::{proof_system::ProofSystem, syscall::host::HostBackend};
+use mosaic_fuzz::split_three_slots;
 use mosaic_halo2::Halo2KzgBn254;
 
-fn split_three(data: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
-    let mut cursor = data;
-
-    // vk_len (u16 LE).
-    if cursor.len() < 2 {
-        return None;
-    }
-    let (lp, rest) = cursor.split_at(2);
-    let vk_len = u16::from_le_bytes([lp[0], lp[1]]) as usize;
-    if rest.len() < vk_len {
-        return None;
-    }
-    let (vk, rest) = rest.split_at(vk_len);
-    cursor = rest;
-
-    // proof_len (u16 LE).
-    if cursor.len() < 2 {
-        return None;
-    }
-    let (lp, rest) = cursor.split_at(2);
-    let proof_len = u16::from_le_bytes([lp[0], lp[1]]) as usize;
-    if rest.len() < proof_len {
-        return None;
-    }
-    let (proof, public_inputs) = rest.split_at(proof_len);
-
-    // Whatever remains is the public-inputs slot.
-    Some((vk, proof, public_inputs))
-}
-
 fuzz_target!(|data: &[u8]| {
-    let Some((vk, proof, public_inputs)) = split_three(data) else {
+    let Some((vk, proof, public_inputs)) = split_three_slots(data) else {
         return;
     };
     let backend = HostBackend::new();

@@ -160,5 +160,33 @@ path = "fuzz_targets/fuzz_stark_public_inputs.rs"
 test = false
 doc = false
 
+# ───────────────────────────────────────────────────────────────────────
+# Session 59 — combined-slot fuzzers for the remaining 4 systems
+# ───────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "fuzz_plonk_combined"
+path = "fuzz_targets/fuzz_plonk_combined.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_hyperplonk_combined"
+path = "fuzz_targets/fuzz_hyperplonk_combined.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_nova_combined"
+path = "fuzz_targets/fuzz_nova_combined.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_stark_combined"
+path = "fuzz_targets/fuzz_stark_combined.rs"
+test = false
+doc = false
+
 [lints]
 workspace = true

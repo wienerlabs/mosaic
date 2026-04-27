@@ -60,6 +60,47 @@ impl Default for SharedFixtures {
     }
 }
 
+/// Split a libfuzzer input buffer into three length-prefixed slots
+/// `(vk_bytes, proof_bytes, public_inputs_bytes)`. Returns `None` if
+/// any length prefix runs off the end of the buffer.
+///
+/// Layout: `[vk_len: u16 LE] [vk_bytes] [proof_len: u16 LE]
+/// [proof_bytes] [public_inputs ...]`
+///
+/// Used by `fuzz_*_combined.rs` (sessions 56, 59) to explore a
+/// coordinate in `(vk, proof, pi)` space rather than the 1-D slice
+/// the per-slot harnesses cover. See the rationale comment in
+/// `fuzz_halo2_combined.rs` for why combined fuzzers complement
+/// the single-slot variants.
+pub fn split_three_slots(data: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let cursor = data;
+
+    // vk_len (u16 LE).
+    if cursor.len() < 2 {
+        return None;
+    }
+    let (lp, rest) = cursor.split_at(2);
+    let vk_len = u16::from_le_bytes([lp[0], lp[1]]) as usize;
+    if rest.len() < vk_len {
+        return None;
+    }
+    let (vk, rest) = rest.split_at(vk_len);
+
+    // proof_len (u16 LE).
+    if rest.len() < 2 {
+        return None;
+    }
+    let (lp, rest) = rest.split_at(2);
+    let proof_len = u16::from_le_bytes([lp[0], lp[1]]) as usize;
+    if rest.len() < proof_len {
+        return None;
+    }
+    let (proof, public_inputs) = rest.split_at(proof_len);
+
+    // Whatever remains is the public-inputs slot.
+    Some((vk, proof, public_inputs))
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Session 54 — Phase-2 + Phase-3 fixture builders.
 //

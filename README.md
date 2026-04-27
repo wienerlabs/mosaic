@@ -59,7 +59,7 @@ frozen CU budgets.
 | Property-test coverage (proptest, sessions 36-52) | ✅ 534 lib tests across 12 crates (+137 proptest in audit-coverage sweep) | — |
 | BPF CU regression bench (`bpf-bench`) | ✅ 7 systems: Groth16 (single + batch), KZG-PLONK, HyperPlonk, Halo2, Nova, FRI-STARK | — |
 | Host criterion bench (wall-clock baseline) | ✅ 5 systems: Groth16, HyperPlonk, Halo2, Nova, FRI-STARK | — |
-| Fuzz harnesses (sessions 54-56) | ✅ 14 targets across all 6 production verifiers (5 proof-bytes, 5 vk-bytes, 1 combined-slot Halo2, 3 original Groth16) | — |
+| Fuzz harnesses (sessions 54-59) | ✅ 23 targets across all 6 production verifiers (5 proof-bytes + 5 vk-bytes + 5 public-inputs + 5 combined-slot for PLONK + 4 Phase-3, plus 3 original Groth16) | — |
 | External audit | 🔴 Not yet commissioned | — |
 
 See [`AUDIT.md`](AUDIT.md) for audit history and [`SECURITY.md`](SECURITY.md)
