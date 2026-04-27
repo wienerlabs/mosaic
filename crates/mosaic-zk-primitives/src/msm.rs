@@ -175,20 +175,66 @@ pub fn verify_two_pair_pairing<B: SyscallBackend + ?Sized>(
     p2_g1: &[u8; 64],
     p2_g2: &[u8],
 ) -> Result<(), OnChainError> {
+    verify_n_pair_pairing(backend, &[(p1_g1, p1_g2), (p2_g1, p2_g2)])
+}
+
+/// `N`-pair generic version of [`verify_two_pair_pairing`].
+///
+/// Asserts `Π e(g1_i, g2_i) == 1` (the multiplicative identity in
+/// G_T) for an arbitrary number of pairs. Empty input is the
+/// vacuously-true case and returns `Ok(())` without invoking the
+/// syscall.
+///
+/// ## Why an N-pair primitive
+///
+/// Halo2's multi-poly batched opening (session 17) and Nova's
+/// Spartan-batched 5-way opening (session 22) both build a
+/// dynamically-sized list of `(G1, G2)` pairs and feed it to
+/// `alt_bn128_pairing` in a single syscall. Both currently
+/// inline the loop that concatenates pair bytes into the syscall
+/// input buffer. This primitive lifts the loop into one
+/// audit-grade helper.
+///
+/// The 2-pair version stays in the workspace for the canonical
+/// KZG opening pattern (which is hot-path enough that a slice-
+/// allocation-free signature matters). Callers with a known-2
+/// pair count should prefer `verify_two_pair_pairing`; callers
+/// with a dynamic pair count should use this one.
+///
+/// Session 66 (post-v0.8.2): eighth shared primitive.
+///
+/// ## Errors
+///
+/// - [`OnChainError::InvalidPointEncoding`] — any G2 byte slice
+///   length differs from 128.
+/// - [`OnChainError::PairingCheckFailed`] — the syscall returned
+///   the multiplicative-identity check as `false`.
+/// - Syscall errors from the backend.
+pub fn verify_n_pair_pairing<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    pairs: &[(&[u8; 64], &[u8])],
+) -> Result<(), OnChainError> {
     const G2_LEN: usize = 128;
-    if p1_g2.len() != G2_LEN || p2_g2.len() != G2_LEN {
-        return Err(OnChainError::InvalidPointEncoding);
+    if pairs.is_empty() {
+        // Empty product is the multiplicative identity; vacuously
+        // satisfies `Π e(g1_i, g2_i) == 1`. We return `Ok(())`
+        // without a syscall round-trip.
+        return Ok(());
     }
-    let mut input: Vec<u8> = Vec::with_capacity(2 * (64 + G2_LEN));
-    input.extend_from_slice(p1_g1);
-    input.extend_from_slice(p1_g2);
-    input.extend_from_slice(p2_g1);
-    input.extend_from_slice(p2_g2);
-    let result = backend.alt_bn128_group_op(
-        AltBn128Op::Pairing,
-        InputEndianness::BigEndian,
-        &input,
-    )?;
+    // Pre-validate G2 lengths before any syscall work — a bad G2
+    // mid-batch would otherwise leak partial syscall cost.
+    for &(_, g2) in pairs {
+        if g2.len() != G2_LEN {
+            return Err(OnChainError::InvalidPointEncoding);
+        }
+    }
+    let mut input: Vec<u8> = Vec::with_capacity(pairs.len() * (64 + G2_LEN));
+    for &(g1, g2) in pairs {
+        input.extend_from_slice(g1);
+        input.extend_from_slice(g2);
+    }
+    let result =
+        backend.alt_bn128_group_op(AltBn128Op::Pairing, InputEndianness::BigEndian, &input)?;
     if result.len() != 32 || result[31] != 0x01 {
         return Err(OnChainError::PairingCheckFailed);
     }
@@ -258,11 +304,7 @@ pub fn scalar_mul_g1<B: SyscallBackend + ?Sized>(
     let mut input = Vec::with_capacity(96);
     input.extend_from_slice(point);
     input.extend_from_slice(scalar);
-    let out = backend.alt_bn128_group_op(
-        AltBn128Op::G1Mul,
-        InputEndianness::BigEndian,
-        &input,
-    )?;
+    let out = backend.alt_bn128_group_op(AltBn128Op::G1Mul, InputEndianness::BigEndian, &input)?;
     if out.len() != 64 {
         return Err(OnChainError::InternalInvariantViolation);
     }
@@ -287,11 +329,7 @@ pub fn add_g1<B: SyscallBackend + ?Sized>(
     let mut input = Vec::with_capacity(128);
     input.extend_from_slice(a);
     input.extend_from_slice(b);
-    let out = backend.alt_bn128_group_op(
-        AltBn128Op::G1Add,
-        InputEndianness::BigEndian,
-        &input,
-    )?;
+    let out = backend.alt_bn128_group_op(AltBn128Op::G1Add, InputEndianness::BigEndian, &input)?;
     if out.len() != 64 {
         return Err(OnChainError::InternalInvariantViolation);
     }
@@ -309,8 +347,9 @@ pub fn add_g1<B: SyscallBackend + ?Sized>(
 pub fn negate_g1(point: &[u8; 64]) -> [u8; 64] {
     /// BN254 base-field modulus `q` in big-endian.
     const BN254_FQ_MODULUS_BE: [u8; 32] = [
-        0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
-        0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
+        0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58,
+        0x5d, 0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c,
+        0xfd, 0x47,
     ];
     let mut out = *point;
     let y_slice = &mut out[32..64];
@@ -351,7 +390,9 @@ mod tests {
     /// Encode an arkworks G1Affine into canonical 64-byte BE form matching
     /// our wire layout: `x ‖ y`, each 32 bytes big-endian.
     fn ark_g1_to_canonical(point: &G1Affine) -> [u8; 64] {
-        let (x, y) = point.xy().unwrap_or((ark_bn254::Fq::default(), ark_bn254::Fq::default()));
+        let (x, y) = point
+            .xy()
+            .unwrap_or((ark_bn254::Fq::default(), ark_bn254::Fq::default()));
         let mut x_be = x.into_bigint().to_bytes_le();
         x_be.resize(32, 0);
         x_be.reverse();
@@ -418,13 +459,13 @@ mod tests {
         let mut rng = seeded_rng(2);
 
         for n_points in [2_usize, 3, 5, 8] {
-            let points_proj: Vec<G1Projective> =
-                (0..n_points).map(|_| G1Projective::rand(&mut rng)).collect();
+            let points_proj: Vec<G1Projective> = (0..n_points)
+                .map(|_| G1Projective::rand(&mut rng))
+                .collect();
             let scalars_fr: Vec<Fr> = (0..n_points).map(|_| Fr::rand(&mut rng)).collect();
 
             let points_aff: Vec<G1Affine> = points_proj.iter().map(|p| p.into_affine()).collect();
-            let points_bytes: Vec<[u8; 64]> =
-                points_aff.iter().map(ark_g1_to_canonical).collect();
+            let points_bytes: Vec<[u8; 64]> = points_aff.iter().map(ark_g1_to_canonical).collect();
             let points_refs: Vec<&[u8]> = points_bytes.iter().map(|b| &b[..]).collect();
             let scalars_bytes: Vec<[u8; 32]> = scalars_fr.iter().map(ark_fr_to_be32).collect();
 
@@ -506,10 +547,7 @@ mod tests {
             b
         };
         let r = commitment_minus_scalar_g1(&backend, &g1, &one_bytes).unwrap();
-        assert_eq!(
-            r, G1_ZERO,
-            "G1 - 1·G1 must reduce to the identity point"
-        );
+        assert_eq!(r, G1_ZERO, "G1 - 1·G1 must reduce to the identity point");
     }
 
     // ---- compute_kzg_opening_lhs ----
@@ -529,8 +567,7 @@ mod tests {
         let y_bytes = fr_to_bytes_be(&y_fr);
         let xi_bytes = fr_to_bytes_be(&xi_fr);
 
-        let via_primitive = compute_kzg_opening_lhs(&backend, &c, &y_bytes, &xi_bytes, &w)
-            .unwrap();
+        let via_primitive = compute_kzg_opening_lhs(&backend, &c, &y_bytes, &xi_bytes, &w).unwrap();
 
         // Manual composition.
         let c_minus_y = commitment_minus_scalar_g1(&backend, &c, &y_bytes).unwrap();
@@ -593,6 +630,68 @@ mod tests {
         let short_g2 = [0u8; 127];
         let g2 = crate::g1_consts::g2_generator_bytes();
         let r = verify_two_pair_pairing(&backend, &g1, &short_g2, &g1, &g2);
+        assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
+    }
+
+    // ---- verify_n_pair_pairing (session 66) ----
+
+    #[test]
+    fn verify_n_pair_pairing_empty_is_vacuous_ok() {
+        // Empty product is the multiplicative identity; vacuously
+        // satisfies `Π e(g1_i, g2_i) == 1`. No syscall round-trip.
+        let backend = HostBackend::new();
+        let r = verify_n_pair_pairing(&backend, &[]);
+        assert!(
+            r.is_ok(),
+            "empty pair list should be vacuously OK, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn verify_n_pair_pairing_two_pair_matches_specialized() {
+        // `verify_two_pair_pairing` now delegates to
+        // `verify_n_pair_pairing(&[(p1, p2), (p3, p4)])`. Pin the
+        // result equivalence on the canceling-pair case.
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let neg_g1 = negate_g1(&g1);
+        let g2 = crate::g1_consts::g2_generator_bytes();
+        let via_specialized = verify_two_pair_pairing(&backend, &g1, &g2, &neg_g1, &g2);
+        let via_generic = verify_n_pair_pairing(&backend, &[(&g1, &g2[..]), (&neg_g1, &g2[..])]);
+        assert_eq!(via_specialized.is_ok(), via_generic.is_ok());
+    }
+
+    #[test]
+    fn verify_n_pair_pairing_three_pair_canceling() {
+        // e(G1, G2) · e(G1, G2) · e(-2·G1, G2) = e(G1+G1-2·G1, G2)
+        //                                       = e(0, G2) = 1.
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let g2 = crate::g1_consts::g2_generator_bytes();
+        let two_bytes = {
+            let mut b = [0u8; 32];
+            b[31] = 2;
+            b
+        };
+        let two_g1 = scalar_mul_g1(&backend, &g1, &two_bytes).unwrap();
+        let neg_two_g1 = negate_g1(&two_g1);
+        let r = verify_n_pair_pairing(
+            &backend,
+            &[(&g1, &g2[..]), (&g1, &g2[..]), (&neg_two_g1, &g2[..])],
+        );
+        assert!(
+            r.is_ok(),
+            "3-pair canceling combination should pass, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn verify_n_pair_pairing_rejects_wrong_g2_length() {
+        let backend = HostBackend::new();
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let g2 = crate::g1_consts::g2_generator_bytes();
+        let short_g2 = [0u8; 127];
+        let r = verify_n_pair_pairing(&backend, &[(&g1, &g2[..]), (&g1, &short_g2[..])]);
         assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
     }
 
