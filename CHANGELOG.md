@@ -47,6 +47,55 @@ hyperplonk lib tests still pass; byte-identical refactor.
 After session 72 the shared-primitive count is **9 helpers** in
 mosaic-zk-primitives.
 
+#### Session 73 — docs sweep
+Recorded sessions 70-72 in CHANGELOG + README; lib test total
+bumped 544 → 549, "+147 proptest + shared-primitive coverage" →
+"+152 proptest + 9 shared primitives lifted", new "Audit runbook"
+row in the README Status table.
+
+#### Session 74 — `powers_of` consumer migrations (halo2 + nova)
+Two more consumer migrations for the session-72 `powers_of`
+primitive:
+
+- mosaic-halo2::kzg::verify_two_point_batched_opening — replaces
+  inline 2-line accumulator loop with `powers_of(v, max_len)`
+  for the asymmetric ξ vs ξω commitment counts.
+- mosaic-nova::kzg::verify_spartan_batched_opening — replaces
+  hand-unrolled `[v⁰, v¹, v², v³, v⁴]` chain with
+  `powers_of(v, 5)`. The byte-conversion stage stays unrolled
+  because msm_g1's signature wants `&[[u8; 32]; 5]`.
+
+Both migrations byte-identical at the Fr level. After session 74
+the `powers_of` consumer audit:
+- mosaic-hyperplonk::kzg (session 72)
+- mosaic-halo2::kzg::verify_two_point (session 74)
+- mosaic-nova::kzg::verify_spartan (session 74)
+
+No more BN254-Fr ν-powers inline sites in the workspace.
+
+#### Session 75 — chunked commit_and_verify dispatch path coverage
+8th chunked-handlers integration test, closing the "chunked
+dispatch reaches verifier hand-off" gap on the audit-coverage
+planned-beyond list. Drives the full lifecycle —
+init → append → finalize-with-correct-hash → dispatch_verify —
+and asserts the error surfaces from dispatch_verify (not from
+the chunked state machine).
+
+Test approach
+- Sham VK account (16 bytes, structurally too small) reaches
+  the verifier dispatch step.
+- Asserts `Custom(2)` == `OnChainError::VerifyingKeyLengthMismatch`
+  in the program log, proving the verifier hand-off works and
+  the verifier surface fails closed on the structurally invalid
+  VK.
+
+Test inventory in chunked_handlers.rs after session 75: 8 tests.
+
+The remaining gap on the chunked path is a *real* commit_and_verify
+happy-path test (genuine Groth16 proof + VK uploaded via chunked
+flow); that's deferred to the fixture-driven differential testing
+item.
+
 ### Planned beyond v0.8.3-shared-primitive-lift
 
 - Fixture-driven differential testing for the four Phase-3 bodies
