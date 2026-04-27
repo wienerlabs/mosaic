@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned beyond v0.8.5-msm-helper-coverage
+
+- Fixture-driven differential testing for the four Phase-3 bodies
+  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
+  **Last named pre-audit gap on the Phase-3 verifier track.**
+- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
+  layout breaking change).
+- External security audit commission.
+
+## [0.8.5-msm-helper-coverage] — 2026-04-28
+
+**Last batched-opening inline pattern lifted.** Sessions 80-83
+add the 11th shared primitive (`msm_g1_fr`), migrate every
+remaining inline weighted-MSM site in the workspace, and finish
+the deferred-from-s77 `fr_inner_product` Nova migration.
+
+After v0.8.5 the batched-opening stage in HyperPlonk + Halo2 +
+Nova is fully delegated to the shared primitives — five primitive
+calls cover what used to be ~40 lines of inline arithmetic per
+verifier:
+
+```text
+let nu_powers = powers_of(&nu, n);
+let c_batched = msm_g1_fr(backend, points, &nu_powers)?;
+let y_batched = fr_inner_product(&nu_powers[..len], evals)?;
+let a1        = compute_kzg_opening_lhs(backend, &c_batched, ...)?;
+verify_two_pair_pairing(backend, &a1, ...)?;
+```
+
+| Surface | v0.8.4 | v0.8.5 |
+|---|---|---|
+| Shared primitives | 10 | **11** |
+| msm_g1_fr consumer migrations | 0 | 4 sites |
+| fr_inner_product consumer migrations | 3 | 4 sites |
+
+The 4 new msm_g1_fr consumer sites:
+- mosaic-hyperplonk::kzg                              (s82)
+- mosaic-halo2::kzg::verify_two_point ξ-side          (s83)
+- mosaic-halo2::kzg::verify_two_point ξω-side         (s83)
+- mosaic-nova::kzg::verify_spartan                    (s83)
+
+The 1 new fr_inner_product consumer (deferred from s77):
+- mosaic-nova::kzg::verify_spartan y-batched          (s80)
+
+No on-chain ABI or behaviour changes — refactor + tests + docs
+only. Every byte-identical refactor verified by the existing
+test suite remaining green across the migration commits.
+
 ### Added — sessions 78-80 (post-v0.8.4)
 
 #### Session 78 — Halo2 fr_inner_product migration (×2 sites)
@@ -38,14 +86,7 @@ Every BN254 weighted-sum site in the workspace now goes through
 the shared primitive. The "Planned beyond v0.8.4" block loses
 its third item.
 
-### Planned beyond sessions 78-80
-
-- Fixture-driven differential testing for the four Phase-3 bodies
-  (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
-  **Last named pre-audit gap on the Phase-3 verifier track.**
-- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
-  layout breaking change).
-- External security audit commission.
+### (Sessions 78-80 planning block superseded by v0.8.5 release entry above.)
 
 ## [0.8.4-primitive-consumer-coverage] — 2026-04-28
 

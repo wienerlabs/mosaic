@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.8.4-primitive-consumer-coverage](https://img.shields.io/badge/release-v0.8.4--primitive--consumer--coverage-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.4-primitive-consumer-coverage)
+[![Release: v0.8.5-msm-helper-coverage](https://img.shields.io/badge/release-v0.8.5--msm--helper--coverage-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.8.5-msm-helper-coverage)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
