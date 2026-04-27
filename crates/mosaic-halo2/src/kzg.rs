@@ -304,15 +304,18 @@ pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
     let v_powers = mosaic_zk_primitives::field::powers_of(v, max_len);
 
     // MSM at ξ: C_batched = Σ v^i · commits_xi[i]; y_batched = Σ v^i · evals_xi[i].
+    // Session 78: y-batched weighted sums lifted to the shared
+    // `mosaic_zk_primitives::field::fr_inner_product` primitive
+    // (added in session 77). Both ξ and ξω sides use the same
+    // per-side prefix of `v_powers` to weight the corresponding
+    // evals slice.
     let scalars_xi: Vec<[u8; FR_LEN]> = v_powers[..commits_xi.len()]
         .iter()
         .map(fr_to_canonical_bytes)
         .collect();
     let c_xi_batched = msm_g1(backend, commits_xi, &scalars_xi)?;
-    let mut y_xi_batched = Fr::from(0u64);
-    for (i, e) in evals_xi.iter().enumerate() {
-        y_xi_batched += v_powers[i] * e;
-    }
+    let y_xi_batched =
+        mosaic_zk_primitives::field::fr_inner_product(&v_powers[..evals_xi.len()], evals_xi)?;
 
     // MSM at ξω.
     let scalars_xi_omega: Vec<[u8; FR_LEN]> = v_powers[..commits_xi_omega.len()]
@@ -320,10 +323,10 @@ pub fn verify_two_point_opening_multipoly<B: SyscallBackend + ?Sized>(
         .map(fr_to_canonical_bytes)
         .collect();
     let c_xi_omega_batched = msm_g1(backend, commits_xi_omega, &scalars_xi_omega)?;
-    let mut y_xi_omega_batched = Fr::from(0u64);
-    for (i, e) in evals_xi_omega.iter().enumerate() {
-        y_xi_omega_batched += v_powers[i] * e;
-    }
+    let y_xi_omega_batched = mosaic_zk_primitives::field::fr_inner_product(
+        &v_powers[..evals_xi_omega.len()],
+        evals_xi_omega,
+    )?;
 
     // From here, the pairing reduction matches session-16 exactly,
     // substituting the batched (C, y) pairs for the single-commit
