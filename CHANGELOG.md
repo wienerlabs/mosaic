@@ -67,7 +67,63 @@ After sessions 47-49 `bpf-bench` covers all 6 productionish
 verifier surfaces (Groth16 single + batch, KZG-PLONK, HyperPlonk,
 Halo2, Nova, FRI-STARK).
 
-### Planned beyond sessions 47-49
+### Added — sessions 50-52 (audit-coverage extension, second wave)
+
+#### Session 50 — docs sweep
+Recorded sessions 47-49 in CHANGELOG + README Status table; added
+new "BPF CU regression bench" row covering the 7 measured systems.
+
+#### Session 51 — host-side Criterion benches for Phase-3
+`crates/mosaic-bench/benches/phase3_host.rs` — new file with 4
+criterion targets (HyperPlonk, Halo2, Nova, FRI-STARK) using the
+same scaffold-acceptance fixtures as the bpf-bench counterparts.
+Wall-clock numbers from this bench are the canary for host-side
+CPU regressions before they hit on-chain CU; criterion's noise
+floor lets a real algorithmic change surface distinctly from
+JIT/codegen drift on the runner.
+
+After sessions 47-51 the host-side criterion bench coverage is
+groth16 + 4 Phase-3 = 5 systems.
+
+#### Session 52 — proptest coverage for the workspace foundation
+`mosaic-core` had 0 proptest pre-session — the workspace's
+foundation crate (trait hierarchy, error taxonomy, proof-system
+discriminant enum) was the last unaudited surface. Added 10
+property-based tests pinning the two consensus-critical ABI
+structures:
+
+- `proof_system.rs` (+5 proptest):
+  * `known_byte_round_trip` — every byte 0x01..=0x08 round-trips
+  * `unknown_byte_rejected` — exhaustive over u8 ∉ {0x01..=0x08}
+  * `from_byte_is_pure` — same byte → same variant across two calls
+  * `slugs_pairwise_distinct` — no two variants share a slug
+  * `discriminants_pairwise_distinct` — no two variants share a byte
+
+- `error.rs` (+5 proptest, all backed by an `ALL_VARIANTS` const
+  table that external indexers can copy as the ABI source of truth):
+  * `all_discriminants_stable` — every variant's `code()` matches
+    the committed value (pin the on-chain ABI exhaustively)
+  * `all_slugs_stable` — every variant's `slug()` matches the
+    committed identifier
+  * `all_slugs_snake_case` — ASCII lowercase + digit + '_' allowed
+    (digit allowance pinned because curve names embed digits like
+    `alt_bn128`, `bn254`, `mersenne31`)
+  * `discriminant_codes_pairwise_distinct` — no aliasing
+  * `slugs_pairwise_distinct` — no aliasing
+
+Yan kazanım — false positive caught + documented inline:
+- `is_ascii_lowercase()` snake-case check rejected curve-name
+  digits. Surfaced by proptest shrinking on the first run at
+  idx = 23 (AltBn128SyscallFailed). Corrected to allow
+  `is_ascii_digit()`, with explicit comment explaining why.
+
+Sessions 37-52 cumulative: every host-callable workspace crate
+under audit-grade proptest coverage. **Total +137 proptest tests
+across 12 crates** (was +111 across 9 after session 42; +9 in
+session 47 are bpf-bench `SystemTarget` entries; +11 in session 48,
++11 in session 51 + criterion benches; +10 in session 52).
+
+### Planned beyond session 52
 
 - Fixture-driven differential testing for the four Phase-3 bodies
   (Espresso HyperPlonk, PSE Halo2, sonobe Nova, Plonky3 STARK).
