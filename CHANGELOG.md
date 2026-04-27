@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — sessions 61-64 (post-v0.8.2)
+
+#### Session 61 — CI workflow expansion
+`.github/workflows/{fuzz,bench}.yml` rewritten to invoke every
+sessions-47-59 bench + fuzz harness:
+- fuzz.yml — PR mode runs a representative 8-target subset
+  (1 per system, combined-slot variant) at 5 min/harness;
+  nightly runs the full 23-target sweep at 60 min/harness.
+- bench.yml — criterion job is now a matrix over
+  `[groth16_host, phase3_host]` with per-bench artifact uploads.
+- Both workflows' `paths:` triggers expanded to all five
+  Phase-2/3 verifier crates plus mosaic-zk-primitives.
+
+#### Session 63 — `fr_horner_eval` 7th shared primitive
+`mosaic-zk-primitives::field::fr_horner_eval` lifts the polynomial
+Horner-evaluation pattern out of every Phase-3 verifier's inline
+sumcheck/identity code into a single audit-grade helper. Joins the
+existing six shared primitives extracted in sessions 21-35.
+
++6 proptest tests (mosaic-zk-primitives lib total 64 → 70):
+- `prop_horner_matches_naive_eval` — Horner equals
+  Σ a_i · x^i for any polynomial up to degree 8 and any in-range
+  Fr challenge. **The soundness invariant** that justifies the
+  lift.
+- `prop_horner_empty_is_zero`, `prop_horner_constant_polynomial`,
+  `prop_horner_linear_polynomial`,
+  `prop_horner_at_zero_returns_constant`,
+  `prop_horner_at_one_returns_sum`.
+
+#### Session 64 — first `fr_horner_eval` consumer migration
+`mosaic-hyperplonk::sumcheck::RoundPolynomial::eval_at` migrated
+from an inline Horner loop to `fr_horner_eval`. All 82 hyperplonk
+lib tests still pass; the migration is byte-identical at the Fr
+level. Tracked as the first of 5+ in-tree consumer sites that
+will gradually move to the shared primitive.
+
 ### Planned beyond v0.8.2-fuzz-bench-coverage
 
 - Fixture-driven differential testing for the four Phase-3 bodies

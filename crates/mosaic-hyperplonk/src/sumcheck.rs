@@ -103,14 +103,16 @@ impl RoundPolynomial {
 
     /// Evaluate `p(x) = c_0 + c_1·x + c_2·x²` at an arbitrary point
     /// using Horner's rule: `((c_2 · x) + c_1) · x + c_0`.
+    ///
+    /// Session 64: lifted from an inline Horner loop to the shared
+    /// `mosaic_zk_primitives::field::fr_horner_eval` primitive (added
+    /// in session 63). The shared primitive is property-tested
+    /// against a naive sum-of-products implementation, giving this
+    /// call site the same audit-grade soundness pin every other
+    /// Phase-3 sumcheck/identity evaluator will get once they migrate.
     #[must_use]
     pub fn eval_at(&self, x: &Fr) -> Fr {
-        let mut acc = self.coeffs[2];
-        acc *= x;
-        acc += self.coeffs[1];
-        acc *= x;
-        acc += self.coeffs[0];
-        acc
+        mosaic_zk_primitives::field::fr_horner_eval(&self.coeffs, x)
     }
 }
 
