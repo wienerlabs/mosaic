@@ -181,11 +181,22 @@ pub fn verify_spartan_batched_opening<B: SyscallBackend + ?Sized>(
     ];
     let c_batched = msm_g1(backend, &commits, &scalars)?;
 
-    let y_batched = v_powers[0] * a_eval
-        + v_powers[1] * b_eval
-        + v_powers[2] * c_eval
-        + v_powers[3] * e_eval
-        + v_powers[4] * w_eval;
+    // Session 80: lifted from a hand-unrolled 5-term weighted sum
+    // to the shared `mosaic_zk_primitives::field::fr_inner_product`
+    // primitive (added in session 77). The Hadamard-relation
+    // evaluations are collected into a temporary Vec so the helper's
+    // slice signature applies; this gives Nova the same audit-grade
+    // soundness pin every other workspace y-batched site received
+    // in sessions 77 + 78.
+    //
+    // Note: byte-identical at the Fr level. The deferred-from-session-
+    // 77 rationale was "explicit form is more legible at N=5" — true
+    // for someone scanning the verifier mid-debug, but the
+    // centralization argument wins for an external auditor reading
+    // the same y_batched pattern across HyperPlonk, Halo2 (×2 sites),
+    // and now Nova.
+    let evals: alloc::vec::Vec<Fr> = alloc::vec![a_eval, b_eval, c_eval, e_eval, w_eval];
+    let y_batched = mosaic_zk_primitives::field::fr_inner_product(&v_powers, &evals)?;
 
     // Session-35: consolidated LHS construction.
     //   A1 = C_batched - y_batched·G1 + ξ·W_ξ
