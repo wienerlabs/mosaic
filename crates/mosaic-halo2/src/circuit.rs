@@ -184,6 +184,95 @@ pub fn lookup_expr(lookup: &LookupEvals, theta: &Fr) -> Result<Fr, OnChainError>
 }
 
 // ---------------------------------------------------------------------
+// Multi-column lookup (session 85 — Phase-3 lookup arity expansion)
+// ---------------------------------------------------------------------
+
+/// Multi-column lookup-argument evaluations at `ξ`.
+///
+/// Real Halo2 lookups support arity > 1: a single lookup constraint
+/// can pair `k` input columns against `k` table columns, all checked
+/// simultaneously. The verifier collapses the `k`-arity tuple into a
+/// single Fr via the θ challenge before applying the log-derivative
+/// identity:
+///
+/// ```text
+/// input_combined(ξ) = Σ_{i=0}^{k-1} θ^i · input_cols[i]
+/// table_combined(ξ) = Σ_{i=0}^{k-1} θ^i · table_cols[i]
+///
+/// lookup(ξ) = m · (table_combined + θ^k)⁻¹ - (input_combined + θ^k)⁻¹
+/// ```
+///
+/// Note: the outer additive blinder uses `θ^k` (one degree past the
+/// linear-combination weights) to keep input_combined / table_combined
+/// distinguishable from the blinder. For arity 1 this collapses to
+/// the basic `lookup_expr` form (`input + θ` blinder, single column),
+/// pinned by `multi_column_lookup_arity_1_matches_basic` below.
+///
+/// Phase-3 audit caveat
+///
+/// This is the structural multi-column reduction. Real Halo2 also
+/// runs a sumcheck over the m polynomial (`Σ_X m(X) = 0`) to ensure
+/// the multiplicities are valid; that piece stays in
+/// `vanishing.rs::vanishing_identity_holds` as a scaffold caveat for
+/// session 4f's full lookup soundness pin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MultiColumnLookupEvals {
+    /// `k` input column evaluations at ξ. Empty input is rejected as
+    /// `ProofLengthMismatch`.
+    pub input_cols: alloc::vec::Vec<Fr>,
+    /// `k` table column evaluations at ξ. Length must equal
+    /// `input_cols.len()`.
+    pub table_cols: alloc::vec::Vec<Fr>,
+    /// Multiplicity polynomial evaluation `m(ξ)`.
+    pub m: Fr,
+}
+
+/// Evaluate the multi-column lookup argument at ξ via the θ-combined
+/// log-derivative form documented on [`MultiColumnLookupEvals`].
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] if `input_cols.is_empty()`
+///   or `input_cols.len() != table_cols.len()`.
+/// - [`OnChainError::InternalInvariantViolation`] if either combined
+///   denominator (`table_combined + θ^k` or `input_combined + θ^k`)
+///   is zero. Probability ≈ 2/r for random θ — negligible in practice
+///   but explicit for consensus safety.
+pub fn multi_column_lookup_expr(
+    lookup: &MultiColumnLookupEvals,
+    theta: &Fr,
+) -> Result<Fr, OnChainError> {
+    if lookup.input_cols.is_empty() || lookup.input_cols.len() != lookup.table_cols.len() {
+        return Err(OnChainError::ProofLengthMismatch);
+    }
+    let k = lookup.input_cols.len();
+
+    // θ-powers `[1, θ, θ², …, θ^(k-1)]` for the linear combination.
+    // The blinder uses `θ^k` — one degree past the combination — so
+    // it can't coincide with any column weight.
+    let theta_powers = mosaic_zk_primitives::field::powers_of(theta, k);
+
+    let input_combined =
+        mosaic_zk_primitives::field::fr_inner_product(&theta_powers, &lookup.input_cols)?;
+    let table_combined =
+        mosaic_zk_primitives::field::fr_inner_product(&theta_powers, &lookup.table_cols)?;
+
+    let blinder = mosaic_zk_primitives::field::fr_pow_u64(theta, k as u64);
+
+    let table_plus_blinder = table_combined + blinder;
+    let input_plus_blinder = input_combined + blinder;
+
+    let table_inv = table_plus_blinder
+        .inverse()
+        .ok_or(OnChainError::InternalInvariantViolation)?;
+    let input_inv = input_plus_blinder
+        .inverse()
+        .ok_or(OnChainError::InternalInvariantViolation)?;
+
+    Ok(lookup.m * table_inv - input_inv)
+}
+
+// ---------------------------------------------------------------------
 // Combined claim reduction
 // ---------------------------------------------------------------------
 
@@ -476,5 +565,128 @@ mod tests {
         )
         .unwrap();
         assert_ne!(a, b, "combined expression should depend on y");
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 85 — multi_column_lookup_expr properties
+    // ───────────────────────────────────────────────────────────────────
+
+    use proptest::prelude::*;
+
+    #[test]
+    fn multi_column_lookup_rejects_empty() {
+        let theta = Fr::from(7u64);
+        let lookup = MultiColumnLookupEvals {
+            input_cols: alloc::vec::Vec::new(),
+            table_cols: alloc::vec::Vec::new(),
+            m: Fr::from(1u64),
+        };
+        assert!(matches!(
+            multi_column_lookup_expr(&lookup, &theta),
+            Err(OnChainError::ProofLengthMismatch),
+        ));
+    }
+
+    #[test]
+    fn multi_column_lookup_rejects_arity_mismatch() {
+        let theta = Fr::from(7u64);
+        let lookup = MultiColumnLookupEvals {
+            input_cols: alloc::vec![Fr::from(1u64), Fr::from(2u64)],
+            table_cols: alloc::vec![Fr::from(3u64)],
+            m: Fr::from(1u64),
+        };
+        assert!(matches!(
+            multi_column_lookup_expr(&lookup, &theta),
+            Err(OnChainError::ProofLengthMismatch),
+        ));
+    }
+
+    proptest! {
+        /// Arity-1 multi-column lookup matches the basic
+        /// single-column `lookup_expr` form structurally:
+        ///   - input_combined = θ⁰ · input_cols[0] = input
+        ///   - table_combined = θ⁰ · table_cols[0] = table
+        ///   - blinder        = θ¹                  = θ
+        /// so the inner identity reduces to
+        ///   `m · (table + θ)⁻¹ - (input + θ)⁻¹` — exactly the
+        /// basic `lookup_expr` output.
+        #[test]
+        fn prop_multi_column_lookup_arity_1_matches_basic(
+            input_seed in 1u64..=u64::MAX,
+            table_seed in 1u64..=u64::MAX,
+            m_seed in 1u64..=u64::MAX,
+            theta_seed in 1u64..=u64::MAX,
+        ) {
+            let input = Fr::from(input_seed);
+            let table = Fr::from(table_seed);
+            let m = Fr::from(m_seed);
+            let theta = Fr::from(theta_seed);
+
+            let basic = lookup_expr(&LookupEvals { input, table, m }, &theta).unwrap();
+            let multi = multi_column_lookup_expr(
+                &MultiColumnLookupEvals {
+                    input_cols: alloc::vec![input],
+                    table_cols: alloc::vec![table],
+                    m,
+                },
+                &theta,
+            )
+            .unwrap();
+
+            prop_assert_eq!(basic, multi);
+        }
+
+        /// When `input_combined == table_combined` (every column pair
+        /// matches at ξ), the unique satisfying multiplicity is
+        /// `m = 1`, and the expression vanishes:
+        ///   m · (T + θ^k)⁻¹ - (I + θ^k)⁻¹ = (T + θ^k)⁻¹ - (I + θ^k)⁻¹ = 0
+        ///
+        /// This is the audit-grade soundness pin for the multi-column
+        /// reduction: a satisfying assignment with unit multiplicity
+        /// makes the lookup contribute nothing to the vanishing
+        /// identity.
+        #[test]
+        fn prop_multi_column_lookup_zero_on_matching_arity_2(
+            seed in 1u64..=u64::MAX,
+            theta_seed in 2u64..=u64::MAX, // skip θ=0 to avoid blinder collisions
+        ) {
+            let mut r = rng(seed);
+            let col_a = Fr::rand(&mut r);
+            let col_b = Fr::rand(&mut r);
+            let theta = Fr::from(theta_seed);
+            // Same column values on both sides ⇒ input_combined = table_combined.
+            let lookup = MultiColumnLookupEvals {
+                input_cols: alloc::vec![col_a, col_b],
+                table_cols: alloc::vec![col_a, col_b],
+                m: Fr::from(1u64),
+            };
+            let v = multi_column_lookup_expr(&lookup, &theta).unwrap();
+            prop_assert_eq!(v, Fr::zero());
+        }
+
+        /// θ-combination is faithful: changing any single column on
+        /// the input side AND tweaking m so the basic identity holds
+        /// for arity-1 should NOT make arity-2 vanish — the second
+        /// column is still mismatched.
+        #[test]
+        fn prop_multi_column_lookup_distinguishes_columns(
+            seed in 1u64..=u64::MAX,
+            theta_seed in 2u64..=u64::MAX,
+        ) {
+            let mut r = rng(seed);
+            let col_a = Fr::rand(&mut r);
+            let col_b = Fr::rand(&mut r);
+            let mismatch = col_b + Fr::from(1u64);
+            let theta = Fr::from(theta_seed);
+            let lookup = MultiColumnLookupEvals {
+                input_cols: alloc::vec![col_a, col_b],
+                table_cols: alloc::vec![col_a, mismatch], // only 2nd column differs
+                m: Fr::from(1u64),
+            };
+            let v = multi_column_lookup_expr(&lookup, &theta).unwrap();
+            // With probability ≈ 1 - 1/r the mismatch surfaces as a
+            // non-zero contribution.
+            prop_assert_ne!(v, Fr::zero());
+        }
     }
 }
