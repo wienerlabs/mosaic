@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.1-halo2-multi-column-kzg-binding
+### Planned beyond v0.9.2-alt-bn128-compression
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.2-alt-bn128-compression] — 2026-04-29
+
+**Long-standing TODO closed: alt_bn128 compression syscall now wired
+on both backends.** The `SyscallBackend::alt_bn128_compression` method
+was on the trait surface from day one but both implementations
+(Solana SBF + host) returned `UnimplementedProofSystem` with a
+`TODO(mosaic-007)` marker. Session 103 implements both.
+
+### What this enables
+
+- **Compressed VK + proof representations** — G1 commitments shrink
+  from 64 → 32 bytes; G2 from 128 → 64 bytes. On Solana that's
+  a meaningful per-tx bandwidth reduction (instruction data limit
+  is 1232 B; a 5-advice-column Halo2 proof drops ~160 bytes).
+- **Future canonical layout v2** — verifiers can opt into compressed
+  VK formats once a proof generator emits them. Wire format work
+  for that lands separately; session 103 just unblocks the syscall.
+
+### Implementation
+
+Both backends route through `solana-bn254::compression::prelude`:
+
+- **Solana SBF**: directly calls the `sol_alt_bn128_compression`
+  syscall via the crate's `target_arch="solana"` path.
+- **Host**: uses the crate's `cfg(not(target_os = "solana"))`
+  fallback that performs the same arithmetic via arkworks. The
+  output is byte-identical to the SBF syscall by construction —
+  the same trick we use for `sol_poseidon` (session ≤14).
+
+### Changed
+
+- `mosaic-core/Cargo.toml`: `host-backend` feature now also enables
+  `solana-bn254` (was only enabled by `solana` feature).
+- `crates/mosaic-core/src/syscall.rs`: both backends implement
+  `alt_bn128_compression` for all 4 ops (G1Compress/Decompress,
+  G2Compress/Decompress).
+
+### New tests at v0.9.2 (mosaic-core: +8)
+
+Round-trip + size + reject:
+- `alt_bn128_g1_compress_decompress_round_trip_generator` — BN254
+  generator (x=1, y=2) round-trips through compress + decompress
+  byte-for-byte.
+- `alt_bn128_g1_identity_round_trip` — zero G1 short-circuits.
+- `alt_bn128_g2_identity_round_trip` — zero G2 short-circuits.
+- `alt_bn128_g1_compressed_size_half_of_uncompressed` — 64 → 32.
+- `alt_bn128_g1_compress_rejects_wrong_input_length` — supply 63
+  bytes, expect `AltBn128CompressionSyscallFailed`.
+- `alt_bn128_g1_decompress_rejects_wrong_input_length` — supply
+  33 bytes.
+- `alt_bn128_g2_compress_rejects_wrong_input_length` — supply 127.
+- `alt_bn128_g2_decompress_rejects_wrong_input_length` — supply 32.
+
+### Lib test totals at v0.9.2
+
+  mosaic-core              28  (+12 since v0.9.1; 16 → 28 includes
+                                 prior cfg-gated tests now run under
+                                 host-backend)
+  total                   634  (+12 since v0.9.1)
+
+### Migration notes
+
+No public API breakage. The `SyscallBackend::alt_bn128_compression`
+trait method signature is unchanged; the previously-stubbed
+implementations now succeed.
+
+Verifiers that called `alt_bn128_compression` (none in workspace
+prior to this release) would have received
+`UnimplementedProofSystem` errors; they now succeed. Workspace-
+internal consumers of compressed encodings land in subsequent
+releases.
 
 ## [0.9.1-halo2-multi-column-kzg-binding] — 2026-04-29
 

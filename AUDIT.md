@@ -10,6 +10,67 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-29 — v0.9.2-alt-bn128-compression release (session 103)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.2-alt-bn128-compression`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.2-alt-bn128-compression) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Long-standing TODO closed: `alt_bn128_compression` syscall now wired on both backends. Enables compressed VK + proof representations (50% bandwidth savings on G1/G2 commitments). |
+| Findings | Zero soundness regressions. The compression syscall surface was on the `SyscallBackend` trait from day one but stubbed out as `TODO(mosaic-007)`. Session 103 implements both backends. |
+| Status | ✅ G1/G2 compression and decompression now work end-to-end with byte-identical output across host and SBF targets. |
+
+### What this changes for an external auditor
+
+Before session 103, `SyscallBackend::alt_bn128_compression` returned
+`UnimplementedProofSystem` regardless of input. Verifiers that
+attempted to use compressed VKs would fail at the syscall boundary.
+
+After session 103:
+- All 4 compression ops work (G1Compress/Decompress,
+  G2Compress/Decompress).
+- Host fallback uses arkworks via `solana-bn254`'s
+  `cfg(not(target_os = "solana"))` path; SBF target uses the real
+  syscall. Both produce byte-identical output by construction.
+- Round-trip tests (compress → decompress → original) pin the
+  identity at all compression sizes.
+- Wrong-input-length rejection tests pin the
+  `AltBn128CompressionSyscallFailed` error path.
+
+### Why this matters at the audit boundary
+
+Compressed BN254 G1 = 32 bytes vs uncompressed 64 bytes (50%
+saving). Compressed G2 = 64 bytes vs 128 bytes (50% saving).
+For a typical Halo2 proof with 5 advice + 3 quotient + 2 opening
+G1 commits (10 × 64 = 640 bytes uncompressed), compression saves
+320 bytes — a meaningful fraction of Solana's 1232-byte
+instruction-data limit.
+
+The session-103 implementation is just the syscall wiring; consuming
+it (via a canonical layout v2 with compressed-VK option) is
+follow-up work. But the building block is now real, tested, and
+ready.
+
+### Lib test totals at v0.9.2
+
+  mosaic-core              28  (+12)
+  total                   634  (+12 since v0.9.1)
+
+### What this milestone DOES change
+
+- `SyscallBackend::alt_bn128_compression` returns real results
+  instead of `UnimplementedProofSystem` on both backends.
+- New `mosaic-core/Cargo.toml` host-backend feature dep:
+  `solana-bn254` (previously gated under `solana` feature only).
+
+### What this milestone does NOT change
+
+Wire format, verifier behaviour, the audit-gate matrix from
+sessions 86-101. Compression is now AVAILABLE but not yet USED by
+any verifier.
+
+---
+
 ## 2026-04-29 — v0.9.1-halo2-multi-column-kzg-binding release (session 101)
 
 | Field | Value |

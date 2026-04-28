@@ -130,6 +130,11 @@ pub mod solana {
         SyscallBackend, Vec,
     };
     use solana_bn254::prelude::{alt_bn128_addition, alt_bn128_multiplication, alt_bn128_pairing};
+    // Session 103 — wire the alt_bn128 compression syscall.
+    use solana_bn254::compression::prelude::{
+        alt_bn128_g1_compress, alt_bn128_g1_decompress, alt_bn128_g2_compress,
+        alt_bn128_g2_decompress,
+    };
 
     /// Stateless SBF syscall backend. Construct with [`SolanaSyscallBackend::new`].
     #[derive(Copy, Clone, Debug, Default)]
@@ -170,12 +175,46 @@ pub mod solana {
 
         fn alt_bn128_compression(
             &self,
-            _op: AltBn128Compress,
-            _input: &[u8],
+            op: AltBn128Compress,
+            input: &[u8],
         ) -> Result<Vec<u8>, OnChainError> {
-            // TODO(mosaic-007): wire the alt_bn128 compression syscall once we
-            // decide whether to expose compressed VKs in canonical format.
-            Err(OnChainError::UnimplementedProofSystem)
+            // Session 103 — alt_bn128 compression syscall wired through
+            // `solana-bn254`'s compression::prelude. Each variant routes
+            // to the correct G1/G2 compress/decompress syscall and
+            // returns the variable-length output as a heap Vec to match
+            // the trait surface.
+            //
+            // Sizes (all big-endian by Solana convention):
+            //   G1 uncompressed = 64 B (x ‖ y, each 32 B)
+            //   G1 compressed   = 32 B (x with sign bit in MSB of byte 0)
+            //   G2 uncompressed = 128 B (x.c0 ‖ x.c1 ‖ y.c0 ‖ y.c1)
+            //   G2 compressed   = 64 B (x.c0 ‖ x.c1 with sign bit)
+            //
+            // The decompression variants validate on-curve membership;
+            // a malformed compressed point surfaces as
+            // `AltBn128CompressionSyscallFailed`.
+            match op {
+                AltBn128Compress::G1Compress => alt_bn128_g1_compress(input)
+                    .map(|out| out.to_vec())
+                    .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed),
+                AltBn128Compress::G1Decompress => alt_bn128_g1_decompress(input)
+                    .map(|out| out.to_vec())
+                    .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed),
+                AltBn128Compress::G2Compress => alt_bn128_g2_compress(input)
+                    .map(|out| out.to_vec())
+                    .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed),
+                AltBn128Compress::G2Decompress => {
+                    // The G2 decompress syscall expects a fixed-size
+                    // 64-byte input array; convert the slice with a
+                    // length check first.
+                    let arr: &[u8; 64] = input
+                        .try_into()
+                        .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed)?;
+                    alt_bn128_g2_decompress(arr)
+                        .map(|out| out.to_vec())
+                        .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed)
+                }
+            }
         }
 
         fn poseidon(
@@ -221,6 +260,14 @@ pub mod host {
     use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
     use ark_ff::{BigInteger, One, PrimeField};
     use ark_serialize::CanonicalDeserialize;
+    // Session 103 — alt_bn128 compression. The same imports work on
+    // both host and Solana targets: solana-bn254 provides an
+    // arkworks-based host fallback that's byte-identical to the SBF
+    // syscall output.
+    use solana_bn254::compression::prelude::{
+        alt_bn128_g1_compress, alt_bn128_g1_decompress, alt_bn128_g2_compress,
+        alt_bn128_g2_decompress,
+    };
 
     /// Software syscall backend used in host tests and SDK previews.
     #[derive(Copy, Clone, Debug, Default)]
@@ -363,11 +410,39 @@ pub mod host {
 
         fn alt_bn128_compression(
             &self,
-            _op: AltBn128Compress,
-            _input: &[u8],
+            op: AltBn128Compress,
+            input: &[u8],
         ) -> Result<Vec<u8>, OnChainError> {
-            // TODO(mosaic-007): host-side compression mirror.
-            Err(OnChainError::UnimplementedProofSystem)
+            // Session 103 — host-side mirror of SBF compression syscall.
+            //
+            // Same `solana-bn254::compression::prelude` functions as the
+            // SBF backend; on host targets they fall back to an
+            // arkworks-based reference implementation that's
+            // byte-identical to the on-chain syscall output.
+            //
+            // The differential test (host vs SBF) lands in v0.9.x along
+            // with the rest of the audit-coverage matrix; for now the
+            // round-trip identity (compress then decompress equals the
+            // original uncompressed point) is pinned in unit tests.
+            match op {
+                AltBn128Compress::G1Compress => alt_bn128_g1_compress(input)
+                    .map(|out| out.to_vec())
+                    .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed),
+                AltBn128Compress::G1Decompress => alt_bn128_g1_decompress(input)
+                    .map(|out| out.to_vec())
+                    .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed),
+                AltBn128Compress::G2Compress => alt_bn128_g2_compress(input)
+                    .map(|out| out.to_vec())
+                    .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed),
+                AltBn128Compress::G2Decompress => {
+                    let arr: &[u8; 64] = input
+                        .try_into()
+                        .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed)?;
+                    alt_bn128_g2_decompress(arr)
+                        .map(|out| out.to_vec())
+                        .map_err(|_| OnChainError::AltBn128CompressionSyscallFailed)
+                }
+            }
         }
 
         fn poseidon(
@@ -501,6 +576,144 @@ pub mod host {
             let mut expected = [0u8; 32];
             h.finalize(&mut expected);
             assert_eq!(digest, expected);
+        }
+
+        // ───────────────────────────────────────────────────────────────
+        // Session 103 — alt_bn128 compression round-trip tests.
+        //
+        // The host backend implementation calls into solana-bn254's
+        // arkworks-based fallback, which is byte-identical to the SBF
+        // syscall by construction. Tests here pin:
+        //   1. Round-trip: compress(decompress(x)) == x for known points
+        //      and identity (zero) point.
+        //   2. Compressed sizes: 64→32 (G1), 128→64 (G2).
+        //   3. Wrong-length inputs reject as
+        //      AltBn128CompressionSyscallFailed.
+        // ───────────────────────────────────────────────────────────────
+
+        /// G1 generator in BN254 big-endian uncompressed form.
+        /// x = 1, y = 2 (standard BN254 generator).
+        fn g1_generator_bytes() -> [u8; 64] {
+            let mut out = [0u8; 64];
+            out[31] = 1; // x = 1 (BE last byte)
+            out[63] = 2; // y = 2 (BE last byte)
+            out
+        }
+
+        #[test]
+        fn alt_bn128_g1_compress_decompress_round_trip_generator() {
+            let backend = HostBackend::new();
+            let g1 = g1_generator_bytes();
+            let compressed = backend
+                .alt_bn128_compression(AltBn128Compress::G1Compress, &g1)
+                .expect("G1 compress");
+            assert_eq!(
+                compressed.len(),
+                32,
+                "G1 compressed point must be 32 bytes"
+            );
+            let decompressed = backend
+                .alt_bn128_compression(AltBn128Compress::G1Decompress, &compressed)
+                .expect("G1 decompress");
+            assert_eq!(decompressed.len(), 64, "G1 uncompressed must be 64 bytes");
+            assert_eq!(
+                decompressed.as_slice(),
+                g1.as_slice(),
+                "round-trip must yield the original G1 point byte-for-byte"
+            );
+        }
+
+        #[test]
+        fn alt_bn128_g1_identity_round_trip() {
+            // Identity (0, 0) must round-trip cleanly. Both backends
+            // short-circuit zero input to zero output.
+            let backend = HostBackend::new();
+            let zero = [0u8; 64];
+            let compressed = backend
+                .alt_bn128_compression(AltBn128Compress::G1Compress, &zero)
+                .expect("G1 identity compress");
+            assert_eq!(compressed, vec![0u8; 32]);
+            let decompressed = backend
+                .alt_bn128_compression(AltBn128Compress::G1Decompress, &compressed)
+                .expect("G1 identity decompress");
+            assert_eq!(decompressed, zero.to_vec());
+        }
+
+        #[test]
+        fn alt_bn128_g2_identity_round_trip() {
+            let backend = HostBackend::new();
+            let zero = [0u8; 128];
+            let compressed = backend
+                .alt_bn128_compression(AltBn128Compress::G2Compress, &zero)
+                .expect("G2 identity compress");
+            assert_eq!(compressed, vec![0u8; 64]);
+            let decompressed = backend
+                .alt_bn128_compression(AltBn128Compress::G2Decompress, &compressed)
+                .expect("G2 identity decompress");
+            assert_eq!(decompressed, zero.to_vec());
+        }
+
+        #[test]
+        fn alt_bn128_g1_compress_rejects_wrong_input_length() {
+            let backend = HostBackend::new();
+            // Compress expects 64 bytes; supply 63.
+            let too_short = [0u8; 63];
+            let r = backend.alt_bn128_compression(AltBn128Compress::G1Compress, &too_short);
+            assert!(
+                matches!(r, Err(OnChainError::AltBn128CompressionSyscallFailed)),
+                "G1 compress with wrong input length must reject; got {r:?}",
+            );
+        }
+
+        #[test]
+        fn alt_bn128_g1_decompress_rejects_wrong_input_length() {
+            let backend = HostBackend::new();
+            // Decompress expects 32 bytes; supply 33.
+            let too_long = [0u8; 33];
+            let r = backend.alt_bn128_compression(AltBn128Compress::G1Decompress, &too_long);
+            assert!(
+                matches!(r, Err(OnChainError::AltBn128CompressionSyscallFailed)),
+                "G1 decompress with wrong input length must reject; got {r:?}",
+            );
+        }
+
+        #[test]
+        fn alt_bn128_g2_compress_rejects_wrong_input_length() {
+            let backend = HostBackend::new();
+            // Compress expects 128 bytes; supply 127.
+            let too_short = [0u8; 127];
+            let r = backend.alt_bn128_compression(AltBn128Compress::G2Compress, &too_short);
+            assert!(
+                matches!(r, Err(OnChainError::AltBn128CompressionSyscallFailed)),
+                "G2 compress with wrong input length must reject; got {r:?}",
+            );
+        }
+
+        #[test]
+        fn alt_bn128_g2_decompress_rejects_wrong_input_length() {
+            let backend = HostBackend::new();
+            // Decompress expects 64 bytes; supply 32.
+            let too_short = [0u8; 32];
+            let r = backend.alt_bn128_compression(AltBn128Compress::G2Decompress, &too_short);
+            assert!(
+                matches!(r, Err(OnChainError::AltBn128CompressionSyscallFailed)),
+                "G2 decompress with wrong input length must reject; got {r:?}",
+            );
+        }
+
+        /// Compressed G1 is always exactly half the uncompressed size.
+        /// For the BN254 generator (x=1, y=2) the compressed bytes
+        /// happen to equal the x-coordinate bytes byte-for-byte
+        /// because y=2 is even and the sign-bit slot stays at zero.
+        /// This test confirms the size invariant only.
+        #[test]
+        fn alt_bn128_g1_compressed_size_half_of_uncompressed() {
+            let backend = HostBackend::new();
+            let g1 = g1_generator_bytes();
+            let compressed = backend
+                .alt_bn128_compression(AltBn128Compress::G1Compress, &g1)
+                .expect("G1 compress");
+            assert_eq!(compressed.len() * 2, g1.len());
         }
     }
 }

@@ -75,6 +75,11 @@ host-backend = [
     # "solana")) path computes Poseidon inline via light-poseidon and is
     # byte-identical to the SBF syscall output by construction.
     "dep:solana-poseidon",
+    # Session 103 — same trick for alt_bn128 compression. solana-bn254's
+    # cfg(not(target_os = "solana")) path uses arkworks for the
+    # compress/decompress arithmetic and is byte-identical to the SBF
+    # syscall by construction. Host backend re-uses these functions.
+    "dep:solana-bn254",
 ]
 diagnostics = ["std", "dep:tracing"]
 formal-verify = []
