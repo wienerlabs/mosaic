@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.2-alt-bn128-compression
+### Planned beyond v0.9.3-compression-helpers
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.3-compression-helpers] — 2026-04-29
+
+**Verifier-friendly compression API.** Session 103 wired the
+`alt_bn128_compression` syscall on both backends but the surface
+was raw `&[u8]` slices via `SyscallBackend::alt_bn128_compression`.
+Session 104 adds typed helpers in `mosaic-zk-primitives::compression`
+that take and return fixed-size `[u8; G1_LEN]` / `[u8; G2_LEN]`
+arrays, validate output sizes, and document the cost trade-off.
+
+### Added — `mosaic-zk-primitives::compression` module (new)
+
+Four helper functions wrapping the syscall surface with verifier-
+friendly types:
+
+```rust
+pub fn compress_g1<B>(backend: &B, point: &[u8; 64])
+    -> Result<[u8; 32], OnChainError>;
+pub fn decompress_g1<B>(backend: &B, compressed: &[u8; 32])
+    -> Result<[u8; 64], OnChainError>;
+pub fn compress_g2<B>(backend: &B, point: &[u8; 128])
+    -> Result<[u8; 64], OnChainError>;
+pub fn decompress_g2<B>(backend: &B, compressed: &[u8; 64])
+    -> Result<[u8; 128], OnChainError>;
+```
+
+Each helper validates the syscall's return-payload length as
+defense-in-depth — a wrong-length return surfaces as
+`InternalInvariantViolation` (should never happen with the real
+SBF + host backends, but the explicit check is consensus-critical).
+
+The module-level docstring documents the cost trade-off:
+- ~2 K CU per G1 compression call.
+- ~10 K CU per G1 decompression (square-root mod q to recover y).
+- 50% bandwidth saving per point (G1: 64→32, G2: 128→64).
+
+### New tests at v0.9.3 (mosaic-zk-primitives: +6)
+
+- `g1_round_trip_generator` — BN254 generator round-trips.
+- `g1_identity_round_trip` — zero short-circuit.
+- `g2_identity_round_trip` — zero short-circuit at G2 sizes.
+- `g1_round_trip_is_deterministic_across_iterations` — same input
+  always yields same output (3 consecutive calls).
+- `g1_helper_composition_matches_identity_function` — composition
+  contract: `decompress(compress(x)) == x`.
+- `g1_compressed_bit_flip_changes_decompressed_or_rejects` —
+  tampered compressed point either decompresses to a different
+  point OR fails validation; never silently yields the original.
+
+### Lib test totals at v0.9.3
+
+  mosaic-zk-primitives     93  (+6 since v0.9.2; 87 → 93)
+  total                   640  (+6 since v0.9.2)
+
+### Migration notes
+
+Public API additions (no breakage):
+- `mosaic_zk_primitives::compression::{compress_g1, decompress_g1,
+  compress_g2, decompress_g2}`
+- Constants: `G1_LEN = 64`, `G1_COMPRESSED_LEN = 32`,
+  `G2_LEN = 128`, `G2_COMPRESSED_LEN = 64`.
+
+Verifier-side consumption (a canonical layout v2 with compressed
+VK option) lands in subsequent releases.
 
 ## [0.9.2-alt-bn128-compression] — 2026-04-29
 

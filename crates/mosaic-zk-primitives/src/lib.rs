@@ -30,6 +30,10 @@
 //!   absorb/squeeze API.
 //! - [`g1_consts`] — G1/G2 generator encoders + the canonical
 //!   Mosaic wire-format bytes of the BN254 generators.
+//! - [`compression`] — **session 103/104** G1/G2 affine point
+//!   compression and decompression via the alt_bn128_compression
+//!   syscall. 50% bandwidth saving for VKs and proofs that opt into
+//!   the compressed wire format.
 //!
 //! ## What's NOT here
 //!
@@ -49,6 +53,7 @@
 
 extern crate alloc;
 
+pub mod compression;
 pub mod field;
 pub mod fr;
 pub mod g1_consts;

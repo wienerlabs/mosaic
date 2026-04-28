@@ -10,6 +10,48 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-29 — v0.9.3-compression-helpers release (session 104)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.3-compression-helpers`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.3-compression-helpers) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | New `mosaic-zk-primitives::compression` module wraps the v0.9.2 syscall surface in typed helpers (`compress_g1`/`decompress_g1`/`compress_g2`/`decompress_g2`). Sets up consumer-side adoption. |
+| Findings | Zero soundness regressions. Output-size validation in each helper adds defense-in-depth against a hypothetical syscall ABI drift. |
+| Status | ✅ Verifier crates can now adopt compression via typed primitives instead of raw `&[u8]` calls. The module's documentation pins the cost trade-off (~10 K CU per G1 decompress vs 32 B saved). |
+
+### Why this matters at the audit boundary
+
+Session 103 made the syscall available; session 104 makes it
+**ergonomic**. Without typed helpers, every verifier consumer
+would have to:
+1. Convert `[u8; 64]` to `&[u8]` for the syscall call.
+2. Validate the syscall's `Vec<u8>` return is exactly 32 bytes.
+3. Convert `Vec<u8>` back to `[u8; 32]`.
+
+Three steps per call site, repeated across the workspace, with
+opportunities for off-by-one errors. Session 104 collapses this
+into one named function call per direction.
+
+### Lib test totals at v0.9.3
+
+  mosaic-zk-primitives     93  (+6 since v0.9.2)
+  total                   640
+
+### What this milestone DOES change
+
+- New `compression` module in `mosaic-zk-primitives`.
+- Six new tests pinning round-trip + determinism + tamper
+  detection.
+
+### What this milestone does NOT change
+
+Wire format, on-chain ABI, verifier behaviour. Compression is now
+ERGONOMICALLY ACCESSIBLE but still not USED by any verifier.
+Adoption is opt-in per crate.
+
+---
+
 ## 2026-04-29 — v0.9.2-alt-bn128-compression release (session 103)
 
 | Field | Value |
