@@ -339,6 +339,30 @@ impl Halo2KzgVerifyingKey {
         if bytes.len() != expected {
             return Err(OnChainError::VerifyingKeyLengthMismatch);
         }
+
+        // Session 105 — VK internal consistency check.
+        //
+        // The wire format declares `n_fixed: u32` separately from the
+        // `fixed_commits` byte buffer's length. Both must agree:
+        //   fixed_commits.len() == n_fixed * G1_LEN
+        // Otherwise the parser would silently accept a VK where
+        // `n_fixed` and the actual commit count diverge — downstream
+        // verifier code that uses `n_fixed` for indexing or counting
+        // (e.g. `collect_evals_at_xi`'s selector loop) would produce
+        // wrong opening pairs without any explicit error.
+        //
+        // Also enforce divisibility: fixed_len % G1_LEN == 0 and
+        // perm_len % G1_LEN == 0. A non-multiple length means the
+        // wire payload was constructed by a bugged generator (or
+        // adversarially) and cannot represent a coherent commit
+        // vector.
+        if fixed_len % sizes::G1_LEN != 0 || perm_len % sizes::G1_LEN != 0 {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+        if fixed_len != (n_fixed as usize) * sizes::G1_LEN {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
         let fixed_commits = bytes[payload_start..payload_start + fixed_len].to_vec();
         let permutation_commits =
             bytes[payload_start + fixed_len..payload_start + fixed_len + perm_len].to_vec();
@@ -461,11 +485,16 @@ mod tests {
 
     #[test]
     fn vk_roundtrip_no_commits() {
+        // Session 105: this test pre-existed with `n_fixed: 2` and
+        // `fixed_commits: vec![]` — a deliberate-or-accidental
+        // mismatch the parser used to silently accept. The new
+        // consistency check correctly rejects it. Update to consistent
+        // values: zero fixed commits matches `n_fixed = 0`.
         let vk = Halo2KzgVerifyingKey {
             k: 10,
             n_instances: 1,
             n_advice: 5,
-            n_fixed: 2,
+            n_fixed: 0,
             x2_g2: [0xCD; G2_LEN],
             omega_fr: [0u8; FR_LEN],
             fixed_commits: vec![],
@@ -474,6 +503,57 @@ mod tests {
         let bytes = vk.to_bytes();
         let decoded = Halo2KzgVerifyingKey::from_bytes(&bytes).unwrap();
         assert_eq!(vk, decoded);
+    }
+
+    /// Session 105 — VK with declared `n_fixed: 2` but empty
+    /// `fixed_commits` byte buffer must be rejected. Pre-session-105
+    /// the parser would accept this silently and downstream verifier
+    /// code would mis-index based on `n_fixed`.
+    #[test]
+    fn vk_rejects_n_fixed_inconsistent_with_commits_len() {
+        let vk = Halo2KzgVerifyingKey {
+            k: 10,
+            n_instances: 1,
+            n_advice: 5,
+            n_fixed: 2, // claims 2 commits
+            x2_g2: [0xCD; G2_LEN],
+            omega_fr: [0u8; FR_LEN],
+            fixed_commits: vec![], // but has 0 commit bytes
+            permutation_commits: vec![],
+        };
+        let bytes = vk.to_bytes();
+        let r = Halo2KzgVerifyingKey::from_bytes(&bytes);
+        assert!(
+            matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)),
+            "n_fixed=2 with empty commits must reject; got {r:?}",
+        );
+    }
+
+    /// Session 105 — non-multiple-of-G1_LEN payload byte counts get
+    /// rejected at parse time. Catches a malformed wire payload that
+    /// can't represent a coherent commit vector.
+    #[test]
+    fn vk_rejects_non_multiple_g1_payload_lengths() {
+        // Build a hand-rolled VK byte buffer with fixed_commits.len()
+        // = 65 bytes (not a multiple of G1_LEN = 64). The parser
+        // should reject before constructing the Vec.
+        use crate::canonical::sizes::{FR_LEN, G2_LEN};
+        let payload_start = 16 + G2_LEN + FR_LEN + 8;
+        let bad_fixed_len: u32 = 65; // not a multiple of 64
+        let mut buf = vec![0u8; payload_start + bad_fixed_len as usize];
+        buf[0..4].copy_from_slice(&10u32.to_le_bytes()); // k
+        buf[4..8].copy_from_slice(&1u32.to_le_bytes()); // n_instances
+        buf[8..12].copy_from_slice(&5u32.to_le_bytes()); // n_advice
+        buf[12..16].copy_from_slice(&0u32.to_le_bytes()); // n_fixed = 0
+        // x2_g2 + omega_fr stay zero
+        let after_omega = 16 + G2_LEN + FR_LEN;
+        buf[after_omega..after_omega + 4].copy_from_slice(&bad_fixed_len.to_le_bytes());
+        buf[after_omega + 4..after_omega + 8].copy_from_slice(&0u32.to_le_bytes()); // perm_len = 0
+        let r = Halo2KzgVerifyingKey::from_bytes(&buf);
+        assert!(
+            matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)),
+            "fixed_len=65 (non-multiple of G1_LEN) must reject; got {r:?}",
+        );
     }
 
     #[test]
@@ -562,9 +642,12 @@ mod tests {
             k in 0u32..=20,
             n_instances in 0u32..=8,
             n_advice in 0u32..=8,
-            n_fixed in 0u32..=8,
             x2_byte in any::<u8>(),
             omega_byte in any::<u8>(),
+            // Session 105: `n_fixed` and the fixed_commits byte length
+            // must agree (`fixed_commits.len() == n_fixed * G1_LEN`).
+            // Use a single counter for both so the strategy generates
+            // only consistent VKs.
             fixed_count in 0u32..=4,
             perm_count in 0u32..=4,
         ) -> Halo2KzgVerifyingKey {
@@ -572,7 +655,7 @@ mod tests {
                 k,
                 n_instances,
                 n_advice,
-                n_fixed,
+                n_fixed: fixed_count,
                 x2_g2: [x2_byte; G2_LEN],
                 omega_fr: [omega_byte; FR_LEN],
                 fixed_commits: vec![0x11; (fixed_count as usize) * G1_LEN],

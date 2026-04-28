@@ -10,6 +10,57 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-29 — v0.9.4-halo2-vk-consistency release (session 105)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.4-halo2-vk-consistency`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.4-halo2-vk-consistency) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Halo2 VK parser tightens internal consistency: `n_fixed` declared count must match `fixed_commits.len() / G1_LEN`, both commit byte buffers must be multiples of G1_LEN. |
+| Findings | One latent consistency gap closed: pre-session-105 the parser silently accepted VKs where `n_fixed` and `fixed_commits.len()` diverged. Downstream code that uses `n_fixed` for indexing would mis-index without explicit error. |
+| Status | ✅ Halo2 VK parse-time validation now rejects any malformed declared/actual count mismatch. The proptest strategy `arb_vk` updated to generate only consistent VKs. |
+
+### What this changes for an external auditor
+
+The Halo2 VK has two ways to indicate fixed-commit count:
+1. The `n_fixed: u32` header field (declared)
+2. The byte length of `fixed_commits` divided by 64 (actual)
+
+Pre-session-105 these could diverge. Real prover toolchains
+always emit consistent VKs, but a bugged or adversarial generator
+could produce mismatched values that silently parse and produce
+wrong verification results downstream.
+
+After session 105, the parser enforces consistency at the
+boundary. Mismatched VKs reject as `VerifyingKeyLengthMismatch`.
+
+### Why this is a soundness hardening, not a soundness fix
+
+The verifier code that used `n_fixed` for indexing would have
+produced wrong commit/eval pairings in the KZG batched opening,
+which would have surfaced as `PairingCheckFailed` later in the
+pipeline. So no proof was ever silently accepted on a malformed
+VK — but the rejection error would have been opaque
+(PairingCheckFailed instead of VerifyingKeyLengthMismatch). Session
+105 surfaces the right error at the right layer.
+
+### Lib test totals at v0.9.4
+
+  mosaic-halo2            105  (+2)
+  total                   642
+
+### What this milestone DOES change
+
+- VK parser rejects declared/actual count mismatches.
+- Two new tests pin the contract.
+
+### What this milestone does NOT change
+
+Verifier behaviour for conforming VKs (every real generator
+produces these), wire format, on-chain ABI.
+
+---
+
 ## 2026-04-29 — v0.9.3-compression-helpers release (session 104)
 
 | Field | Value |

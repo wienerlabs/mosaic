@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.3-compression-helpers
+### Planned beyond v0.9.4-halo2-vk-consistency
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.4-halo2-vk-consistency] — 2026-04-29
+
+**Halo2 VK parser consistency hardening.** The wire format declares
+`n_fixed: u32` separately from the `fixed_commits` byte buffer
+length. Pre-session-105 the parser silently accepted VKs where these
+two diverged — a bugged or adversarial generator could write
+`n_fixed: 5` with only 2 commits worth of bytes, and downstream
+verifier code that uses `n_fixed` for indexing would mis-index.
+
+### Fix
+
+`Halo2KzgVerifyingKey::from_bytes` now enforces:
+
+1. `fixed_commits.len() % G1_LEN == 0` (divisibility)
+2. `permutation_commits.len() % G1_LEN == 0` (divisibility)
+3. `fixed_commits.len() == n_fixed * G1_LEN` (declared count
+   matches actual byte count)
+
+A wire payload that violates any of these rejects with
+`VerifyingKeyLengthMismatch` at parse time.
+
+### Changed
+
+- `crates/mosaic-halo2/src/canonical.rs::Halo2KzgVerifyingKey::from_bytes`
+  adds the three consistency checks above.
+- The pre-existing `vk_roundtrip_no_commits` test had `n_fixed: 2`
+  with `fixed_commits: vec![]` — a deliberate-or-accidental
+  mismatch that the new check catches. Updated to consistent values
+  (`n_fixed: 0` matching the empty commits).
+- The proptest `arb_vk` strategy was generating `n_fixed` and
+  `fixed_count` independently — could produce inconsistent VKs that
+  failed the new check. Updated to use a single counter for both.
+
+### Added — session 105 (mosaic-halo2: 103 → 105)
+
+- `vk_rejects_n_fixed_inconsistent_with_commits_len` — VK with
+  declared `n_fixed: 2` but empty `fixed_commits` rejects.
+- `vk_rejects_non_multiple_g1_payload_lengths` — VK with
+  `fixed_len: 65` (not a multiple of `G1_LEN: 64`) rejects.
+
+### Lib test totals at v0.9.4
+
+  mosaic-halo2            105  (+2 since v0.9.3)
+  total                   642  (+2 since v0.9.3)
+
+### Migration notes
+
+**Backwards-incompatible for malformed VKs.** Any downstream
+consumer that was producing VKs with `n_fixed` ≠
+`fixed_commits.len() / G1_LEN` will start getting
+`VerifyingKeyLengthMismatch` at parse time. Such VKs were already
+producing wrong verification results downstream; the check just
+surfaces the bug at the right layer.
+
+Conforming VKs (every real generator we've inspected) are unaffected.
 
 ## [0.9.3-compression-helpers] — 2026-04-29
 
