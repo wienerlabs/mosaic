@@ -438,6 +438,61 @@ pub fn verify_pairing<B: SyscallBackend + ?Sized>(
     Ok(())
 }
 
+/// **Session 94 — ADR-0006-named alias for [`verify_pairing`].**
+///
+/// PLONK's KZG batched-opening pairing identity:
+///
+/// ```text
+/// e(-A1, X_2) · e(B1, [1]_2) = 1
+/// ```
+///
+/// where `A1` and `B1` are the prover-side and verifier-side
+/// linearization MSM outputs (computed by the upstream
+/// `compute_a1` / `compute_b1` primitives). A satisfying proof
+/// produces a pairing product that equals the Fq12 multiplicative
+/// identity (the syscall's 32-byte payload ends in `0x01`); any
+/// divergence is rejected as [`OnChainError::PairingCheckFailed`].
+///
+/// This is the audit-grade "is the prover's batched opening
+/// consistent with the linearization commitment at the evaluation
+/// point ξ?" check — the **only** soundness boundary in PLONK's
+/// final verification step (the rest of the verifier is parsing,
+/// challenge derivation, and MSM assembly).
+///
+/// Sessions ≤93 exposed the soundness check as `verify_pairing`,
+/// which has a domain-neutral name. Session 94 adds this
+/// ADR-0006-named alias following the recipe codified in
+/// [docs/adr/0006-verifier-audit-gate-pattern.md] so external
+/// auditors can grep `pub fn verify_<verifier>_*` to find every
+/// soundness boundary across the workspace consistently. The two
+/// names are byte-identical wrappers; either can be called.
+///
+/// Mirrors session 93's `verify_groth16_pairing_identity` for
+/// the Phase-2 sister verifier.
+///
+/// ## Inputs
+///
+/// - `backend` — the syscall backend implementing `alt_bn128_group_op`.
+/// - `vk` — the PLONK verifying key (used for `vk.x2_g2`, the SRS G2
+///   element).
+/// - `a1, b1` — the prover-side and verifier-side G1 linearization
+///   MSM outputs computed upstream.
+///
+/// ## Errors
+///
+/// - [`OnChainError::PairingCheckFailed`] — the pairing product is
+///   not the Fq12 identity, OR the syscall returned an unexpected
+///   payload length.
+/// - Syscall errors propagated from `alt_bn128_group_op`.
+pub fn verify_plonk_pairing_identity<B: SyscallBackend + ?Sized>(
+    backend: &B,
+    vk: &PlonkVerifyingKey,
+    a1: &[u8; 64],
+    b1: &[u8; 64],
+) -> Result<(), OnChainError> {
+    verify_pairing(backend, vk, a1, b1)
+}
+
 /// The orchestrated verifier body — called from `PlonkKzgBn254::verify`.
 #[inline(never)]
 pub fn finalize_verify<B: SyscallBackend + ?Sized>(
@@ -462,3 +517,244 @@ pub fn finalize_verify<B: SyscallBackend + ?Sized>(
 const _: fn() = || {
     let _ = Fr::zero();
 };
+
+#[cfg(test)]
+mod tests {
+    // ───────────────────────────────────────────────────────────────────
+    // Session 94 — verify_plonk_pairing_identity audit-gate coverage.
+    //
+    // The Phase-2 sister of session 93's Groth16 work. Same
+    // ProgrammablePairingBackend testing pattern, just routed through
+    // the PLONK gate signature.
+    // ───────────────────────────────────────────────────────────────────
+
+    use super::*;
+    use crate::canonical::sizes::{FR_LEN, G1_LEN, G2_LEN};
+    use mosaic_core::syscall::SyscallBackend;
+
+    fn dummy_vk() -> PlonkVerifyingKey {
+        PlonkVerifyingKey {
+            qm_g1: [0; G1_LEN],
+            ql_g1: [0; G1_LEN],
+            qr_g1: [0; G1_LEN],
+            qo_g1: [0; G1_LEN],
+            qc_g1: [0; G1_LEN],
+            s1_g1: [0; G1_LEN],
+            s2_g1: [0; G1_LEN],
+            s3_g1: [0; G1_LEN],
+            x2_g2: [0; G2_LEN],
+            power: 10,
+            k1: [0; FR_LEN],
+            k2: [0; FR_LEN],
+            omega: [0; FR_LEN],
+            n_public: 1,
+        }
+    }
+
+    /// Backend that returns a programmable pairing-check verdict.
+    /// Mirror of the session-93 helper in mosaic-groth16.
+    struct ProgrammablePairingBackend {
+        verdict_byte: u8,
+    }
+
+    impl SyscallBackend for ProgrammablePairingBackend {
+        fn alt_bn128_group_op(
+            &self,
+            op: AltBn128Op,
+            _: InputEndianness,
+            _: &[u8],
+        ) -> Result<Vec<u8>, OnChainError> {
+            match op {
+                AltBn128Op::Pairing => {
+                    let mut out = alloc::vec![0u8; 32];
+                    out[31] = self.verdict_byte;
+                    Ok(out)
+                }
+                AltBn128Op::G1Add | AltBn128Op::G1Mul => {
+                    Ok(alloc::vec![0u8; G1_LEN])
+                }
+            }
+        }
+        fn alt_bn128_compression(
+            &self,
+            _: mosaic_core::syscall::AltBn128Compress,
+            _: &[u8],
+        ) -> Result<Vec<u8>, OnChainError> {
+            Err(OnChainError::AltBn128CompressionSyscallFailed)
+        }
+        fn poseidon(
+            &self,
+            _: mosaic_core::syscall::PoseidonParameters,
+            _: InputEndianness,
+            _: &[&[u8]],
+        ) -> Result<[u8; 32], OnChainError> {
+            Err(OnChainError::PoseidonSyscallFailed)
+        }
+        fn sha256(&self, _: &[&[u8]]) -> Result<[u8; 32], OnChainError> {
+            Err(OnChainError::Sha256SyscallFailed)
+        }
+        fn keccak256(&self, _: &[&[u8]]) -> Result<[u8; 32], OnChainError> {
+            Err(OnChainError::Keccak256SyscallFailed)
+        }
+    }
+
+    /// Programmable backend reports pairing success ⇒ gate accepts.
+    #[test]
+    fn audit_gate_accepts_when_pairing_returns_success_byte() {
+        let backend = ProgrammablePairingBackend { verdict_byte: 0x01 };
+        let vk = dummy_vk();
+        let a1 = [0u8; 64];
+        let b1 = [0u8; 64];
+        verify_plonk_pairing_identity(&backend, &vk, &a1, &b1)
+            .expect("pairing-success backend → gate accepts");
+    }
+
+    /// Programmable backend reports pairing failure ⇒ gate rejects.
+    #[test]
+    fn audit_gate_rejects_when_pairing_returns_failure_byte() {
+        let backend = ProgrammablePairingBackend { verdict_byte: 0x00 };
+        let vk = dummy_vk();
+        let a1 = [0u8; 64];
+        let b1 = [0u8; 64];
+        let res = verify_plonk_pairing_identity(&backend, &vk, &a1, &b1);
+        assert!(
+            matches!(res, Err(OnChainError::PairingCheckFailed)),
+            "pairing-failure verdict must reject as PairingCheckFailed; got {res:?}",
+        );
+    }
+
+    /// Sweep representative non-`0x01` verdict bytes.
+    #[test]
+    fn audit_gate_rejects_any_non_one_verdict_byte() {
+        let vk = dummy_vk();
+        let a1 = [0u8; 64];
+        let b1 = [0u8; 64];
+        for verdict in [0x00u8, 0x02, 0x42, 0x7F, 0xFE, 0xFF] {
+            let backend = ProgrammablePairingBackend { verdict_byte: verdict };
+            let res = verify_plonk_pairing_identity(&backend, &vk, &a1, &b1);
+            assert!(
+                matches!(res, Err(OnChainError::PairingCheckFailed)),
+                "verdict byte 0x{verdict:02X} must reject; got {res:?}",
+            );
+        }
+    }
+
+    /// Wrong-length pairing payload ⇒ reject.
+    #[test]
+    fn audit_gate_rejects_wrong_length_pairing_payload() {
+        struct WrongLengthBackend;
+        impl SyscallBackend for WrongLengthBackend {
+            fn alt_bn128_group_op(
+                &self,
+                op: AltBn128Op,
+                _: InputEndianness,
+                _: &[u8],
+            ) -> Result<Vec<u8>, OnChainError> {
+                if matches!(op, AltBn128Op::Pairing) {
+                    // Return 16 bytes — last byte happens to be `0x01`
+                    // but length is wrong; gate must reject.
+                    let mut out = alloc::vec![0u8; 16];
+                    out[15] = 0x01;
+                    Ok(out)
+                } else {
+                    Ok(alloc::vec![0u8; G1_LEN])
+                }
+            }
+            fn alt_bn128_compression(
+                &self,
+                _: mosaic_core::syscall::AltBn128Compress,
+                _: &[u8],
+            ) -> Result<Vec<u8>, OnChainError> {
+                Err(OnChainError::AltBn128CompressionSyscallFailed)
+            }
+            fn poseidon(
+                &self,
+                _: mosaic_core::syscall::PoseidonParameters,
+                _: InputEndianness,
+                _: &[&[u8]],
+            ) -> Result<[u8; 32], OnChainError> {
+                Err(OnChainError::PoseidonSyscallFailed)
+            }
+            fn sha256(&self, _: &[&[u8]]) -> Result<[u8; 32], OnChainError> {
+                Err(OnChainError::Sha256SyscallFailed)
+            }
+            fn keccak256(&self, _: &[&[u8]]) -> Result<[u8; 32], OnChainError> {
+                Err(OnChainError::Keccak256SyscallFailed)
+            }
+        }
+        let vk = dummy_vk();
+        let a1 = [0u8; 64];
+        let b1 = [0u8; 64];
+        let res = verify_plonk_pairing_identity(&WrongLengthBackend, &vk, &a1, &b1);
+        assert!(
+            matches!(res, Err(OnChainError::PairingCheckFailed)),
+            "wrong-length pairing payload must reject; got {res:?}",
+        );
+    }
+
+    /// Backend syscall error ⇒ propagates through `?`.
+    #[test]
+    fn audit_gate_propagates_syscall_error() {
+        struct FailingBackend;
+        impl SyscallBackend for FailingBackend {
+            fn alt_bn128_group_op(
+                &self,
+                _: AltBn128Op,
+                _: InputEndianness,
+                _: &[u8],
+            ) -> Result<Vec<u8>, OnChainError> {
+                Err(OnChainError::AltBn128SyscallFailed)
+            }
+            fn alt_bn128_compression(
+                &self,
+                _: mosaic_core::syscall::AltBn128Compress,
+                _: &[u8],
+            ) -> Result<Vec<u8>, OnChainError> {
+                Err(OnChainError::AltBn128CompressionSyscallFailed)
+            }
+            fn poseidon(
+                &self,
+                _: mosaic_core::syscall::PoseidonParameters,
+                _: InputEndianness,
+                _: &[&[u8]],
+            ) -> Result<[u8; 32], OnChainError> {
+                Err(OnChainError::PoseidonSyscallFailed)
+            }
+            fn sha256(&self, _: &[&[u8]]) -> Result<[u8; 32], OnChainError> {
+                Err(OnChainError::Sha256SyscallFailed)
+            }
+            fn keccak256(&self, _: &[&[u8]]) -> Result<[u8; 32], OnChainError> {
+                Err(OnChainError::Keccak256SyscallFailed)
+            }
+        }
+        let vk = dummy_vk();
+        let a1 = [0u8; 64];
+        let b1 = [0u8; 64];
+        let res = verify_plonk_pairing_identity(&FailingBackend, &vk, &a1, &b1);
+        assert!(
+            matches!(res, Err(OnChainError::AltBn128SyscallFailed)),
+            "syscall failure must propagate, not collapse to PairingCheckFailed; got {res:?}",
+        );
+    }
+
+    /// `verify_plonk_pairing_identity` and `verify_pairing` are
+    /// byte-equivalent wrappers — exercising both with the same
+    /// backend + inputs yields identical results.
+    #[test]
+    fn audit_gate_equivalent_to_verify_pairing() {
+        for verdict in [0x00u8, 0x01, 0x42, 0xFF] {
+            let backend = ProgrammablePairingBackend { verdict_byte: verdict };
+            let vk = dummy_vk();
+            let a1 = [0u8; 64];
+            let b1 = [0u8; 64];
+            let r_alias = verify_plonk_pairing_identity(&backend, &vk, &a1, &b1);
+            let r_orig = verify_pairing(&backend, &vk, &a1, &b1);
+            // Both must agree on Ok(()) vs Err(PairingCheckFailed).
+            assert_eq!(
+                r_alias.is_ok(),
+                r_orig.is_ok(),
+                "verdict 0x{verdict:02X}: alias = {r_alias:?}, orig = {r_orig:?}",
+            );
+        }
+    }
+}

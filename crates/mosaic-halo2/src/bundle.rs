@@ -6,9 +6,9 @@
 //! the verifier's vanishing-identity check can access each evaluation
 //! by name.
 //!
-//! ## Scaffold layout (session 4e-partial)
+//! ## Scaffold layout (session 4e-partial, arity-1)
 //!
-//! The bundle is ordered as:
+//! The single-column lookup bundle is ordered as:
 //!
 //! | Index range | Slot | Count |
 //! |---|---|---|
@@ -18,8 +18,30 @@
 //! | [13, 16) | Lookup evaluations `input, table, m` | 3 |
 //! | [16, `16+n_quotient`) | Quotient chunk evaluations `h_0(ξ) … h_{m-1}(ξ)` | `n_quotient` |
 //!
-//! Required `n_evals = 16 + n_quotient`. For a typical `n_quotient` = 3
-//! circuit the bundle is 19 × 32 = 608 bytes.
+//! Required `n_evals = 16 + n_quotient` for `lookup_arity = 1`.
+//!
+//! ## Multi-column extension (session 100, arity ≥ 2)
+//!
+//! When the proof header declares `lookup_arity = k > 1`, the bundle's
+//! lookup section grows to carry `k` input + `k` table evaluations + 1
+//! multiplicity evaluation:
+//!
+//! | Index range | Slot | Count |
+//! |---|---|---|
+//! | [0, 3) | Wire evaluations `a(ξ), b(ξ), c(ξ)` | 3 |
+//! | [3, 8) | Selector evaluations `q_M, q_L, q_R, q_O, q_C` | 5 |
+//! | [8, 13) | Permutation evaluations | 5 |
+//! | [13, 13+k) | Multi-column input evals `input_0(ξ) … input_{k-1}(ξ)` | k |
+//! | [13+k, 13+2k) | Multi-column table evals `table_0(ξ) … table_{k-1}(ξ)` | k |
+//! | [13+2k, 13+2k+1) | Multiplicity eval `m(ξ)` | 1 |
+//! | [13+2k+1, 13+2k+1+n_quotient) | Quotient chunks | n_quotient |
+//!
+//! Required `n_evals = 13 + 2k + 1 + n_quotient` for arity `k`.
+//!
+//! Backward compatibility: arity 1 reduces to the original 16-slot
+//! layout (13 + 2·1 + 1 = 16). The single-column `LookupEvals` bundle
+//! is preserved for `arity ≤ 1`; the `MultiColumnLookupEvals` bundle is
+//! emitted for `arity ≥ 2`.
 //!
 //! ## Why a scaffold convention
 //!
@@ -32,7 +54,7 @@
 
 use crate::{
     canonical::{sizes::FR_LEN, Halo2KzgProof},
-    circuit::{LookupEvals, PermutationEvals, SelectorEvals, WireEvals},
+    circuit::{LookupEvals, MultiColumnLookupEvals, PermutationEvals, SelectorEvals, WireEvals},
 };
 use alloc::vec::Vec;
 use ark_bn254::Fr;
@@ -74,16 +96,29 @@ pub mod idx {
     /// Output-wire permutation `σ_3(ξ)`.
     pub const SIGMA_3: usize = 12;
 
-    // --- Lookup at [13, 16) ---
-    /// Lookup argument input expression `input(ξ)`.
+    // --- Lookup at [13, 16) for arity 1; expands for arity ≥ 2. ---
+    /// Lookup argument input expression `input(ξ)` (arity 1 alias).
     pub const LOOKUP_INPUT: usize = 13;
-    /// Lookup table evaluation `table(ξ)`.
+    /// Lookup table evaluation `table(ξ)` (arity 1 alias).
     pub const LOOKUP_TABLE: usize = 14;
-    /// Lookup multiplicity polynomial `m(ξ)`.
+    /// Lookup multiplicity polynomial `m(ξ)` (arity 1 position).
     pub const LOOKUP_M: usize = 15;
 
-    /// Number of fixed-position evaluations before the quotient tail.
+    /// First multi-column input slot (arity ≥ 2). Subsequent inputs at
+    /// `LOOKUP_INPUT_BASE + i` for `i in 0..arity`.
+    pub const LOOKUP_INPUT_BASE: usize = 13;
+
+    /// Number of fixed-position evaluations before the quotient tail
+    /// at arity 1 (16 = 13 + 2 + 1).
     pub const FIXED_SLOTS: usize = 16;
+
+    /// Compute the fixed-slot count for a given lookup arity.
+    /// `13 + 2k + 1` where 13 covers wires/selectors/permutation,
+    /// 2k covers k input + k table evals, and 1 covers the m eval.
+    #[must_use]
+    pub const fn fixed_slots_for_arity(arity: u32) -> usize {
+        13 + 2 * (arity as usize) + 1
+    }
 }
 
 /// Decoded evaluation bundle — one typed struct per slot family.
@@ -95,8 +130,20 @@ pub struct EvaluationBundle {
     pub selectors: SelectorEvals,
     /// Permutation grand-product + σ evaluations.
     pub permutation: PermutationEvals,
-    /// Lookup argument evaluations.
+    /// Single-column lookup argument evaluations (arity-1 view of the
+    /// proof's lookup data — first input/table column + m). For
+    /// `arity = 1` this is the canonical lookup; for `arity ≥ 2` it
+    /// holds the **first** column pair (useful for tests / fallback)
+    /// and the full multi-column data is in [`Self::multi_lookup`].
     pub lookup: LookupEvals,
+    /// **Session 100** — multi-column lookup data when the proof
+    /// declares `lookup_arity ≥ 2`. `None` for `arity = 1` (the
+    /// `lookup` field above is the canonical view in that case).
+    ///
+    /// When present, this is the structured multi-column eval bundle
+    /// that the verifier feeds into
+    /// [`crate::verify_multi_column_lookup_identity`].
+    pub multi_lookup: Option<MultiColumnLookupEvals>,
     /// Quotient chunk evaluations `h_i(ξ)`. Length = `n_quotient`.
     pub quotient_chunks: Vec<Fr>,
 }
@@ -105,11 +152,19 @@ impl EvaluationBundle {
     /// Decode from the proof's flat `evaluations` bytes + `n_quotient`
     /// from the header.
     ///
-    /// Required `n_evals == FIXED_SLOTS + n_quotient`. Returns
-    /// [`OnChainError::ProofLengthMismatch`] on any size mismatch.
+    /// Required:
+    /// - For `lookup_arity ≤ 1`: `n_evals == FIXED_SLOTS + n_quotient`
+    ///   (16 + n_quotient — the legacy single-column layout).
+    /// - For `lookup_arity = k ≥ 2`: `n_evals == 13 + 2k + 1 + n_quotient`
+    ///   (the multi-column layout).
+    ///
+    /// Returns [`OnChainError::ProofLengthMismatch`] on any size
+    /// mismatch.
     pub fn from_proof(proof: &Halo2KzgProof<'_>) -> Result<Self, OnChainError> {
         let n_quotient = proof.n_quotient as usize;
-        let expected_evals = idx::FIXED_SLOTS + n_quotient;
+        let arity = proof.lookup_arity;
+        let lookup_slots = idx::fixed_slots_for_arity(arity);
+        let expected_evals = lookup_slots + n_quotient;
         if proof.n_evals as usize != expected_evals {
             return Err(OnChainError::ProofLengthMismatch);
         }
@@ -141,15 +196,45 @@ impl EvaluationBundle {
             sigma_2: fr_at(idx::SIGMA_2)?,
             sigma_3: fr_at(idx::SIGMA_3)?,
         };
+
+        // Decode lookup section based on arity.
+        // Layout: [13, 13+arity) inputs, [13+arity, 13+2·arity) tables,
+        // [13+2·arity] m_eval.
+        let arity_us = arity as usize;
+        let mut input_cols: Vec<Fr> = Vec::with_capacity(arity_us);
+        for i in 0..arity_us {
+            input_cols.push(fr_at(idx::LOOKUP_INPUT_BASE + i)?);
+        }
+        let mut table_cols: Vec<Fr> = Vec::with_capacity(arity_us);
+        for i in 0..arity_us {
+            table_cols.push(fr_at(idx::LOOKUP_INPUT_BASE + arity_us + i)?);
+        }
+        let m_eval = fr_at(idx::LOOKUP_INPUT_BASE + 2 * arity_us)?;
+
+        // Always populate the legacy `lookup` field for callsites that
+        // haven't been migrated to multi-column. For arity-1, this IS
+        // the canonical view; for arity ≥ 2, it holds column 0.
         let lookup = LookupEvals {
-            input: fr_at(idx::LOOKUP_INPUT)?,
-            table: fr_at(idx::LOOKUP_TABLE)?,
-            m: fr_at(idx::LOOKUP_M)?,
+            input: input_cols[0],
+            table: table_cols[0],
+            m: m_eval,
         };
 
+        let multi_lookup = if arity >= 2 {
+            Some(MultiColumnLookupEvals::try_new(
+                input_cols,
+                table_cols,
+                m_eval,
+            )?)
+        } else {
+            None
+        };
+
+        // Quotient chunks start after the lookup section.
+        let quotient_base = lookup_slots;
         let mut quotient_chunks = Vec::with_capacity(n_quotient);
         for i in 0..n_quotient {
-            quotient_chunks.push(fr_at(idx::FIXED_SLOTS + i)?);
+            quotient_chunks.push(fr_at(quotient_base + i)?);
         }
 
         Ok(Self {
@@ -157,6 +242,7 @@ impl EvaluationBundle {
             selectors,
             permutation,
             lookup,
+            multi_lookup,
             quotient_chunks,
         })
     }

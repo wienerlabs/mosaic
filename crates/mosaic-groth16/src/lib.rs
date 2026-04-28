@@ -42,7 +42,7 @@ pub mod fr_arith;
 pub mod verifier;
 
 pub use canonical::{Groth16Proof, Groth16VerifyingKey};
-pub use verifier::Groth16Verifier;
+pub use verifier::{verify_groth16_pairing_identity, Groth16Verifier};
 
 /// Wire-stable byte sizes for canonical-format Groth16 artifacts.
 pub mod sizes {

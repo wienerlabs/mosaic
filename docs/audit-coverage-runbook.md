@@ -3,19 +3,46 @@
 This file is the entry point for an external review firm that wants
 to reproduce the Mosaic audit-coverage matrix locally and extend it
 with their own tests. It complements [`AUDIT.md`](../AUDIT.md)
-(milestone log) and the per-session CHANGELOG entries (work
-provenance).
+(milestone log), the per-session CHANGELOG entries (work
+provenance), and [ADR-0006](adr/0006-verifier-audit-gate-pattern.md)
+(audit-gate extraction pattern that all Phase-3 verifiers follow).
 
-## Coverage matrix at v0.8.3-shared-primitive-lift
+## Coverage matrix at v0.8.11-hyperplonk-audit-gate
 
 | Surface | Coverage | Source |
 |---|---|---|
-| Property tests | 544 lib tests across 12 crates (+147 proptest in audit-coverage sweep) | sessions 36-66 |
+| Property tests | 609 lib tests across 16 crates | sessions 36-91 |
 | BPF CU bench | 7 systems via `solana-program-test` | sessions 47, 49 |
 | Host criterion bench | 5 systems with statistical noise floor | session 51 |
 | Fuzz harnesses | 23 targets across 6 production verifiers | sessions 54-59 |
-| Shared primitives | 8 audit-grade helpers in `mosaic-zk-primitives` | sessions 21-66 |
+| Shared primitives | 11 audit-grade helpers in `mosaic-zk-primitives` | sessions 21-83 |
+| **Phase-3 audit gates** | **4 named `verify_*` functions, one per Phase-3 verifier** | **sessions 86-91** |
 | CI activation | All harnesses wired into GitHub Actions | session 61 |
+
+## Phase-3 audit gate quick-reference
+
+| Verifier | Audit gate | Test count | Tag |
+|---|---|---|---|
+| Nova | [`verify_folding_consistency`](../crates/mosaic-nova/src/folding.rs) | 5 unit + 4 proptest | v0.8.6 |
+| Halo2 lookup | [`verify_multi_column_lookup_identity`](../crates/mosaic-halo2/src/circuit.rs) | 4 unit + 3 proptest | v0.8.8 |
+| STARK FRI | [`verify_fri_query`](../crates/mosaic-stark/src/fri.rs) | 5 unit + 1 proptest | v0.8.10 |
+| HyperPlonk | [`verify_sumcheck_claim_reduction`](../crates/mosaic-hyperplonk/src/verifier.rs) | 4 unit + 2 proptest | v0.8.11 |
+
+Each gate is a `pub fn` callable with hand-constructed inputs.
+External auditors should focus reproduction work here — these are
+the soundness boundaries of the workspace.
+
+### Reproduce: run all four audit-gate test suites
+
+```bash
+cargo test -p mosaic-nova       --lib folding::tests
+cargo test -p mosaic-halo2      --lib circuit::tests
+cargo test -p mosaic-stark      --lib fri::tests
+cargo test -p mosaic-hyperplonk --lib verifier::tests
+```
+
+Expected: every gate's full test suite passes (28+ tests across 4
+gates). See ADR-0006 for the gate contract and recipe.
 
 ## How to reproduce locally
 

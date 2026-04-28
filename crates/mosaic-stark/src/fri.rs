@@ -33,11 +33,19 @@
 //! - [`compute_next_layer_value`] — explicit constructor that returns
 //!   the fold result `f_{i+1}(x²)` given the five inputs. Useful for
 //!   test fixtures and for the host-side prover oracle.
+//! - [`verify_fold_chain`] — multi-layer fold-chain walk; returns
+//!   the final-layer `(x, claimed value)` pair without doing the
+//!   final-poly cross-check.
+//! - [`verify_fri_query`] — **session 90** high-level audit gate
+//!   that runs the fold chain AND the final-poly cross-check + the
+//!   `VerificationFailed` rejection in one named call. Mirrors the
+//!   session-86 [`mosaic_nova::verify_folding_consistency`] pattern.
 //!
-//! Session 12 wires these into the verifier pipeline alongside
-//! structured per-FRI-layer openings in the canonical layout.
+//! Session 12 wires `verify_fold_chain` into the verifier pipeline.
+//! Session 90 collapses the verifier's per-query inline pattern into
+//! the new `verify_fri_query` gate.
 
-use crate::goldilocks::Goldilocks;
+use crate::goldilocks::{eval_poly_le_bytes, Goldilocks};
 use mosaic_core::OnChainError;
 
 /// Compute the FRI fold: `f_{i+1}(x²) = f_e(x²) + β · f_o(x²)` where
@@ -170,9 +178,63 @@ pub fn verify_fold_chain(
     Ok((x, prev_value))
 }
 
+/// **Session 90 — high-level FRI per-query soundness gate.**
+///
+/// Combines [`verify_fold_chain`] with the final-polynomial cross-
+/// check that closes the per-query soundness story:
+///
+/// 1. Walk the fold chain `layer_evals → (final_x, computed_final)`.
+/// 2. Evaluate the proof's `fri_final_poly` at `final_x` to get the
+///    expected final-layer value.
+/// 3. Reject as [`OnChainError::VerificationFailed`] if the chain's
+///    `computed_final` disagrees with the expected value.
+///
+/// This is the audit-grade "is this query consistent end-to-end?"
+/// check. Sessions ≤89 inlined the three-step pattern at every
+/// per-query loop iteration; session 90 collapses it into a single
+/// named primitive so an external auditor reading the verifier sees
+/// `verify_fri_query(...)` instead of three lines of fold + eval +
+/// compare. Mirrors the session-86 Nova pattern with
+/// [`mosaic_nova::verify_folding_consistency`].
+///
+/// ## Inputs
+///
+/// - `layer_evals` and `betas` — same shape as
+///   [`verify_fold_chain`]; one layer-evaluation tuple and one fold
+///   challenge per FRI layer.
+/// - `initial_x` — the query's domain element at layer 0 (i.e.
+///   `ω^global_idx` where ω is the trace-domain generator).
+/// - `fri_final_poly_le_bytes` — flat little-endian-bytes coefficient
+///   vector of the proof's claimed final polynomial.
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] — `layer_evals.len() !=
+///   betas.len()`, or the final-poly bytes are not a multiple of 8.
+/// - [`OnChainError::InternalInvariantViolation`] — fold arithmetic
+///   degeneracy (e.g. `x = 0`).
+/// - [`OnChainError::VerificationFailed`] — the chain's computed
+///   final value disagrees with the final-poly evaluation, OR a
+///   layer-to-layer `f_x` consistency check failed inside the chain
+///   walk.
+pub fn verify_fri_query(
+    layer_evals: &[(Goldilocks, Goldilocks)],
+    betas: &[Goldilocks],
+    initial_x: Goldilocks,
+    fri_final_poly_le_bytes: &[u8],
+) -> Result<(), OnChainError> {
+    let (final_x, computed_final) = verify_fold_chain(layer_evals, betas, initial_x)?;
+    let expected_final = eval_poly_le_bytes(fri_final_poly_le_bytes, final_x)?;
+    if computed_final != expected_final {
+        return Err(OnChainError::VerificationFailed);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::goldilocks::eval_poly_le_bytes;
 
     /// Helper: directly evaluate a polynomial `p(t) = Σ c_i · t^i` at
     /// a point in Goldilocks. Small-polynomial helper for constructing
@@ -630,6 +692,218 @@ mod tests {
         ) {
             let r = compute_next_layer_value(f_x, f_neg_x, beta, Goldilocks::zero());
             prop_assert!(r.is_err());
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 90 — verify_fri_query audit-gate coverage.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Helper: encode a Goldilocks coefficient vector to the
+    /// little-endian bytes layout `eval_poly_le_bytes` expects.
+    fn coeffs_to_le_bytes(coeffs: &[Goldilocks]) -> alloc::vec::Vec<u8> {
+        let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(coeffs.len() * 8);
+        for c in coeffs {
+            out.extend_from_slice(&c.to_bytes_le());
+        }
+        out
+    }
+
+    /// Honest tuple → audit gate accepts.
+    ///
+    /// Build a 2-layer fold chain from a degree-3 polynomial, then
+    /// construct the matching final-poly bytes by encoding `f_2`'s
+    /// constant coefficient (which IS the final value because the
+    /// quadratic input collapses to a single Goldilocks scalar after
+    /// the second fold). Audit gate must accept.
+    #[test]
+    fn verify_fri_query_accepts_honest_tuple() {
+        let coeffs = [
+            Goldilocks::new(7),
+            Goldilocks::new(2),
+            Goldilocks::new(5),
+            Goldilocks::new(3),
+        ];
+        let beta_0 = Goldilocks::new(11);
+        let beta_1 = Goldilocks::new(17);
+        let x = Goldilocks::new(6);
+
+        let f0_x = eval_poly(&coeffs, x);
+        let f0_neg_x = eval_poly(&coeffs, x.neg());
+        let f1_x = compute_next_layer_value(f0_x, f0_neg_x, beta_0, x).unwrap();
+        let f1_c0 = Goldilocks::new(7).add(beta_0.mul(Goldilocks::new(2)));
+        let f1_c1 = Goldilocks::new(5).add(beta_0.mul(Goldilocks::new(3)));
+        let x_sq = x.mul(x);
+        let f1_neg_x_sq = f1_c0.add(f1_c1.mul(x_sq.neg()));
+
+        // Final polynomial f_2(t) = f_1_e + β_1 · f_1_o = f1_c0 + β_1·f1_c1.
+        // After fold #2, f_2 is constant in the symbolic sense — encode
+        // the single constant scalar.
+        let f2_const = f1_c0.add(beta_1.mul(f1_c1));
+        let final_poly_bytes = coeffs_to_le_bytes(&[f2_const]);
+
+        let layer_evals = [(f0_x, f0_neg_x), (f1_x, f1_neg_x_sq)];
+        let betas = [beta_0, beta_1];
+        verify_fri_query(&layer_evals, &betas, x, &final_poly_bytes)
+            .expect("honest tuple must accept");
+    }
+
+    /// Tampered final-poly constant → audit gate rejects with
+    /// `VerificationFailed`. The fold chain itself is consistent;
+    /// only the final polynomial is wrong.
+    #[test]
+    fn verify_fri_query_rejects_tampered_final_poly() {
+        let coeffs = [
+            Goldilocks::new(7),
+            Goldilocks::new(2),
+            Goldilocks::new(5),
+            Goldilocks::new(3),
+        ];
+        let beta_0 = Goldilocks::new(11);
+        let beta_1 = Goldilocks::new(17);
+        let x = Goldilocks::new(6);
+
+        let f0_x = eval_poly(&coeffs, x);
+        let f0_neg_x = eval_poly(&coeffs, x.neg());
+        let f1_x = compute_next_layer_value(f0_x, f0_neg_x, beta_0, x).unwrap();
+        let f1_c0 = Goldilocks::new(7).add(beta_0.mul(Goldilocks::new(2)));
+        let f1_c1 = Goldilocks::new(5).add(beta_0.mul(Goldilocks::new(3)));
+        let x_sq = x.mul(x);
+        let f1_neg_x_sq = f1_c0.add(f1_c1.mul(x_sq.neg()));
+        let f2_const = f1_c0.add(beta_1.mul(f1_c1));
+
+        // Tamper: bump the final-poly constant by 1.
+        let bad_final = f2_const.add(Goldilocks::one());
+        let bad_bytes = coeffs_to_le_bytes(&[bad_final]);
+
+        let layer_evals = [(f0_x, f0_neg_x), (f1_x, f1_neg_x_sq)];
+        let betas = [beta_0, beta_1];
+        let res = verify_fri_query(&layer_evals, &betas, x, &bad_bytes);
+        assert!(
+            matches!(res, Err(OnChainError::VerificationFailed)),
+            "tampered final poly must reject as VerificationFailed; got {res:?}",
+        );
+    }
+
+    /// Tampered layer evaluation → cascades into wrong computed final
+    /// → mismatch with honest final-poly → `VerificationFailed`.
+    /// Demonstrates the gate's "any inconsistency is fatal" contract.
+    #[test]
+    fn verify_fri_query_rejects_tampered_layer_eval() {
+        let coeffs = [
+            Goldilocks::new(7),
+            Goldilocks::new(2),
+            Goldilocks::new(5),
+            Goldilocks::new(3),
+        ];
+        let beta_0 = Goldilocks::new(11);
+        let beta_1 = Goldilocks::new(17);
+        let x = Goldilocks::new(6);
+
+        let f0_x = eval_poly(&coeffs, x);
+        let f0_neg_x = eval_poly(&coeffs, x.neg());
+        let f1_x = compute_next_layer_value(f0_x, f0_neg_x, beta_0, x).unwrap();
+        let f1_c0 = Goldilocks::new(7).add(beta_0.mul(Goldilocks::new(2)));
+        let f1_c1 = Goldilocks::new(5).add(beta_0.mul(Goldilocks::new(3)));
+        let x_sq = x.mul(x);
+        let f1_neg_x_sq = f1_c0.add(f1_c1.mul(x_sq.neg()));
+        let f2_const = f1_c0.add(beta_1.mul(f1_c1));
+        let final_poly_bytes = coeffs_to_le_bytes(&[f2_const]);
+
+        // Tamper the layer-1 sibling opening — `f1_neg_x_sq` becomes
+        // `f1_neg_x_sq + 1`, breaking the layer-2 fold consistency.
+        let bad_layer_evals = [
+            (f0_x, f0_neg_x),
+            (f1_x, f1_neg_x_sq.add(Goldilocks::one())),
+        ];
+        let betas = [beta_0, beta_1];
+        let res = verify_fri_query(&bad_layer_evals, &betas, x, &final_poly_bytes);
+        assert!(
+            matches!(res, Err(OnChainError::VerificationFailed)),
+            "tampered layer eval must reject as VerificationFailed; got {res:?}",
+        );
+    }
+
+    /// Length mismatch propagates from `verify_fold_chain` →
+    /// `ProofLengthMismatch` (NOT `VerificationFailed`). The gate
+    /// uses `?` propagation so the underlying error type surfaces
+    /// correctly.
+    #[test]
+    fn verify_fri_query_propagates_length_mismatch() {
+        let layer_evals = [(Goldilocks::one(), Goldilocks::one())];
+        let betas: [Goldilocks; 0] = [];
+        let final_poly_bytes = coeffs_to_le_bytes(&[Goldilocks::zero()]);
+        let res =
+            verify_fri_query(&layer_evals, &betas, Goldilocks::new(13), &final_poly_bytes);
+        assert!(
+            matches!(res, Err(OnChainError::ProofLengthMismatch)),
+            "len mismatch must propagate, not collapse to VerificationFailed; got {res:?}",
+        );
+    }
+
+    /// Zero-layer chain returns `Ok(())` iff the final-poly evaluates
+    /// to the chain's seed final value (Goldilocks zero by the
+    /// `verify_fold_chain` zero-layer convention). Pin this corner
+    /// explicitly so a future change to the zero-layer semantics
+    /// surfaces as a test failure.
+    #[test]
+    fn verify_fri_query_zero_layer_chain_corner() {
+        let layer_evals: [(Goldilocks, Goldilocks); 0] = [];
+        let betas: [Goldilocks; 0] = [];
+        let final_poly_bytes = coeffs_to_le_bytes(&[Goldilocks::zero()]);
+        verify_fri_query(&layer_evals, &betas, Goldilocks::new(7), &final_poly_bytes)
+            .expect("zero-layer + zero final poly must accept");
+
+        // A non-zero final poly value mismatches the chain's zero seed
+        // → reject.
+        let bad_final = coeffs_to_le_bytes(&[Goldilocks::one()]);
+        let res =
+            verify_fri_query(&layer_evals, &betas, Goldilocks::new(7), &bad_final);
+        assert!(
+            matches!(res, Err(OnChainError::VerificationFailed)),
+            "zero-layer + non-zero final poly must reject; got {res:?}",
+        );
+    }
+
+    proptest! {
+        /// Audit-gate equivalence pin: for every honest 1-layer fold
+        /// over random (x, β, polynomial coefficients), the gate
+        /// accepts. The final polynomial encoding is derived from
+        /// the symbolic post-fold polynomial.
+        ///
+        /// Constructs `p(t) = c_0 + c_1·t`, computes the layer-0
+        /// evals `(f_x, f_neg_x)`, folds at β to get `f_1(x²) = c_0 +
+        /// β·c_1`, encodes the symbolic constant as the final poly,
+        /// and asserts the gate accepts.
+        #[test]
+        fn prop_verify_fri_query_accepts_honest_1_layer_fold(
+            c0_seed in any::<u32>(),
+            c1_seed in any::<u32>(),
+            beta_seed in 1u32..=u32::MAX,
+            x_seed in 2u32..=u32::MAX, // skip x=0 boundary
+        ) {
+            let c0 = Goldilocks::new(c0_seed as u64);
+            let c1 = Goldilocks::new(c1_seed as u64);
+            let beta = Goldilocks::new(beta_seed as u64);
+            let x = Goldilocks::new(x_seed as u64);
+            let f_x = c0.add(c1.mul(x));
+            let f_neg_x = c0.add(c1.mul(x.neg()));
+
+            // f_1(t) = c_0 + β·c_1 (constant after one fold).
+            let f1_const = c0.add(beta.mul(c1));
+            let final_poly_bytes = coeffs_to_le_bytes(&[f1_const]);
+
+            let res = verify_fri_query(
+                &[(f_x, f_neg_x)],
+                &[beta],
+                x,
+                &final_poly_bytes,
+            );
+            prop_assert!(
+                res.is_ok(),
+                "honest 1-layer fold must accept at (c0={:?}, c1={:?}, β={:?}, x={:?}); got {:?}",
+                c0_seed, c1_seed, beta_seed, x_seed, res
+            );
         }
     }
 }

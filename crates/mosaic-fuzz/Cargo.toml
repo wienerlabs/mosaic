@@ -188,5 +188,37 @@ path = "fuzz_targets/fuzz_stark_combined.rs"
 test = false
 doc = false
 
+# ───────────────────────────────────────────────────────────────────────
+# Session 95 — audit-gate fuzz harnesses (one per ADR-0006 audit gate
+# that has a wide-enough algebraic input surface to benefit from fuzz
+# coverage). The Phase-2 pairing-identity gates (Groth16 / PLONK) are
+# not fuzzed at the gate level — their algebraic surface is just the
+# syscall verdict byte, which has zero useful fuzz-discoverable space.
+# ───────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "fuzz_nova_consistency_gate"
+path = "fuzz_targets/fuzz_nova_consistency_gate.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_halo2_lookup_gate"
+path = "fuzz_targets/fuzz_halo2_lookup_gate.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_stark_fri_query_gate"
+path = "fuzz_targets/fuzz_stark_fri_query_gate.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_hyperplonk_claim_reduction_gate"
+path = "fuzz_targets/fuzz_hyperplonk_claim_reduction_gate.rs"
+test = false
+doc = false
+
 [lints]
 workspace = true

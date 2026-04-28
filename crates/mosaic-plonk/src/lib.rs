@@ -59,4 +59,5 @@ pub mod verifier;
 pub use mosaic_zk_primitives::{field, fr, g1_consts, msm, transcript};
 
 pub use canonical::{PlonkProof, PlonkVerifyingKey};
+pub use linearization::{verify_pairing, verify_plonk_pairing_identity};
 pub use verifier::PlonkKzgBn254;

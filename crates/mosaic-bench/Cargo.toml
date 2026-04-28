@@ -42,6 +42,14 @@ harness = false
 name = "phase3_host"
 harness = false
 
+# Session 97 — per-audit-gate isolation benches. Complements
+# `phase3_host` (which times verifier-end-to-end) with focused
+# wall-clock numbers for each ADR-0006 audit gate. See
+# `benches/audit_gates_host.rs` for the rationale.
+[[bench]]
+name = "audit_gates_host"
+harness = false
+
 [[bin]]
 name = "bpf-bench"
 path = "src/bin/bpf_bench.rs"

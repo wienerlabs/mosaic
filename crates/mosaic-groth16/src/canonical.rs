@@ -143,27 +143,37 @@ impl Groth16VerifyingKey {
 
 /// BN254 scalar field order `r` in big-endian. Public inputs must be `< r`.
 ///
-/// `r = 21888242871839275222246405745257275088548364400416034343698204186575808495617`.
-pub const BN254_FR_MODULUS_BE: [u8; 32] = [
-    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
-    0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
-];
+/// **Session 98 — primitive consolidation.** Re-export from
+/// [`mosaic_zk_primitives::fr::BN254_FR_MODULUS_BE`] to remove the
+/// long-standing duplicate definition that lived in this crate since
+/// session 1. The bytes are identical (BN254 scalar field order
+/// `21888242871839275222246405745257275088548364400416034343698204186575808495617`);
+/// the workspace now has a single source of truth for the modulus.
+pub use mosaic_zk_primitives::fr::BN254_FR_MODULUS_BE;
 
 /// Compare two big-endian 32-byte buffers as unsigned integers.
 /// Returns `true` if `lhs < rhs`.
-#[must_use]
-pub fn lt_be(lhs: &[u8; 32], rhs: &[u8; 32]) -> bool {
-    for (a, b) in lhs.iter().zip(rhs.iter()) {
-        if a != b {
-            return a < b;
-        }
-    }
-    false
-}
+///
+/// **Session 98 — primitive consolidation.** Re-export from
+/// [`mosaic_zk_primitives::fr::lt_be`] to remove the duplicate
+/// implementation. The behavior is byte-identical (the original
+/// `lt_be` here predated the shared primitive; session 98
+/// consolidates).
+///
+/// Internal callers should prefer the convenience wrapper
+/// [`mosaic_zk_primitives::fr::lt_r`] which compares against the
+/// modulus directly.
+pub use mosaic_zk_primitives::fr::lt_be;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Session 93: explicit `alloc::vec` import for standalone-test
+    // parity. The crate is no_std with `default = []` features, so
+    // the std prelude's `vec!` macro is not in scope under
+    // `cargo test -p mosaic-groth16 --lib` invocations. Workspace-
+    // level test runs masked this with feature unification.
+    use alloc::vec;
 
     #[test]
     fn vk_roundtrip() {

@@ -147,10 +147,17 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
         //    the proof's final_evals bundle, and compare to the
         //    sumcheck's final claim. Session 18: permutation cosets
         //    come from the VK rather than being hardcoded (1, 2, 3).
-        let expected_claim = compute_expected_final_claim(proof.final_evals, &challenges, &vk)?;
-        if expected_claim != sumcheck_out.final_claim {
-            return Err(OnChainError::SumcheckFailed);
-        }
+        //
+        //    Session 91: collapses the inline expected-claim recompute +
+        //    byte-compare + SumcheckFailed return pattern into the
+        //    `verify_sumcheck_claim_reduction` audit gate. Mirrors the
+        //    session-86/88/90 extraction recipe in Nova / Halo2 / STARK.
+        verify_sumcheck_claim_reduction(
+            proof.final_evals,
+            &challenges,
+            &vk,
+            &sumcheck_out.final_claim,
+        )?;
 
         // 5. KZG batched opening — session 28 multi-point reduction.
         //    Real HyperPlonk uses Zeromorph / PST / Gemini to reduce
@@ -208,13 +215,18 @@ impl<'a, B: SyscallBackend + ?Sized> HyperPlonkKzgBn254<'a, B> {
 /// A zero-valued bundle (all evaluations zero) satisfies the combined
 /// expression trivially: `gate_expr` = 0, `perm_expr` = z·(0 - 0) = 0.
 ///
+/// **Session 91**: promoted from private helper to `pub` so external
+/// auditors can call this directly to inspect the expected-claim
+/// computation in isolation. Pair with
+/// [`verify_sumcheck_claim_reduction`] for the full audit gate.
+///
 /// ## Errors
 ///
 /// - [`OnChainError::ProofLengthMismatch`] if `final_evals` is shorter
 ///   than `12 × 32 = 384` bytes.
 /// - [`OnChainError::PublicInputOutOfRange`] if any Fr in the bundle
 ///   is out of range.
-fn compute_expected_final_claim(
+pub fn compute_expected_final_claim(
     final_evals_bytes: &[u8],
     challenges: &PreSumcheckChallenges,
     vk: &HyperPlonkVerifyingKey,
@@ -264,6 +276,57 @@ fn compute_expected_final_claim(
     );
 
     Ok(challenges.alpha * gate_value + perm_value)
+}
+
+/// **Session 91 — high-level claim-reduction audit gate.**
+///
+/// Recomputes the expected sumcheck final-claim value from the proof's
+/// `final_evals` bundle + transcript challenges + VK, then byte-
+/// compares it against the actual sumcheck output's `final_claim`.
+/// Rejects any disagreement as [`OnChainError::SumcheckFailed`].
+///
+/// This is the audit-grade "did the prover honestly run the sumcheck
+/// over the gate + permutation polynomial they claim?" check.
+/// Sessions ≤90 inlined the four-line pattern in
+/// [`HyperPlonkKzgBn254::verify`]; session 91 collapses it into a
+/// single named primitive following the same recipe as:
+///
+/// - Nova's session-86 `verify_folding_consistency`
+/// - Halo2's session-88 `verify_multi_column_lookup_identity`
+/// - STARK FRI's session-90 `verify_fri_query`
+///
+/// External auditors now have one named function per Phase-3 verifier
+/// to read for "the soundness boundary of this proof system" instead
+/// of inline patterns scattered through verifier bodies.
+///
+/// ## Inputs
+///
+/// - `final_evals_bytes` — the proof's flat `final_evals` byte buffer
+///   (12 × 32 = 384 bytes minimum, indexed via [`crate::canonical::final_evals_index`]).
+/// - `challenges` — the pre-sumcheck challenges (α, β, γ) derived
+///   from the round-1 transcript before sumcheck began.
+/// - `vk` — the verifier's view of the constraint system (cosets
+///   `k_1, k_2, k_3` for the permutation term).
+/// - `sumcheck_final_claim` — the [`crate::sumcheck::SumcheckOutput::final_claim`]
+///   value emerging from the sumcheck protocol's `n` rounds.
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] / [`OnChainError::PublicInputOutOfRange`]
+///   propagated from `compute_expected_final_claim` parsing.
+/// - [`OnChainError::SumcheckFailed`] if the recomputed expected
+///   claim disagrees with the sumcheck protocol's final claim.
+pub fn verify_sumcheck_claim_reduction(
+    final_evals_bytes: &[u8],
+    challenges: &PreSumcheckChallenges,
+    vk: &HyperPlonkVerifyingKey,
+    sumcheck_final_claim: &Fr,
+) -> Result<(), OnChainError> {
+    let expected_claim = compute_expected_final_claim(final_evals_bytes, challenges, vk)?;
+    if expected_claim != *sumcheck_final_claim {
+        return Err(OnChainError::SumcheckFailed);
+    }
+    Ok(())
 }
 
 /// Compute the scaffold permutation term at the sumcheck challenge
@@ -820,6 +883,154 @@ mod tests {
                 r.is_err(),
                 "VK selector flip at off {off} (new_val {new_val:#04x}) \
                  unexpectedly accepted: {r:?}"
+            );
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 91 — verify_sumcheck_claim_reduction direct coverage.
+    //
+    // The audit gate is implicitly exercised by every `verify_*` test
+    // above, but the named function deserves explicit unit + proptest
+    // coverage so future regressions on the gate's input-validation
+    // surface surface as direct failures rather than indirect ones.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Helper: build a 384-byte zero-filled `final_evals` buffer.
+    /// At zero, gate_expr = 0, perm_value = z·(0-0) = 0, so the
+    /// expected claim is α·0 + 0 = 0.
+    fn zero_final_evals() -> alloc::vec::Vec<u8> {
+        alloc::vec![0u8; FINAL_EVALS * FR_LEN]
+    }
+
+    fn sample_pre_sumcheck_challenges() -> PreSumcheckChallenges {
+        // Non-degenerate Fr values to avoid corner-case arithmetic.
+        PreSumcheckChallenges {
+            alpha: Fr::from(7u64),
+            beta: Fr::from(11u64),
+            gamma: Fr::from(13u64),
+        }
+    }
+
+    fn sample_vk() -> HyperPlonkVerifyingKey {
+        HyperPlonkVerifyingKey {
+            n_public: 1,
+            num_variables: 10,
+            x2_g2: g2_generator_bytes(),
+            q_m_g1: [0; G1_LEN],
+            q_l_g1: [0; G1_LEN],
+            q_r_g1: [0; G1_LEN],
+            q_o_g1: [0; G1_LEN],
+            q_c_g1: [0; G1_LEN],
+            sigma_1_g1: [0; G1_LEN],
+            sigma_2_g1: [0; G1_LEN],
+            sigma_3_g1: [0; G1_LEN],
+            k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+            k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+            k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
+        }
+    }
+
+    /// Zero `final_evals` ⇒ expected claim = 0. With matching
+    /// sumcheck final claim of zero, the gate accepts.
+    #[test]
+    fn audit_gate_accepts_zero_baseline() {
+        let evals = zero_final_evals();
+        let challenges = sample_pre_sumcheck_challenges();
+        let vk = sample_vk();
+        verify_sumcheck_claim_reduction(&evals, &challenges, &vk, &Fr::from(0u64))
+            .expect("zero baseline must accept");
+    }
+
+    /// Zero `final_evals` (expected claim = 0) but wrong sumcheck
+    /// final-claim ⇒ reject as `SumcheckFailed`.
+    #[test]
+    fn audit_gate_rejects_wrong_sumcheck_final_claim() {
+        let evals = zero_final_evals();
+        let challenges = sample_pre_sumcheck_challenges();
+        let vk = sample_vk();
+        let res = verify_sumcheck_claim_reduction(
+            &evals,
+            &challenges,
+            &vk,
+            &Fr::from(1u64), // expected = 0, sumcheck claims 1 → mismatch
+        );
+        assert!(
+            matches!(res, Err(OnChainError::SumcheckFailed)),
+            "wrong sumcheck final-claim must reject as SumcheckFailed; got {res:?}",
+        );
+    }
+
+    /// Short `final_evals` buffer ⇒ propagates `ProofLengthMismatch`
+    /// from `compute_expected_final_claim` (NOT `SumcheckFailed`).
+    /// Exercises the gate's `?` propagation contract.
+    #[test]
+    fn audit_gate_propagates_short_evals_buffer() {
+        let evals = alloc::vec![0u8; (FINAL_EVALS - 1) * FR_LEN];
+        let challenges = sample_pre_sumcheck_challenges();
+        let vk = sample_vk();
+        let res = verify_sumcheck_claim_reduction(&evals, &challenges, &vk, &Fr::from(0u64));
+        assert!(
+            matches!(res, Err(OnChainError::ProofLengthMismatch)),
+            "short evals must propagate ProofLengthMismatch; got {res:?}",
+        );
+    }
+
+    /// Empty `final_evals` buffer ⇒ same propagation path. Edge
+    /// case for the size-validation surface.
+    #[test]
+    fn audit_gate_propagates_empty_evals_buffer() {
+        let evals: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let challenges = sample_pre_sumcheck_challenges();
+        let vk = sample_vk();
+        let res = verify_sumcheck_claim_reduction(&evals, &challenges, &vk, &Fr::from(0u64));
+        assert!(matches!(res, Err(OnChainError::ProofLengthMismatch)));
+    }
+
+    /// **Round-trip pin.** For any zero `final_evals` (so expected
+    /// claim collapses to 0 deterministically across α/β/γ), the
+    /// audit gate accepts iff the sumcheck final-claim is exactly
+    /// zero. Nonzero alleged sumcheck claim must reject.
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Zero baseline + matching zero sumcheck claim always accepts.
+        #[test]
+        fn proptest_audit_gate_accepts_zero_baseline(
+            alpha_seed in 1u64..=u64::MAX,
+            beta_seed in 1u64..=u64::MAX,
+            gamma_seed in 1u64..=u64::MAX,
+        ) {
+            let evals = zero_final_evals();
+            let challenges = PreSumcheckChallenges {
+                alpha: Fr::from(alpha_seed),
+                beta: Fr::from(beta_seed),
+                gamma: Fr::from(gamma_seed),
+            };
+            let vk = sample_vk();
+            let res = verify_sumcheck_claim_reduction(
+                &evals, &challenges, &vk, &Fr::from(0u64),
+            );
+            prop_assert!(res.is_ok(), "zero baseline must accept; got {:?}", res);
+        }
+
+        /// Zero baseline + non-zero sumcheck claim always rejects.
+        /// The expected claim is 0 (because all evals are zero), so
+        /// any non-zero alleged sumcheck claim is a mismatch.
+        #[test]
+        fn proptest_audit_gate_rejects_nonzero_sumcheck_claim(
+            wrong in 1u64..=u64::MAX,
+        ) {
+            let evals = zero_final_evals();
+            let challenges = sample_pre_sumcheck_challenges();
+            let vk = sample_vk();
+            let res = verify_sumcheck_claim_reduction(
+                &evals, &challenges, &vk, &Fr::from(wrong),
+            );
+            prop_assert!(
+                matches!(res, Err(OnChainError::SumcheckFailed)),
+                "non-zero sumcheck claim must reject; got {:?}",
+                res
             );
         }
     }

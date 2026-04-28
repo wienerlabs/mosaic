@@ -2,16 +2,39 @@
 
 Reference document for the cryptographic soundness checks built into
 each Phase-3 verifier body. **Current as of
-`v0.7.0-phase3-primitives`** — gate count stays at 14 across 4
-Phase-3 bodies; sessions 21-26 consolidate duplicated arithmetic
-patterns across the verifier crates into five shared primitives
-in `mosaic-zk-primitives` (`fr_from_be_bytes_reduced`,
+`v0.8.11-hyperplonk-audit-gate`** — sessions 86 → 91 extracted the
+primary soundness boundary of every Phase-3 verifier into a named,
+publicly callable `verify_*` audit gate following [ADR-0006](adr/0006-verifier-audit-gate-pattern.md).
+Plus session 87 closed a real soundness hole exposed by the session-86
+extraction work (the folding-challenge `r` was not bound to the four
+pre-fold base commits in the Fiat-Shamir transcript, making the new
+audit gate vacuous; the fix absorbs all 7 G1 inputs into round 1).
+
+Sessions 21-26 (consolidation) earlier introduced five shared
+primitives in `mosaic-zk-primitives` (`fr_from_be_bytes_reduced`,
 `derive_fr_challenge`, `fr_be_from_u64`, `verify_two_pair_pairing`,
-`commitment_minus_scalar_g1`), and session 23 adds a dedicated
+`commitment_minus_scalar_g1`); the session-23 work added a dedicated
 `w_eval` slot to the Nova proof canonical replacing the scaffold
-reuse of `public_inputs[0]`. Audit reviewers should start here to
-understand which classes of tampered prover data each verifier
-surfaces before the final structural check.
+reuse of `public_inputs[0]`.
+
+## Phase-3 audit-gate matrix (sessions 86 → 91)
+
+External audit firms — start here. Each gate is a `pub fn` callable
+in isolation with hand-constructed inputs:
+
+| Verifier | Audit gate | Module | Session | Tag |
+|---|---|---|---|---|
+| Nova / HyperNova / ProtoStar | [`verify_folding_consistency`](../crates/mosaic-nova/src/folding.rs) | `mosaic_nova::folding` | 86 | v0.8.6 |
+| Halo2-KZG (lookup) | [`verify_multi_column_lookup_identity`](../crates/mosaic-halo2/src/circuit.rs) | `mosaic_halo2::circuit` | 88 | v0.8.8 |
+| FRI-STARK (per-query) | [`verify_fri_query`](../crates/mosaic-stark/src/fri.rs) | `mosaic_stark::fri` | 90 | v0.8.10 |
+| HyperPlonk-KZG | [`verify_sumcheck_claim_reduction`](../crates/mosaic-hyperplonk/src/verifier.rs) | `mosaic_hyperplonk::verifier` | 91 | v0.8.11 |
+
+See [ADR-0006](adr/0006-verifier-audit-gate-pattern.md) for the
+recipe and contract every audit gate follows.
+
+Audit reviewers should start here to understand which classes of
+tampered prover data each verifier surfaces before the final
+structural check.
 
 ## Summary table — 14 independent gates
 

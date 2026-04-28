@@ -89,6 +89,9 @@ pub mod verifier;
 
 pub use canonical::{FoldingVariant, NovaFoldingProof, NovaFoldingVerifyingKey};
 pub use challenges::{derive_challenges, NovaChallenges};
-pub use folding::{folded_commitment_from_fold, folded_error_commitment, hadamard_residual};
+pub use folding::{
+    folded_commitment_from_fold, folded_commitment_two_term, folded_error_commitment,
+    hadamard_residual, verify_folding_consistency,
+};
 pub use kzg::verify_opening_scaffold;
 pub use verifier::NovaFolding;

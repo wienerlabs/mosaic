@@ -45,7 +45,7 @@
 //! derivation free of on-chain Fr multiplication.
 
 use crate::{
-    canonical::{lt_be, Groth16Proof, Groth16VerifyingKey, BN254_FR_MODULUS_BE},
+    canonical::{Groth16Proof, Groth16VerifyingKey},
     fr_arith::{add_mod_r, reduce_mod_r},
     sizes::{FR_LEN, G1_LEN, G2_LEN},
 };
@@ -54,15 +54,16 @@ use mosaic_core::{
     syscall::{AltBn128Op, InputEndianness, SyscallBackend},
     OnChainError,
 };
+use mosaic_zk_primitives::{fr::lt_r, msm::negate_g1};
 
 /// G1 additive identity in canonical 64-byte form.
 const G1_ZERO: [u8; G1_LEN] = [0u8; G1_LEN];
 
-/// BN254 base-field modulus `q` in big-endian (for G1 y-negation).
-const BN254_FQ_MODULUS_BE: [u8; 32] = [
-    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
-    0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
-];
+// Session 99 — `BN254_FQ_MODULUS_BE` and `negate_g1` were both
+// duplicates of the canonical workspace primitives. Both are now
+// imported from `mosaic_zk_primitives::msm` (the modulus via
+// `BN254_FQ_MODULUS_BE`, the negation via the `negate_g1` function
+// at the use-site). Local definitions removed.
 
 /// Perform a batched Groth16 verification for `N ≥ 1` proofs sharing
 /// the same verifying key.
@@ -107,7 +108,9 @@ pub fn batch_verify<B: SyscallBackend + ?Sized, const LE_INPUTS: bool>(
             if LE_INPUTS {
                 be.reverse();
             }
-            if !lt_be(&be, &BN254_FR_MODULUS_BE) {
+            // Session 98: lt_r is the shared-primitive convenience
+            // wrapper for `lt_be(a, &BN254_FR_MODULUS_BE)`.
+            if !lt_r(&be) {
                 return Err(OnChainError::PublicInputOutOfRange);
             }
         }
@@ -263,26 +266,5 @@ fn add_g1<B: SyscallBackend + ?Sized>(
     Ok(result)
 }
 
-/// Negate G1 y-coordinate in big-endian canonical form.
-fn negate_g1(point: &[u8; G1_LEN]) -> [u8; G1_LEN] {
-    let mut out = *point;
-    let y_slice = &mut out[32..64];
-    if y_slice.iter().all(|b| *b == 0) {
-        return out;
-    }
-    let mut borrow: i16 = 0;
-    for i in (0..32).rev() {
-        let q_b = i16::from(BN254_FQ_MODULUS_BE[i]);
-        let y_b = i16::from(y_slice[i]);
-        let diff = q_b - y_b - borrow;
-        if diff < 0 {
-            y_slice[i] = (diff + 256) as u8;
-            borrow = 1;
-        } else {
-            y_slice[i] = diff as u8;
-            borrow = 0;
-        }
-    }
-    debug_assert_eq!(borrow, 0, "negate_g1 saw y > q");
-    out
-}
+// Session 99 — `negate_g1` lifted to mosaic_zk_primitives::msm.
+// Imported at the top of this file.

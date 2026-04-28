@@ -72,4 +72,6 @@ pub use gate::{decode_wire_evals, gate_expr, SelectorEvals, WireEvals};
 pub use kzg::verify_batched_opening;
 pub use mle::{eq_poly_eval, mle_eval_from_cube};
 pub use sumcheck::{verify_sumcheck, RoundPolynomial, SumcheckOutput};
-pub use verifier::HyperPlonkKzgBn254;
+pub use verifier::{
+    compute_expected_final_claim, verify_sumcheck_claim_reduction, HyperPlonkKzgBn254,
+};

@@ -97,7 +97,10 @@ mod tests {
         assert_eq!(g2.len(), 128);
         // Sanity: G2 byte pattern is non-zero in all four Fq2 components.
         for chunk in g2.chunks(32) {
-            assert!(chunk.iter().any(|b| *b != 0), "G2 component should not be zero");
+            assert!(
+                chunk.iter().any(|b| *b != 0),
+                "G2 component should not be zero"
+            );
         }
     }
 }

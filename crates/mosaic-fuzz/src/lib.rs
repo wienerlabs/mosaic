@@ -2,20 +2,53 @@
 //!
 //! cargo-fuzz harnesses for the Mosaic verifier suite.
 //!
-//! Eight harnesses are wired in `fuzz_targets/`:
+//! ## Original three Groth16 harnesses (sessions ≤ 54)
 //!
 //! - `fuzz_groth16_proof_bytes` — feed arbitrary bytes as proof; expect
 //!   `Err(_)` or panic-free success.
 //! - `fuzz_vk_bytes` — feed arbitrary bytes as Groth16 VK; same expectation.
 //! - `fuzz_public_inputs` — fix VK + proof, vary public inputs.
 //!
-//! Session 54 expansion (Phase-2 + Phase-3 verifier surfaces):
+//! ## Session 54-59 expansion (Phase-2 + Phase-3 verifier outer surfaces)
 //!
-//! - `fuzz_plonk_proof_bytes` — KZG-PLONK BN254
-//! - `fuzz_hyperplonk_proof_bytes` — HyperPlonk-KZG BN254
-//! - `fuzz_halo2_proof_bytes` — Halo2-KZG BN254
-//! - `fuzz_nova_proof_bytes` — Nova folding BN254
-//! - `fuzz_stark_proof_bytes` — FRI-STARK Goldilocks
+//! For each of the 5 systems below, four harnesses fuzz the verifier's
+//! outer entry-point byte slots: `proof_bytes`, `vk_bytes`,
+//! `public_inputs`, and a `combined` cross-slot fuzzer that varies
+//! all three independently. 5 systems × 4 surfaces = 20 harnesses.
+//!
+//! - `fuzz_plonk_*` — KZG-PLONK BN254
+//! - `fuzz_hyperplonk_*` — HyperPlonk-KZG BN254
+//! - `fuzz_halo2_*` — Halo2-KZG BN254
+//! - `fuzz_nova_*` — Nova folding BN254
+//! - `fuzz_stark_*` — FRI-STARK Goldilocks
+//!
+//! ## Session 95 expansion (audit-gate algebraic surfaces)
+//!
+//! Following ADR-0006 (audit-gate extraction pattern), each Phase-3
+//! verifier exposes its primary soundness check as a named `verify_*`
+//! audit gate. These four harnesses fuzz the gate's algebraic input
+//! surface directly — NOT the verifier's outer parsing surface:
+//!
+//! - `fuzz_nova_consistency_gate` — Nova `verify_folding_consistency`
+//!   (7 × 64 G1 + 1 × 32 Fr = 480 B input)
+//! - `fuzz_halo2_lookup_gate` — Halo2
+//!   `verify_multi_column_lookup_identity` (variable-arity columns)
+//! - `fuzz_stark_fri_query_gate` — STARK `verify_fri_query`
+//!   (variable-layer fold chain + final-poly bytes)
+//! - `fuzz_hyperplonk_claim_reduction_gate` — HyperPlonk
+//!   `verify_sumcheck_claim_reduction` (12-slot final_evals + α/β/γ
+//!   + VK cosets + alleged sumcheck claim)
+//!
+//! The Phase-2 pairing-identity gates (Groth16 / PLONK
+//! `verify_*_pairing_identity`) are NOT fuzzed at the gate level —
+//! their algebraic surface reduces to the syscall verdict byte, which
+//! has zero useful fuzz-discoverable space.
+//!
+//! ## Total inventory at session 95
+//!
+//! 23 outer-surface harnesses + 4 audit-gate harnesses = **27 harnesses**.
+//!
+//! ## Panic-free invariant
 //!
 //! Every harness asserts the same panic-free invariant: hostile bytes
 //! must surface as `Err(OnChainError::*)` or — in the rare case the

@@ -213,6 +213,13 @@ pub fn eval_poly_le_bytes(coeffs_le: &[u8], x: Goldilocks) -> Result<Goldilocks,
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Session 91B: explicit `alloc::vec::Vec` import. The crate is
+    // `no_std` with `default = []` features, so the `std::Vec`
+    // prelude is not in scope under standalone `cargo test -p
+    // mosaic-stark` invocations. Workspace-level test runs masked
+    // this with feature unification (other crates pulled `std` in).
+    // This import keeps the in-tree tests crate-agnostic.
+    use alloc::vec::Vec;
 
     #[test]
     fn zero_is_zero() {

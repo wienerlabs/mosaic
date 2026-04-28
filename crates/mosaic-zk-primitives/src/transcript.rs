@@ -61,7 +61,11 @@ impl<'b, B: SyscallBackend + ?Sized> Transcript<'b, B> {
     /// Construct a fresh transcript.
     #[must_use]
     pub fn new(kind: Kind, backend: &'b B) -> Self {
-        Self { kind, backend, accumulated: Vec::with_capacity(256) }
+        Self {
+            kind,
+            backend,
+            accumulated: Vec::with_capacity(256),
+        }
     }
 
     /// Reset the accumulator without changing the kind or backend. Use
@@ -258,7 +262,10 @@ mod tests {
         t.absorb(b"mosaic-plonk");
         let c1 = t.get_challenge().unwrap();
         let c2 = t.get_challenge().unwrap();
-        assert_eq!(c1, c2, "identical transcript state must yield identical challenges");
+        assert_eq!(
+            c1, c2,
+            "identical transcript state must yield identical challenges"
+        );
     }
 
     #[test]
@@ -345,18 +352,8 @@ mod tests {
     #[test]
     fn derive_fr_challenge_is_deterministic() {
         let backend = MockBackend;
-        let a = derive_fr_challenge(
-            &backend,
-            b"mosaic-test/v",
-            &[b"seed-1", b"seed-2"],
-        )
-        .unwrap();
-        let b = derive_fr_challenge(
-            &backend,
-            b"mosaic-test/v",
-            &[b"seed-1", b"seed-2"],
-        )
-        .unwrap();
+        let a = derive_fr_challenge(&backend, b"mosaic-test/v", &[b"seed-1", b"seed-2"]).unwrap();
+        let b = derive_fr_challenge(&backend, b"mosaic-test/v", &[b"seed-1", b"seed-2"]).unwrap();
         assert_eq!(a, b, "same inputs must yield same challenge");
     }
 
@@ -369,10 +366,7 @@ mod tests {
         let backend = MockBackend;
         let v = derive_fr_challenge(&backend, b"halo2/v", &[b"same"]).unwrap();
         let u = derive_fr_challenge(&backend, b"halo2/u", &[b"same"]).unwrap();
-        assert_ne!(
-            v, u,
-            "distinct domains must yield distinct challenges"
-        );
+        assert_ne!(v, u, "distinct domains must yield distinct challenges");
     }
 
     #[test]

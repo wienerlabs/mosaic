@@ -396,14 +396,23 @@ pub fn add_g1<B: SyscallBackend + ?Sized>(
 /// `q = BN254 base field modulus`. Used in PLONK for building the E/F
 /// commitments in the KZG batched opening check and for the verifier's
 /// `e(-A, B) = ...` rewrite.
+/// BN254 base-field modulus `q` in big-endian.
+///
+/// `q = 21888242871839275222246405745257275088696311157297823662689037894645226208583`.
+///
+/// **Session 99** — promoted from a function-scoped `const` inside
+/// [`negate_g1`] to a `pub const` at module scope so other crates
+/// (notably `mosaic-groth16::{verifier, batch}`) can use the
+/// canonical workspace-wide source of truth instead of redefining
+/// the constant locally. Mirrors the session-98 consolidation that
+/// promoted `BN254_FR_MODULUS_BE` to a single source of truth.
+pub const BN254_FQ_MODULUS_BE: [u8; 32] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+    0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
+];
+
 #[must_use]
 pub fn negate_g1(point: &[u8; 64]) -> [u8; 64] {
-    /// BN254 base-field modulus `q` in big-endian.
-    const BN254_FQ_MODULUS_BE: [u8; 32] = [
-        0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58,
-        0x5d, 0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c,
-        0xfd, 0x47,
-    ];
     let mut out = *point;
     let y_slice = &mut out[32..64];
     // If y == 0, negation is identity.

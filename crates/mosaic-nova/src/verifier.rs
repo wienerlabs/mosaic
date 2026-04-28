@@ -76,7 +76,7 @@
 use crate::{
     canonical::{NovaFoldingProof, NovaFoldingVerifyingKey},
     challenges::derive_challenges,
-    folding::{folded_commitment_from_fold, hadamard_residual},
+    folding::{hadamard_residual, verify_folding_consistency},
     kzg::verify_spartan_batched_opening,
 };
 use ark_ff::Zero;
@@ -163,39 +163,44 @@ impl<'a, B: SyscallBackend + ?Sized> NovaFolding<'a, B> {
             return Err(OnChainError::SumcheckFailed);
         }
 
-        // Session-15-nova: folded-commitment reconstruction.
-        // Recompute `E_folded` and `W_folded` from the two base
-        // instances and the cross-term T using the transcript-
-        // derived folding challenge `r`. Reject if the reconstruction
-        // doesn't match the declared `e_comm` / `w_comm`.
+        // Session-15-nova / Session 86: folded-commitment audit gate.
         //
-        //   E_folded ?= E_1 + r·E_2 + r²·T     (folding.rs primitive)
-        //   W_folded ?= W_1 + r·W_2 + r²·T
+        // Reconstructs `E_folded` and `W_folded` from the two base
+        // instances + cross-term using the transcript-derived folding
+        // challenge `r`, then byte-compares against the declared
+        // `e_comm` / `w_comm`. Session 86 extracts the dual check
+        // into [`verify_folding_consistency`] (audit clarity) and
+        // promotes the `W` formula from the placeholder 3-term to
+        // the canonical 2-term:
         //
-        // Catches a malicious prover who sends inconsistent base/fold
-        // commitments — even with a valid Hadamard residual, the
-        // fold reconstruction will disagree with the declared E/W.
+        //   E_folded ?= E_1 + r·E_2 + r²·T   (3-term, error vector)
+        //   W_folded ?= W_1 + r·W_2          (2-term, witness)
+        //
+        // The `W` two-term form matches the canonical relaxed-R1CS
+        // Nova folding rule: the witness vector itself folds linearly
+        // because the constraint-relation cross-term lands on `E`,
+        // not `W`. Sessions ≤85 used the 3-term form for both — that
+        // was algebraically equivalent only because all scaffold
+        // tests have `T = 0` (then `r²·T` vanishes). Switching to
+        // the canonical 2-term tightens the soundness contract for
+        // future fixtures with non-zero cross-terms.
+        //
+        // Catches a malicious prover who sends inconsistent base /
+        // fold commitments — even with a valid Hadamard residual,
+        // the fold reconstruction will disagree with the declared
+        // E / W.
         let r = challenges.r;
-        let computed_e = folded_commitment_from_fold(
+        verify_folding_consistency(
             self.backend,
             proof.base_e_1,
             proof.base_e_2,
-            proof.t_comm,
-            &r,
-        )?;
-        if &computed_e[..] != proof.e_comm {
-            return Err(OnChainError::VerificationFailed);
-        }
-        let computed_w = folded_commitment_from_fold(
-            self.backend,
             proof.base_w_1,
             proof.base_w_2,
             proof.t_comm,
+            proof.e_comm,
+            proof.w_comm,
             &r,
         )?;
-        if &computed_w[..] != proof.w_comm {
-            return Err(OnChainError::VerificationFailed);
-        }
 
         // Session 19: Spartan-batched multi-poly opening. Previously
         // session-≤18 opened only `w_comm`; the batched reduction now

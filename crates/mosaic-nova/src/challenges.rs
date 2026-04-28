@@ -19,6 +19,10 @@
 //! transcript.absorb(proof.e_comm)                // 64 B
 //! transcript.absorb(proof.w_comm)                // 64 B
 //! transcript.absorb(proof.t_comm)                // 64 B
+//! transcript.absorb(proof.base_e_1)              // 64 B  (s87)
+//! transcript.absorb(proof.base_e_2)              // 64 B  (s87)
+//! transcript.absorb(proof.base_w_1)              // 64 B  (s87)
+//! transcript.absorb(proof.base_w_2)              // 64 B  (s87)
 //! r = transcript.squeeze()
 //!
 //! // ---- Round 2: ξ (evaluation point) ----
@@ -39,8 +43,19 @@
 //!
 //! ## Rationale
 //!
-//! - **r first**: the accumulator commitments `E, W, T` are the
-//!   inputs the folding challenge reduces — absorb-then-squeeze.
+//! - **r first**: the accumulator commitments `E, W, T` AND the four
+//!   pre-fold base commitments are the inputs the folding challenge
+//!   reduces — absorb-then-squeeze. Session 87 added the four base
+//!   commits to the round-1 absorb to close a soundness hole: without
+//!   them the prover could choose `r` post-hoc to make the
+//!   [`crate::folding::verify_folding_consistency`] audit gate
+//!   vacuous (pick any `(e_comm, w_comm, t_comm)`, derive `r`,
+//!   then back-solve `(base_e_1, base_e_2, base_w_1, base_w_2)`
+//!   such that the gate passes). Binding `r` to the base commits
+//!   forces the prover to commit to the base instances *before*
+//!   seeing `r` — Schwartz-Zippel + DLOG hardness then make
+//!   constructing a non-honestly-folded passing tuple
+//!   computationally infeasible.
 //! - **ξ after r + u + aux**: evaluation point depends on the fold
 //!   scalar `u` and any `HyperNova` higher-degree aux commits.
 //! - **ν last**: opening batch is the final challenge before the
@@ -110,6 +125,17 @@ pub fn derive_challenges<'b, B: SyscallBackend + ?Sized>(
     transcript.absorb(proof.e_comm);
     transcript.absorb(proof.w_comm);
     transcript.absorb(proof.t_comm);
+    // Session 87: bind `r` to the four pre-fold base commits so the
+    // prover cannot back-solve them after seeing `r`. Closes the
+    // verify_folding_consistency soundness hole introduced in
+    // session 86: without these absorbs the audit gate is vacuous
+    // because the prover can pick (e_comm, w_comm, t_comm), derive
+    // `r`, then choose (base_e_1, base_e_2, base_w_1, base_w_2)
+    // that satisfy the fold reconstruction by construction.
+    transcript.absorb(proof.base_e_1);
+    transcript.absorb(proof.base_e_2);
+    transcript.absorb(proof.base_w_1);
+    transcript.absorb(proof.base_w_2);
     let r_bytes = transcript.get_challenge()?;
     let r = fr_from_canonical_bytes(&r_bytes)?;
 
@@ -477,6 +503,62 @@ mod tests {
             prop_assert_ne!(ca.r, cb.r);
             prop_assert_ne!(ca.xi, cb.xi);
             prop_assert_ne!(ca.nu, cb.nu);
+        }
+
+        /// **Session 87 — audit-grade soundness invariant.**
+        ///
+        /// Tampering any byte of the four pre-fold base commitments
+        /// (`base_e_1`, `base_e_2`, `base_w_1`, `base_w_2`) MUST
+        /// change `r`. This property is what makes the
+        /// [`crate::folding::verify_folding_consistency`] audit gate
+        /// non-vacuous: if `r` were independent of the base commits,
+        /// a malicious prover could choose `r` first (via picking
+        /// (e_comm, w_comm, t_comm)) and then back-solve the base
+        /// commits to make the gate pass.
+        ///
+        /// The cascade extends to ξ and ν because they're derived
+        /// from `r` in rounds 2 and 3.
+        ///
+        /// A future refactor that removes any of the four base-commit
+        /// absorbs from round 1 will trip this proptest immediately
+        /// (the `r` equality assertion fires) — this is the exact
+        /// regression guard the property is designed to enforce.
+        #[test]
+        fn proptest_base_commit_mutation_cascades(
+            base_select in 0u8..4, // 0=e_1, 1=e_2, 2=w_1, 3=w_2
+            byte_idx in 0usize..sizes::G1_LEN,
+            bit_mask in 1u8..=u8::MAX,
+        ) {
+            let backend = HostBackend::new();
+            let vk = sample_vk();
+            // Base commits live at:
+            //   base_e_1: FIXED + COMMITS + SCALAR + 0·G1
+            //   base_e_2: FIXED + COMMITS + SCALAR + 1·G1
+            //   base_w_1: FIXED + COMMITS + SCALAR + 2·G1
+            //   base_w_2: FIXED + COMMITS + SCALAR + 3·G1
+            let base_off = sizes::FIXED_HEADER_LEN
+                + sizes::FIXED_COMMITS_LEN
+                + sizes::SCALAR_LEN
+                + (base_select as usize) * sizes::G1_LEN
+                + byte_idx;
+            let mut buf_a = sample_proof_bytes(0, 2);
+            let mut buf_b = sample_proof_bytes(0, 2);
+            buf_a[base_off] = 0x55;
+            buf_b[base_off] = 0x55 ^ bit_mask;
+            prop_assume!(buf_a[base_off] != buf_b[base_off]);
+            let p_a = NovaFoldingProof::from_bytes(&buf_a).unwrap();
+            let p_b = NovaFoldingProof::from_bytes(&buf_b).unwrap();
+            let pi = two_pi(1, 2);
+            let (ca, _) = derive_challenges(&backend, &vk, &pi, &p_a).unwrap();
+            let (cb, _) = derive_challenges(&backend, &vk, &pi, &p_b).unwrap();
+            prop_assert_ne!(
+                ca.r, cb.r,
+                "base commit slot {} byte {} bit {} must shift r — \
+                 missing absorb breaks the fold-consistency soundness gate",
+                base_select, byte_idx, bit_mask
+            );
+            prop_assert_ne!(ca.xi, cb.xi, "ξ should cascade from r");
+            prop_assert_ne!(ca.nu, cb.nu, "ν should cascade from ξ");
         }
     }
 }

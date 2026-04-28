@@ -23,7 +23,7 @@
 //! session 4e when real fixtures drive the extension.
 
 use ark_bn254::Fr;
-use ark_ff::Field;
+use ark_ff::{Field, Zero};
 use mosaic_core::OnChainError;
 
 // ---------------------------------------------------------------------
@@ -210,11 +210,28 @@ pub fn lookup_expr(lookup: &LookupEvals, theta: &Fr) -> Result<Fr, OnChainError>
 ///
 /// Phase-3 audit caveat
 ///
-/// This is the structural multi-column reduction. Real Halo2 also
-/// runs a sumcheck over the m polynomial (`Σ_X m(X) = 0`) to ensure
-/// the multiplicities are valid; that piece stays in
-/// `vanishing.rs::vanishing_identity_holds` as a scaffold caveat for
-/// session 4f's full lookup soundness pin.
+/// This is the structural per-evaluation-point reduction. Real Halo2
+/// log-derivative lookups also need the **sum-over-domain identity**:
+///
+/// ```text
+/// Σ_{X ∈ H}  [ m(X) · (table_combined(X) + θ^k)⁻¹
+///            − (input_combined(X) + θ^k)⁻¹ ]   =   0
+/// ```
+///
+/// holding when summed across the trace domain `H`. The vanishing
+/// polynomial check `t(ξ) · Z_H(ξ) == combined_expr(ξ)` performed by
+/// [`crate::vanishing::vanishing_identity_holds`] enforces this
+/// implicitly (the lookup contribution is folded into `combined_expr`
+/// with a `y²` weight, then the quotient division handles the
+/// sum-to-zero), so the present module's job is the per-row primitive.
+///
+/// The session-85 docstring previously claimed `Σ_X m(X) = 0` — that
+/// is **incorrect**. In a satisfying log-derivative lookup,
+/// `Σ_X m(X) = N` (the input row count, since each input row
+/// contributes one to the multiplicity of its matching table row).
+/// Session 88 corrects the doc and adds an audit-gate function
+/// [`verify_multi_column_lookup_identity`] that wraps the per-row
+/// reduction with the explicit `== 0` soundness check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MultiColumnLookupEvals {
     /// `k` input column evaluations at ξ. Empty input is rejected as
@@ -225,6 +242,67 @@ pub struct MultiColumnLookupEvals {
     pub table_cols: alloc::vec::Vec<Fr>,
     /// Multiplicity polynomial evaluation `m(ξ)`.
     pub m: Fr,
+}
+
+impl MultiColumnLookupEvals {
+    /// **Session 88** — safe constructor that validates wire-shape
+    /// invariants up-front instead of deferring to
+    /// [`multi_column_lookup_expr`]. Callers that build the evals
+    /// from parsed proof bytes can fail at parse time rather than
+    /// at evaluation time.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] if `input_cols` is
+    ///   empty or its length disagrees with `table_cols`.
+    pub fn try_new(
+        input_cols: alloc::vec::Vec<Fr>,
+        table_cols: alloc::vec::Vec<Fr>,
+        m: Fr,
+    ) -> Result<Self, OnChainError> {
+        if input_cols.is_empty() || input_cols.len() != table_cols.len() {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        Ok(Self {
+            input_cols,
+            table_cols,
+            m,
+        })
+    }
+
+    /// Arity (number of column pairs). Always ≥ 1 for a value
+    /// constructed via [`try_new`](Self::try_new).
+    #[must_use]
+    pub fn arity(&self) -> usize {
+        self.input_cols.len()
+    }
+
+    /// **Session 89** — lift a single-column [`LookupEvals`] into the
+    /// equivalent arity-1 multi-column form.
+    ///
+    /// Backward-compatibility bridge: callers parsing the existing
+    /// scaffold proof layout (which carries one (input, table, m)
+    /// tuple) can promote it to the new audit-gate API without any
+    /// wire-format change. The
+    /// [`prop_basic_lookup_promotes_to_multi_arity_1`] proptest pins
+    /// the algebraic equivalence — [`lookup_expr`] and
+    /// [`multi_column_lookup_expr`] must agree byte-for-byte at
+    /// arity 1 because the θ-power weighting collapses
+    /// (`θ⁰ = 1`, `θ^k = θ¹ = θ`).
+    #[must_use]
+    pub fn from_basic(basic: LookupEvals) -> Self {
+        Self {
+            input_cols: alloc::vec![basic.input],
+            table_cols: alloc::vec![basic.table],
+            m: basic.m,
+        }
+    }
+}
+
+impl From<LookupEvals> for MultiColumnLookupEvals {
+    fn from(basic: LookupEvals) -> Self {
+        Self::from_basic(basic)
+    }
 }
 
 /// Evaluate the multi-column lookup argument at ξ via the θ-combined
@@ -244,6 +322,17 @@ pub fn multi_column_lookup_expr(
 ) -> Result<Fr, OnChainError> {
     if lookup.input_cols.is_empty() || lookup.input_cols.len() != lookup.table_cols.len() {
         return Err(OnChainError::ProofLengthMismatch);
+    }
+    // Session 88 — defensive check: θ = 0 collapses the blinder
+    // (`θ^k = 0` for k ≥ 1) and also makes the combined input/table
+    // sums lose the column distinguishability the θ-power weighting
+    // provides (every weight becomes 0 except the leading column).
+    // The Fiat-Shamir transcript is constructed to make `θ = 0`
+    // computationally impossible, but defense-in-depth catches a
+    // hypothetical transcript bug at the soundness boundary instead
+    // of at the inverse fault, which gives a clearer audit trail.
+    if theta.is_zero() {
+        return Err(OnChainError::InternalInvariantViolation);
     }
     let k = lookup.input_cols.len();
 
@@ -270,6 +359,44 @@ pub fn multi_column_lookup_expr(
         .ok_or(OnChainError::InternalInvariantViolation)?;
 
     Ok(lookup.m * table_inv - input_inv)
+}
+
+/// **Session 88** — high-level audit gate for the multi-column
+/// log-derivative lookup identity at the evaluation point ξ.
+///
+/// Computes [`multi_column_lookup_expr`] and rejects the proof if
+/// the result is non-zero. A satisfying lookup with unit
+/// multiplicity per matched row produces a per-row identity value
+/// of zero; the row-level zero combined with the sum-over-domain
+/// identity (handled by the vanishing polynomial check) is the full
+/// soundness story for log-derivative lookups.
+///
+/// Use this from the verifier instead of calling
+/// `multi_column_lookup_expr` and ad-hoc-checking the result against
+/// zero. The named function gives an external auditor a single point
+/// to read for "this is the lookup soundness check" and a single
+/// error type ([`OnChainError::SumcheckFailed`], reused for
+/// consistency with other claim-reduction failures across the
+/// workspace's verifiers).
+///
+/// ## Errors
+///
+/// - [`OnChainError::ProofLengthMismatch`] — empty or arity-mismatched
+///   evals.
+/// - [`OnChainError::InternalInvariantViolation`] — `θ = 0` or one of
+///   the combined denominators is zero (≈ 2/r probability for random
+///   θ — negligible in practice but explicit at the audit boundary).
+/// - [`OnChainError::SumcheckFailed`] — the lookup identity is
+///   violated (the per-row expression is non-zero).
+pub fn verify_multi_column_lookup_identity(
+    lookup: &MultiColumnLookupEvals,
+    theta: &Fr,
+) -> Result<(), OnChainError> {
+    let value = multi_column_lookup_expr(lookup, theta)?;
+    if !value.is_zero() {
+        return Err(OnChainError::SumcheckFailed);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -299,6 +426,46 @@ pub fn combined_expr(
     let gate = gate_expr(wires, selectors);
     let perm_value = permutation_expr(wires, perm, beta, gamma, xi);
     let lookup_value = lookup_expr(lookup, theta)?;
+    let y_sq = *y * y;
+    Ok(gate + *y * perm_value + y_sq * lookup_value)
+}
+
+/// **Session 100** — multi-column variant of [`combined_expr`].
+///
+/// Like [`combined_expr`] but uses [`multi_column_lookup_expr`] for
+/// the lookup contribution, supporting arity ≥ 2 lookup arguments.
+/// At arity 1 the result is byte-equivalent to `combined_expr` —
+/// pinned by `prop_basic_lookup_promotes_to_multi_arity_1` (session
+/// 89) which proves the algebraic equivalence between the two
+/// lookup primitives at arity 1.
+///
+/// Used by the Halo2 verifier when the proof's `lookup_arity ≥ 2`.
+/// For arity-1 proofs, the verifier continues to call `combined_expr`
+/// with the legacy `LookupEvals` to preserve byte-equivalence with
+/// pre-session-100 fixtures.
+///
+/// ## Errors
+///
+/// Propagates errors from [`multi_column_lookup_expr`]:
+/// - [`OnChainError::ProofLengthMismatch`] — empty / arity-mismatched
+///   columns.
+/// - [`OnChainError::InternalInvariantViolation`] — `θ = 0` or
+///   denominator inverse failure.
+#[allow(clippy::too_many_arguments)]
+pub fn combined_expr_multi_column(
+    wires: &WireEvals,
+    selectors: &SelectorEvals,
+    perm: &PermutationEvals,
+    lookup: &MultiColumnLookupEvals,
+    theta: &Fr,
+    beta: &Fr,
+    gamma: &Fr,
+    y: &Fr,
+    xi: &Fr,
+) -> Result<Fr, OnChainError> {
+    let gate = gate_expr(wires, selectors);
+    let perm_value = permutation_expr(wires, perm, beta, gamma, xi);
+    let lookup_value = multi_column_lookup_expr(lookup, theta)?;
     let y_sq = *y * y;
     Ok(gate + *y * perm_value + y_sq * lookup_value)
 }
@@ -687,6 +854,384 @@ mod tests {
             // With probability ≈ 1 - 1/r the mismatch surfaces as a
             // non-zero contribution.
             prop_assert_ne!(v, Fr::zero());
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 88 — `try_new` constructor + θ=0 defensive check +
+    // `verify_multi_column_lookup_identity` audit gate.
+    // ───────────────────────────────────────────────────────────────────
+
+    // ---- try_new ----
+
+    #[test]
+    fn try_new_accepts_arity_1() {
+        let evals = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(1u64)],
+            alloc::vec![Fr::from(1u64)],
+            Fr::from(1u64),
+        )
+        .unwrap();
+        assert_eq!(evals.arity(), 1);
+    }
+
+    #[test]
+    fn try_new_accepts_arity_5() {
+        let evals = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(1u64); 5],
+            alloc::vec![Fr::from(2u64); 5],
+            Fr::from(3u64),
+        )
+        .unwrap();
+        assert_eq!(evals.arity(), 5);
+    }
+
+    #[test]
+    fn try_new_rejects_empty() {
+        let r = MultiColumnLookupEvals::try_new(
+            alloc::vec::Vec::new(),
+            alloc::vec::Vec::new(),
+            Fr::from(1u64),
+        );
+        assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+    }
+
+    #[test]
+    fn try_new_rejects_arity_mismatch() {
+        let r = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(1u64); 3],
+            alloc::vec![Fr::from(2u64); 2],
+            Fr::from(3u64),
+        );
+        assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+    }
+
+    // ---- θ = 0 defensive check ----
+
+    #[test]
+    fn multi_column_lookup_rejects_theta_zero() {
+        let lookup = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(1u64), Fr::from(2u64)],
+            alloc::vec![Fr::from(1u64), Fr::from(2u64)],
+            Fr::from(1u64),
+        )
+        .unwrap();
+        let r = multi_column_lookup_expr(&lookup, &Fr::zero());
+        assert!(
+            matches!(r, Err(OnChainError::InternalInvariantViolation)),
+            "θ=0 should be rejected at the input-validation boundary",
+        );
+    }
+
+    /// The defensive check fires *before* any inverse computation, so
+    /// even an otherwise valid satisfying tuple at θ=0 rejects.
+    #[test]
+    fn multi_column_lookup_rejects_theta_zero_even_for_satisfying_tuple() {
+        let lookup = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(7u64)],
+            alloc::vec![Fr::from(7u64)], // equal => would satisfy at θ ≠ 0 with m=1
+            Fr::from(1u64),
+        )
+        .unwrap();
+        assert!(matches!(
+            multi_column_lookup_expr(&lookup, &Fr::zero()),
+            Err(OnChainError::InternalInvariantViolation)
+        ));
+    }
+
+    // ---- verify_multi_column_lookup_identity ----
+
+    #[test]
+    fn verify_lookup_identity_accepts_satisfying_tuple() {
+        // (a, b) on both sides + m=1 ⇒ identity vanishes ⇒ accept.
+        let lookup = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(3u64), Fr::from(5u64)],
+            alloc::vec![Fr::from(3u64), Fr::from(5u64)],
+            Fr::from(1u64),
+        )
+        .unwrap();
+        let theta = Fr::from(11u64);
+        verify_multi_column_lookup_identity(&lookup, &theta).expect("satisfying tuple must accept");
+    }
+
+    #[test]
+    fn verify_lookup_identity_rejects_non_satisfying_tuple() {
+        // Random m with mismatched columns ⇒ identity ≠ 0 ⇒ reject as
+        // SumcheckFailed.
+        let lookup = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(3u64), Fr::from(5u64)],
+            alloc::vec![Fr::from(3u64), Fr::from(99u64)], // 2nd column differs
+            Fr::from(1u64),
+        )
+        .unwrap();
+        let theta = Fr::from(11u64);
+        let r = verify_multi_column_lookup_identity(&lookup, &theta);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "non-zero lookup expression must surface as SumcheckFailed, got {r:?}",
+        );
+    }
+
+    #[test]
+    fn verify_lookup_identity_propagates_input_validation_errors() {
+        // Empty cols → ProofLengthMismatch (NOT SumcheckFailed).
+        let lookup = MultiColumnLookupEvals {
+            input_cols: alloc::vec::Vec::new(),
+            table_cols: alloc::vec::Vec::new(),
+            m: Fr::from(1u64),
+        };
+        let theta = Fr::from(7u64);
+        assert!(matches!(
+            verify_multi_column_lookup_identity(&lookup, &theta),
+            Err(OnChainError::ProofLengthMismatch)
+        ));
+
+        // Arity mismatch → ProofLengthMismatch (NOT SumcheckFailed).
+        let lookup = MultiColumnLookupEvals {
+            input_cols: alloc::vec![Fr::from(1u64), Fr::from(2u64)],
+            table_cols: alloc::vec![Fr::from(1u64)],
+            m: Fr::from(1u64),
+        };
+        assert!(matches!(
+            verify_multi_column_lookup_identity(&lookup, &theta),
+            Err(OnChainError::ProofLengthMismatch)
+        ));
+    }
+
+    #[test]
+    fn verify_lookup_identity_propagates_theta_zero() {
+        // θ=0 → InternalInvariantViolation (NOT SumcheckFailed).
+        let lookup = MultiColumnLookupEvals::try_new(
+            alloc::vec![Fr::from(3u64)],
+            alloc::vec![Fr::from(3u64)],
+            Fr::from(1u64),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_multi_column_lookup_identity(&lookup, &Fr::zero()),
+            Err(OnChainError::InternalInvariantViolation)
+        ));
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 88 — proptest soundness for the audit gate.
+    // ───────────────────────────────────────────────────────────────────
+
+    proptest! {
+        /// Audit gate accepts any satisfying tuple
+        /// (input_cols == table_cols, m = 1) over a random arity and
+        /// random θ ≠ 0. This is the round-trip invariant: an honest
+        /// prover always passes.
+        #[test]
+        fn proptest_audit_gate_accepts_matching_columns(
+            arity in 1usize..=8,
+            seed in 1u64..=u64::MAX,
+            theta_seed in 2u64..=u64::MAX,
+        ) {
+            let mut r = rng(seed);
+            let cols: alloc::vec::Vec<Fr> =
+                (0..arity).map(|_| Fr::rand(&mut r)).collect();
+            let lookup = MultiColumnLookupEvals::try_new(
+                cols.clone(),
+                cols,
+                Fr::from(1u64),
+            ).expect("well-formed evals");
+            let theta = Fr::from(theta_seed);
+            prop_assert!(
+                verify_multi_column_lookup_identity(&lookup, &theta).is_ok(),
+                "audit gate must accept satisfying tuple at arity={}",
+                arity
+            );
+        }
+
+        /// Audit gate rejects any tuple with a single mismatched
+        /// column (chosen randomly within the arity), surfacing as
+        /// `SumcheckFailed`. Catches the failure mode where an
+        /// adversarial prover tampers one column but leaves the
+        /// remainder intact.
+        #[test]
+        fn proptest_audit_gate_rejects_single_column_mismatch(
+            arity in 2usize..=8,
+            mismatch_idx in 0usize..8,
+            seed in 1u64..=u64::MAX,
+            theta_seed in 2u64..=u64::MAX,
+        ) {
+            prop_assume!(mismatch_idx < arity);
+            let mut r = rng(seed);
+            let mut input_cols: alloc::vec::Vec<Fr> =
+                (0..arity).map(|_| Fr::rand(&mut r)).collect();
+            let table_cols = input_cols.clone();
+            // Tamper one column on the input side.
+            input_cols[mismatch_idx] += Fr::from(1u64);
+            let lookup = MultiColumnLookupEvals::try_new(
+                input_cols,
+                table_cols,
+                Fr::from(1u64),
+            ).expect("well-formed evals");
+            let theta = Fr::from(theta_seed);
+            let res = verify_multi_column_lookup_identity(&lookup, &theta);
+            prop_assert!(
+                matches!(res, Err(OnChainError::SumcheckFailed)),
+                "single-column tamper at arity={} idx={} should reject; got {:?}",
+                arity, mismatch_idx, res
+            );
+        }
+
+        /// Wrong multiplicity rejects: with matching columns but
+        /// `m ≠ 1`, the per-row identity is `(m - 1) · denom⁻¹` which
+        /// is non-zero whenever m ≠ 1. Audit gate must reject as
+        /// `SumcheckFailed`.
+        #[test]
+        fn proptest_audit_gate_rejects_wrong_multiplicity(
+            arity in 1usize..=4,
+            seed in 1u64..=u64::MAX,
+            wrong_m in 2u64..=u64::MAX, // any m ≠ 1
+            theta_seed in 2u64..=u64::MAX,
+        ) {
+            let mut r = rng(seed);
+            let cols: alloc::vec::Vec<Fr> =
+                (0..arity).map(|_| Fr::rand(&mut r)).collect();
+            let lookup = MultiColumnLookupEvals::try_new(
+                cols.clone(),
+                cols,
+                Fr::from(wrong_m),
+            ).expect("well-formed evals");
+            let theta = Fr::from(theta_seed);
+            let res = verify_multi_column_lookup_identity(&lookup, &theta);
+            prop_assert!(
+                matches!(res, Err(OnChainError::SumcheckFailed)),
+                "wrong multiplicity m={} at arity={} should reject; got {:?}",
+                wrong_m, arity, res
+            );
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 89 — LookupEvals → MultiColumnLookupEvals bridge.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// `From` impl is a thin wrapper around `from_basic`. Direct
+    /// regression test: round-trip a `LookupEvals` through the From
+    /// conversion and confirm field-by-field equality.
+    #[test]
+    fn from_basic_preserves_fields() {
+        let basic = LookupEvals {
+            input: Fr::from(7u64),
+            table: Fr::from(13u64),
+            m: Fr::from(2u64),
+        };
+        let lifted = MultiColumnLookupEvals::from_basic(basic);
+        assert_eq!(lifted.arity(), 1);
+        assert_eq!(lifted.input_cols, alloc::vec![Fr::from(7u64)]);
+        assert_eq!(lifted.table_cols, alloc::vec![Fr::from(13u64)]);
+        assert_eq!(lifted.m, Fr::from(2u64));
+    }
+
+    /// `From<LookupEvals>` agrees with `from_basic`. Both spell the
+    /// same construction; pinning the equivalence prevents one path
+    /// from drifting.
+    #[test]
+    fn from_trait_matches_from_basic() {
+        let basic = LookupEvals {
+            input: Fr::from(100u64),
+            table: Fr::from(200u64),
+            m: Fr::from(300u64),
+        };
+        let via_method = MultiColumnLookupEvals::from_basic(basic.clone());
+        let via_trait: MultiColumnLookupEvals = basic.into();
+        assert_eq!(via_method, via_trait);
+    }
+
+    proptest! {
+        /// **Session 89 — backward-compatibility soundness pin.**
+        ///
+        /// The basic single-column [`lookup_expr`] and the multi-column
+        /// [`multi_column_lookup_expr`] applied to the arity-1
+        /// promotion of the same `LookupEvals` MUST produce identical
+        /// `Fr` values for every (input, table, m, θ) tuple where
+        /// θ ≠ 0 and the denominators don't degenerate.
+        ///
+        /// Algebraic justification: at arity-1 the θ-power vector is
+        /// `[θ⁰] = [1]`, so input_combined = input and table_combined
+        /// = table. The blinder is `θ^k = θ¹ = θ`. Substituting:
+        ///   m·(table + θ)⁻¹ - (input + θ)⁻¹
+        /// — exactly the basic `lookup_expr` formula.
+        ///
+        /// This is the load-bearing invariant for the bridge: any
+        /// future verifier that wants to unify single-column and
+        /// multi-column lookup paths under the new audit-gate API
+        /// can do so without changing the underlying soundness story.
+        #[test]
+        fn prop_basic_lookup_promotes_to_multi_arity_1(
+            input_seed in 1u64..=u64::MAX,
+            table_seed in 1u64..=u64::MAX,
+            m_seed in 0u64..=u64::MAX,
+            theta_seed in 1u64..=u64::MAX,
+        ) {
+            let basic = LookupEvals {
+                input: Fr::from(input_seed),
+                table: Fr::from(table_seed),
+                m: Fr::from(m_seed),
+            };
+            let theta = Fr::from(theta_seed);
+            // Skip the (table + θ = 0) and (input + θ = 0) corners
+            // where both formulations degenerate identically — those
+            // are covered by `lookup_expr_rejects_zero_denominator`.
+            prop_assume!((basic.table + theta) != Fr::zero());
+            prop_assume!((basic.input + theta) != Fr::zero());
+
+            let basic_val =
+                lookup_expr(&basic, &theta).expect("basic eval succeeds");
+            let lifted: MultiColumnLookupEvals = basic.into();
+            let multi_val = multi_column_lookup_expr(&lifted, &theta)
+                .expect("multi-column eval succeeds at arity-1");
+            prop_assert_eq!(
+                basic_val, multi_val,
+                "basic lookup_expr must equal multi-column at arity-1",
+            );
+        }
+
+        /// **Audit-gate equivalence at arity-1.**
+        ///
+        /// If a basic lookup tuple satisfies `lookup_expr == 0`, the
+        /// promoted arity-1 tuple MUST satisfy
+        /// `verify_multi_column_lookup_identity == Ok(())`. Bridges
+        /// the soundness contract from `lookup_expr` (which the
+        /// vanishing identity check already absorbs) to the new
+        /// audit-gate API without behavioural drift.
+        ///
+        /// We construct a satisfying tuple by choosing
+        ///   m = (table + θ) / (input + θ)
+        /// — exactly the inverse-relation that makes
+        ///   m · (table + θ)⁻¹ - (input + θ)⁻¹ = 0
+        /// hold. The promoted multi-column form must also accept it.
+        #[test]
+        fn prop_audit_gate_accepts_satisfying_basic_promotion(
+            input_seed in 1u64..=u64::MAX,
+            table_seed in 1u64..=u64::MAX,
+            theta_seed in 2u64..=u64::MAX, // ≥ 2 to avoid θ=0 rejection
+        ) {
+            let input = Fr::from(input_seed);
+            let table = Fr::from(table_seed);
+            let theta = Fr::from(theta_seed);
+            prop_assume!((table + theta) != Fr::zero());
+            prop_assume!((input + theta) != Fr::zero());
+            // Force a satisfying multiplicity.
+            let m = (table + theta) * (input + theta).inverse().unwrap();
+            let basic = LookupEvals { input, table, m };
+
+            // Sanity: basic form vanishes.
+            let basic_val = lookup_expr(&basic, &theta).unwrap();
+            prop_assert_eq!(basic_val, Fr::zero(), "construction error");
+
+            // Audit gate on the promoted form must accept.
+            let lifted: MultiColumnLookupEvals = basic.into();
+            let res = verify_multi_column_lookup_identity(&lifted, &theta);
+            prop_assert!(
+                res.is_ok(),
+                "audit gate must accept the promoted satisfying tuple, got {:?}",
+                res
+            );
         }
     }
 }

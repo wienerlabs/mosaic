@@ -19,10 +19,15 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
-  # PR mode — runs a representative subset (one harness per system
-  # surface) for ~5 minutes each. Keeps PR CI under ~30 minutes
-  # wall-clock while still exercising every system at least once.
-  # The full 23-target sweep runs nightly.
+  # PR mode — runs a representative subset for ~5 minutes each. Keeps
+  # PR CI under ~60 minutes wall-clock while still exercising every
+  # system at least once and every Phase-3 audit gate directly. The
+  # full 27-target sweep runs nightly.
+  #
+  # PR matrix at session 95 (12 harnesses × 5 min ≈ 60 min wall):
+  #   - 3 original Groth16 outer-surface harnesses
+  #   - 5 combined-slot fuzzers (one per Phase-2/Phase-3 system)
+  #   - 4 audit-gate algebraic-surface harnesses (session 95)
   # ─────────────────────────────────────────────────────────────────
   fuzz-pr:
     name: PR fuzz (5 min per harness, representative subset)
@@ -43,6 +48,15 @@ jobs:
           - fuzz_halo2_combined
           - fuzz_nova_combined
           - fuzz_stark_combined
+          # Session 95 — audit-gate algebraic-surface harnesses.
+          # All four run in PR mode because they exercise the
+          # ADR-0006 soundness boundaries directly; a regression in
+          # an audit gate is a soundness regression and should fail
+          # PR CI, not wait for nightly.
+          - fuzz_nova_consistency_gate
+          - fuzz_halo2_lookup_gate
+          - fuzz_stark_fri_query_gate
+          - fuzz_hyperplonk_claim_reduction_gate
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -52,8 +66,8 @@ jobs:
         working-directory: crates/mosaic-fuzz
 
   # ─────────────────────────────────────────────────────────────────
-  # Nightly mode — full 23-target sweep, 1 hour per harness. Total
-  # wall-clock ≈ 23 hours across the matrix (parallel runners cap
+  # Nightly mode — full 27-target sweep, 1 hour per harness. Total
+  # wall-clock ≈ 27 hours across the matrix (parallel runners cap
   # at GitHub's free-tier limit of 20 concurrent jobs, so the matrix
   # finishes in ~1-2 batches).
   # ─────────────────────────────────────────────────────────────────
@@ -93,6 +107,12 @@ jobs:
           - fuzz_halo2_combined
           - fuzz_nova_combined
           - fuzz_stark_combined
+          # Session 95 — audit-gate algebraic-surface harnesses (4).
+          # See ADR-0006 for the audit-gate extraction pattern.
+          - fuzz_nova_consistency_gate
+          - fuzz_halo2_lookup_gate
+          - fuzz_stark_fri_query_gate
+          - fuzz_hyperplonk_claim_reduction_gate
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

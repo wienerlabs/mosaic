@@ -78,7 +78,7 @@
 use crate::{
     canonical::{FriStarkProof, FriStarkVerifyingKey},
     challenges::{derive_challenges, derive_layer_betas, derive_query_indices, verify_pow},
-    fri::verify_fold_chain,
+    fri::verify_fri_query,
     goldilocks::{eval_poly_le_bytes, Goldilocks},
     merkle::verify_path,
 };
@@ -309,13 +309,13 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
                 let start = q_idx * n_layers;
                 let end = start + n_layers;
                 let layer_evals = &openings[start..end];
-                let (final_x, computed_final) =
-                    verify_fold_chain(layer_evals, &betas, x_0)?;
-                let expected_final =
-                    eval_poly_le_bytes(proof.fri_final_poly, final_x)?;
-                if computed_final != expected_final {
-                    return Err(OnChainError::VerificationFailed);
-                }
+                // Session 90: collapses the inline fold + final-poly
+                // eval + comparison into a single named audit gate
+                // (`verify_fri_query`). External auditors see one
+                // function call instead of three lines of inline
+                // pattern. Mirrors the session-86 Nova
+                // `verify_folding_consistency` extraction.
+                verify_fri_query(layer_evals, &betas, x_0, proof.fri_final_poly)?;
 
                 // Session 15: per-layer Merkle authentication.
                 //   Each layer opening's (f_x, f_neg_x) leaves must
