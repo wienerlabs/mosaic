@@ -23,6 +23,26 @@
   --on-block-2: #f9f7f7;
   --on-block-3: #112d4e;
   --accent: #3f72af;
+
+  /* ── Radius scale ────────────────────────────────────────────
+   * Soft-corner system added alongside the kokonutui-derived
+   * components (AILoadingState, MosaicActivityCard). Existing
+   * editorial surfaces (`.block`, `.mag-code-block`, buttons,
+   * tags, code blocks) consume these tokens so the whole layout
+   * reads with the same curvature instead of mixing sharp +
+   * rounded.
+   *
+   *   --radius-xs  4px  — very small inline chips (tag, badge)
+   *   --radius-sm  8px  — buttons, code blocks
+   *   --radius-md 14px  — cards, callouts, code-language label
+   *   --radius-lg 20px  — large cards, panel surfaces
+   *   --radius-xl 28px  — hero-scale panels (Apple-card style)
+   */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
 }
 
 [data-theme="dark"] {
@@ -75,6 +95,12 @@ body {
     "bl br side";
   min-height: 100vh;
   position: relative;
+  /* Soft outer corners — only the magazine grid wrapper rounds; the
+   * inner blocks stay tessellated so the editorial cross at the
+   * grid intersection stays sharp. `overflow: hidden` clips the
+   * block backgrounds to the rounded outline. */
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
 
 @keyframes intro-slide-right {
@@ -143,6 +169,45 @@ body {
   grid-area: tl;
   background: var(--block-1);
   color: var(--on-block-1);
+}
+
+/* PixelTrail interactive background. The Canvas paints behind the
+ * editorial copy and captures pointer events for the trail effect.
+ * Hero text + stamp sit on a layered child with `z-index: 1` and
+ * `pointer-events: none` so the trail still tracks the cursor across
+ * the type — clicks on the wiener-stamp anchor re-enable pointer
+ * events selectively.
+ */
+.pixel-trail-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: auto;
+}
+
+.block-tl-content {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Only re-enable pointer events on interactive descendants so the
+ * trail keeps tracking the cursor across heading/body text but the
+ * wiener-stamp anchor stays clickable.
+ */
+.block-tl-content a,
+.block-tl-content button {
+  pointer-events: auto;
+}
+
+/* Honor reduced-motion preference: hide the WebGL trail entirely. */
+@media (prefers-reduced-motion: reduce) {
+  .pixel-trail-layer {
+    display: none;
+  }
 }
 
 .block-tr {
@@ -262,6 +327,8 @@ body {
   font-weight: 700;
   transition: background 200ms ease, color 200ms ease;
   width: fit-content;
+  /* Soft pill — radius scaled to padding so shape stays balanced. */
+  border-radius: 999px;
 }
 
 .wiener-stamp:hover {
@@ -332,6 +399,7 @@ body {
   gap: 10px;
   background: transparent;
   transition: background 200ms ease, color 200ms ease;
+  border-radius: var(--radius-md);
 }
 
 .studio-card:hover {
@@ -448,6 +516,8 @@ body {
   line-height: 1;
   letter-spacing: -0.02em;
   flex-shrink: 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
 .studio-monogram span {
@@ -554,6 +624,7 @@ body {
   padding: 4px 10px;
   border: 1px solid currentColor;
   align-self: flex-start;
+  border-radius: var(--radius-xs);
 }
 
 .roadmap-now .roadmap-step {
@@ -595,6 +666,7 @@ body {
   font-weight: 700;
   transition: background 200ms ease, color 200ms ease,
     border-color 200ms ease;
+  border-radius: var(--radius-sm);
 }
 
 .theme-toggle:hover {
@@ -620,6 +692,7 @@ body {
   padding: 0;
   cursor: pointer;
   transition: background 200ms ease, border-color 200ms ease;
+  border-radius: var(--radius-sm);
 }
 
 .menu-icon:hover {
@@ -719,6 +792,7 @@ body {
   letter-spacing: 0.14em;
   cursor: pointer;
   text-transform: uppercase;
+  border-radius: 999px;
 }
 
 .nav-close:hover {
@@ -984,6 +1058,7 @@ strong {
   white-space: pre;
   overflow-x: auto;
   background: color-mix(in srgb, currentColor 4%, transparent);
+  border-radius: var(--radius-md);
 }
 
 .mag-code-block .code-lang {
@@ -996,6 +1071,11 @@ strong {
   background: var(--block-1);
   color: currentColor;
   mix-blend-mode: normal;
+  /* Top-right corner of the code block — round just the bottom-left
+   * corner of this label so it nests visually into the rounded code
+   * block beneath. */
+  border-bottom-left-radius: var(--radius-sm);
+  border-top-right-radius: var(--radius-md);
 }
 
 .page-wheat .mag-code-block .code-lang {

@@ -1,0 +1,164 @@
+/* Mosaic-palette port of @kokonutui's Apple Activity Card.
+ * Plain CSS (no Tailwind) so it inherits site's color tokens
+ * and editorial typography. */
+
+.mosaic-activity-root {
+  position: relative;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  max-width: 720px;
+  padding: 32px;
+  /* Heavy curvature — matches the new component aesthetic the
+   * user asked for (Apple-style rounded surface). */
+  border-radius: var(--radius-xl, 28px);
+  color: var(--on-block-1);
+  /* Soft surface so the card sits visibly inside any block. */
+  background: color-mix(in srgb, var(--block-1) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--on-block-1) 12%, transparent);
+}
+
+.mosaic-activity-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+}
+
+.mosaic-activity-title {
+  margin: 0;
+  font-family: "ABC Favorit Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 500;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+  color: var(--on-block-1);
+}
+
+.mosaic-activity-body {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* Ring stack — three concentric SVGs, each absolutely positioned
+ * inside a 200×200 slot so the largest (size: 200) defines the
+ * overall footprint. */
+.mosaic-activity-rings {
+  position: relative;
+  height: 200px;
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.mosaic-activity-ring-slot {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mosaic-activity-ring-positioner {
+  position: relative;
+}
+
+.mosaic-activity-svg {
+  /* Apple Activity rings rotate the start point to 12 o'clock; SVG
+   * default arc starts at 3 o'clock, so we rotate the canvas. */
+  transform: rotate(-90deg);
+}
+
+/* Track ring color — sits behind the gradient progress arc. Theme-
+ * aware via currentColor + opacity so light + dark modes both read
+ * correctly. */
+.mosaic-activity-track {
+  color: color-mix(in srgb, var(--on-block-1) 12%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .mosaic-activity-track {
+    color: color-mix(in srgb, var(--on-block-1) 18%, transparent);
+  }
+}
+
+/* ── Detail column on the right ─────────────────────────────── */
+.mosaic-activity-details {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-left: 8px;
+}
+
+.mosaic-activity-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mosaic-activity-detail-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: "ABC Favorit Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--on-block-1) 70%, transparent);
+}
+
+.mosaic-activity-detail-subtitle {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: color-mix(in srgb, var(--on-block-1) 50%, transparent);
+}
+
+.mosaic-activity-detail-value {
+  font-family: "ABC Favorit Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 600;
+  font-size: 24px;
+  line-height: 1.1;
+  /* Default color is overridden inline per ring so each metric reads
+   * with its corresponding ring tint. */
+}
+
+.mosaic-activity-detail-unit {
+  margin-left: 6px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--on-block-1) 60%, transparent);
+}
+
+/* ── Responsive ────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .mosaic-activity-root {
+    padding: 24px 20px;
+    border-radius: var(--radius-lg, 20px);
+  }
+  .mosaic-activity-body {
+    flex-direction: column;
+    gap: 24px;
+  }
+  .mosaic-activity-details {
+    margin-left: 0;
+    align-items: center;
+    text-align: center;
+  }
+  .mosaic-activity-detail-label,
+  .mosaic-activity-detail-row {
+    align-items: center;
+  }
+}
+
+/* Honor reduced-motion preference: skip the spring + scale entrance
+ * and present the card at its rest state immediately. */
+@media (prefers-reduced-motion: reduce) {
+  .mosaic-activity-ring-slot,
+  .mosaic-activity-details,
+  .mosaic-activity-title {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

@@ -1,6 +1,12 @@
 import { AnimatedMosaic } from "./components/AnimatedMosaic";
 import { CheckerboardInterlude } from "./components/CheckerboardInterlude";
 import { GsapAnimations } from "./components/GsapAnimations";
+// LazyPixelTrail wraps `dynamic(() => import("./PixelTrail"), { ssr: false })`
+// inside a client component so this server component can import it
+// without crossing the SSR boundary. The wrapper renders the
+// Mosaic-palette AILoadingState while the three.js chunk loads.
+import LazyPixelTrail from "./components/LazyPixelTrail";
+import MosaicActivityCard from "./components/MosaicActivityCard";
 import { NavMenu } from "./components/NavMenu";
 import { ThemeToggle } from "./components/ThemeToggle";
 
@@ -105,35 +111,47 @@ export default function HomePage() {
       {/* PAGE 01 — SPLASH */}
       <main className="magazine">
         <section className="block block-tl">
-          <span className="tag">MOSAIC.2026 // INDEX 01</span>
-          <h1 className="display" data-split="chars">
-            {"MOSAIC".split("").map((ch, i) => (
-              <span key={i} className="char">
-                {ch}
-              </span>
-            ))}
-          </h1>
-          <a
-            className="wiener-stamp"
-            href="https://www.wienerlabs.xyz/"
-            target="_blank"
-            rel="noopener"
-          >
-            <span className="wiener-stamp-prefix">A</span>
-            <span className="wiener-stamp-name">WIENER LABS</span>
-            <span className="wiener-stamp-suffix">PRODUCT</span>
-          </a>
-          <p className="hero-sub">
-            An applied cryptography studio shipping open-source
-            verifier infrastructure for Solana.
-          </p>
-          <p className="body-copy">
-            Proof-system-agnostic on-chain verification rendered as
-            structural primitives. Minimizing the verifier surface to
-            expose the underlying cryptographic arrangement of Groth16,
-            KZG-PLONK, HyperPlonk, Halo2-KZG, Nova family, and
-            FRI-STARK.
-          </p>
+          <div className="pixel-trail-layer" aria-hidden="true">
+            <LazyPixelTrail
+              gridSize={50}
+              trailSize={0.1}
+              maxAge={250}
+              interpolate={5}
+              color="#6e9cee"
+              gooeyFilter={{ id: "mosaic-hero-goo", strength: 2 }}
+            />
+          </div>
+          <div className="block-tl-content">
+            <span className="tag">MOSAIC.2026 // INDEX 01</span>
+            <h1 className="display" data-split="chars">
+              {"MOSAIC".split("").map((ch, i) => (
+                <span key={i} className="char">
+                  {ch}
+                </span>
+              ))}
+            </h1>
+            <a
+              className="wiener-stamp"
+              href="https://www.wienerlabs.xyz/"
+              target="_blank"
+              rel="noopener"
+            >
+              <span className="wiener-stamp-prefix">A</span>
+              <span className="wiener-stamp-name">WIENER LABS</span>
+              <span className="wiener-stamp-suffix">PRODUCT</span>
+            </a>
+            <p className="hero-sub">
+              An applied cryptography studio shipping open-source
+              verifier infrastructure for Solana.
+            </p>
+            <p className="body-copy">
+              Proof-system-agnostic on-chain verification rendered as
+              structural primitives. Minimizing the verifier surface to
+              expose the underlying cryptographic arrangement of Groth16,
+              KZG-PLONK, HyperPlonk, Halo2-KZG, Nova family, and
+              FRI-STARK.
+            </p>
+          </div>
         </section>
 
         <section className="block block-tr">
@@ -182,28 +200,35 @@ export default function HomePage() {
       {/* PAGE 02 — RELEASE STATE */}
       <Page num="02" tag="INDEX 02 // RELEASE STATE" title="State" color="wheat">
         <p className="mag-lead">
-          v0.5.0-phase3-complete — the current frozen release. Twelve
-          independent cryptographic soundness gates across four bodies;
-          SBF program at 30.4 % of the 1 MB Solana program cap.
+          v0.9.4-halo2-vk-consistency — the current release. Six
+          ADR-0006 audit gates across all production verifiers, two
+          real soundness fixes shipped (Nova r-binding, Halo2 lookup
+          KZG-binding), 642 lib tests workspace-wide.
         </p>
         <div className="stats-grid">
           <div className="stat">
             <span className="stat-label">Workspace tests</span>
-            <span className="stat-val">379 passing</span>
+            <span className="stat-val">642 passing</span>
           </div>
           <div className="stat">
-            <span className="stat-label">SBF program size</span>
-            <span className="stat-val">319 KB</span>
+            <span className="stat-label">Audit gates</span>
+            <span className="stat-val">6 / 6 verifiers</span>
           </div>
           <div className="stat">
-            <span className="stat-label">Solana 1 MB cap</span>
-            <span className="stat-val">30.4 %</span>
+            <span className="stat-label">Soundness fixes</span>
+            <span className="stat-val">2 real</span>
           </div>
           <div className="stat">
-            <span className="stat-label">Soundness gates</span>
-            <span className="stat-val">12 / 4 bodies</span>
+            <span className="stat-label">Mainnet-ready</span>
+            <span className="stat-val">Groth16 + PLONK</span>
           </div>
         </div>
+
+        {/* Visual project-completion summary — three rings render
+         * the same numbers the prose status snapshot lists, with a
+         * detail column on the right. Powered by the
+         * Mosaic-palette port of @kokonutui's Apple Activity Card. */}
+        <MosaicActivityCard title="Project Completion" />
       </Page>
 
       {/* PAGE 03 — VERIFIER MATRIX */}

@@ -1,0 +1,131 @@
+/* Mosaic-palette port of @kokonutui's AI Loading State.
+ * Used as the loading fallback for the dynamically-imported
+ * PixelTrail hero background. Plain CSS (no Tailwind) so it
+ * inherits the site's editorial typography + color tokens. */
+
+.ai-loader-root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  width: 100%;
+  /* Sits inside .pixel-trail-layer which itself fills the hero block.
+   * The block's --on-block-1 color drives text + spinner edges. */
+  color: var(--on-block-1);
+}
+
+.ai-loader-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: auto;
+  max-width: 360px;
+}
+
+.ai-loader-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 8px;
+  font-weight: 500;
+  /* Editorial slug uses the accent so the status line reads as
+   * brand-colored instead of generic gray. */
+  color: color-mix(in srgb, var(--on-block-1) 70%, transparent);
+}
+
+.ai-loader-status-text {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.ai-loader-spinner {
+  position: relative;
+  height: 24px;
+  width: 24px;
+}
+
+.ai-loader-spinner svg {
+  height: 100%;
+  width: 100%;
+}
+
+/* Counter-rotating ring animation — same cadence as the kokonutui
+ * original (8 s linear infinite, alternating direction). */
+@keyframes ai-loader-rotate-cw {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes ai-loader-rotate-ccw {
+  from { transform: rotate(360deg); }
+  to   { transform: rotate(0deg); }
+}
+
+.ai-loader-rings circle {
+  transform-origin: 120px 120px;
+}
+.ai-loader-rings circle:nth-child(1) { animation: ai-loader-rotate-cw  8s linear infinite; }
+.ai-loader-rings circle:nth-child(2) { animation: ai-loader-rotate-ccw 8s linear infinite; animation-delay: 0.2s; }
+.ai-loader-rings circle:nth-child(3) { animation: ai-loader-rotate-cw  8s linear infinite; animation-delay: 0.3s; }
+.ai-loader-rings circle:nth-child(4) { animation: ai-loader-rotate-ccw 8s linear infinite; animation-delay: 0.2s; }
+.ai-loader-rings circle:nth-child(5) { animation: ai-loader-rotate-cw  8s linear infinite; animation-delay: 0.3s; }
+.ai-loader-rings circle:nth-child(6) { animation: ai-loader-rotate-ccw 8s linear infinite; animation-delay: 0.2s; }
+
+/* Honor reduced-motion preference: stop the rings, keep the SVG
+ * visible at its rest position. */
+@media (prefers-reduced-motion: reduce) {
+  .ai-loader-rings circle {
+    animation: none !important;
+  }
+}
+
+.ai-loader-code-wrap {
+  position: relative;
+}
+
+.ai-loader-code {
+  position: relative;
+  height: 84px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  font-family: "ABC Favorit Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ai-loader-line {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+}
+
+.ai-loader-line-num {
+  width: 24px;
+  user-select: none;
+  padding-right: 12px;
+  text-align: right;
+  color: color-mix(in srgb, var(--on-block-1) 38%, transparent);
+}
+
+.ai-loader-line-text {
+  margin-left: 4px;
+  flex: 1;
+  color: color-mix(in srgb, var(--on-block-1) 88%, transparent);
+}
+
+/* Top-bottom fade overlay — matches the editorial style of the
+ * surrounding hero (vignette into the block background instead of
+ * Tailwind's white/black gradient). */
+.ai-loader-fade {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--block-1) 90%, transparent) 0%,
+    color-mix(in srgb, var(--block-1) 50%, transparent) 30%,
+    transparent 100%
+  );
+}

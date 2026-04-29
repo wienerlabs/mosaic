@@ -13,15 +13,20 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
     "gsap": "^3.15.0",
+    "motion": "^12.38.0",
     "next": "15.1.6",
     "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "react-dom": "19.0.0",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/node": "22.10.6",
     "@types/react": "19.0.7",
     "@types/react-dom": "19.0.3",
+    "@types/three": "^0.184.0",
     "typescript": "5.7.3"
   }
 }
