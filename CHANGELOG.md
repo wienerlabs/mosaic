@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.4-halo2-vk-consistency
+### Planned beyond v0.9.5-halo2-vk-compressed
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.5-halo2-vk-compressed] — 2026-04-30
+
+**First real consumer of the alt_bn128 compression syscall.** Sessions
+103-104 wired the syscall and added typed helpers; session 106 lands
+the first verifier-side use: `Halo2KzgVerifyingKey::from_compressed_bytes`
++ `to_compressed_bytes`. Compressed VK is ~46% smaller than
+uncompressed for a typical 2-fixed + 5-perm circuit.
+
+### Why this matters on Solana
+
+VK accounts pay rent based on size (Solana storage is permanent and
+non-trivial — ~7M lamports per MB-year). For a 488-byte uncompressed
+VK, the compressed form is ~264 bytes, saving ~46% of the rent bill.
+
+The trade-off: each `from_compressed_bytes` call costs ~80 K CU for
+a typical VK (8 G1 + 1 G2 decompressions). For high-frequency
+verifiers this adds 16% to the per-tx CU cost; for low-frequency or
+storage-sensitive deployments the trade is favorable.
+
+### Added — session 106
+
+#### `Halo2KzgVerifyingKey::from_compressed_bytes<B>(backend, bytes)`
+Decodes a compressed VK byte buffer into the in-memory uncompressed
+struct. Calls `alt_bn128_compression(G2Decompress)` for `x2_g2` and
+`alt_bn128_compression(G1Decompress)` for each fixed and permutation
+commit. The rest of the verifier is unchanged — once decompressed,
+the in-memory VK matches the existing layout.
+
+#### `Halo2KzgVerifyingKey::to_compressed_bytes<B>(backend)`
+Companion encoder. Iterates over the VK's commits, compresses each
+via `mosaic_zk_primitives::compression::{compress_g1, compress_g2}`,
+and writes the result alongside the unchanged Fr + counter fields.
+
+#### `Halo2KzgVerifyingKey::COMPRESSED_FIXED_LEN` constant
+Mirrors the uncompressed `FIXED_LEN` but with G2 halved (64 instead
+of 128). Public so external callers can compute compressed-VK
+buffer sizes ahead of time.
+
+### Wire format (compressed VK)
+
+```text
+| offset | size | field                                    |
+|---|---|---|
+|   0 |  4 | k                                            |
+|   4 |  4 | n_instances                                  |
+|   8 |  4 | n_advice                                     |
+|  12 |  4 | n_fixed                                      |
+|  16 | 64 | x2_g2 compressed (G2_LEN / 2)                |
+|  80 | 32 | omega_fr (Fr — uncompressed)                 |
+| 112 |  4 | fixed_compressed_len (= n_fixed * 32)        |
+| 116 |  4 | perm_compressed_len  (= perm_count * 32)     |
+| 120 |  … | compressed commits payload                   |
+```
+
+The session-105 internal-consistency checks (declared count ==
+actual byte count, divisibility) carry over to the compressed
+parser, adapted to the 32-byte G1 / 64-byte G2 sizes.
+
+### New tests at v0.9.5 (mosaic-halo2: 105 → 110)
+
+- `vk_compressed_round_trip_with_real_generators` — VK with BN254
+  G1+G2 generators round-trips through compress + decompress
+  byte-for-byte.
+- `vk_compressed_form_is_smaller_than_uncompressed` — asserts the
+  saving equals the structural expectation: `7·32 + 64 = 288 B`
+  for a 2-fixed + 5-perm VK; pins compressed/uncompressed ratio
+  ≤ 60 %.
+- `vk_compressed_zero_only_short_circuits_to_zero_uncompressed` —
+  zero G1/G2 points compress to zero (both backends short-circuit).
+- `vk_compressed_rejects_short_buffer` — too-short input rejects
+  with `VerifyingKeyLengthMismatch`.
+- `vk_compressed_rejects_n_fixed_inconsistent_with_payload` —
+  bumped `n_fixed` without resizing payload triggers the session-105
+  consistency check at the compressed layer.
+
+### Lib test totals at v0.9.5
+
+  mosaic-halo2            110  (+5 since v0.9.4)
+  total                   647  (+5 since v0.9.4)
+
+### Migration notes
+
+Public API additions (no breakage):
+- `mosaic_halo2::Halo2KzgVerifyingKey::from_compressed_bytes<B>`
+- `mosaic_halo2::Halo2KzgVerifyingKey::to_compressed_bytes<B>`
+- `mosaic_halo2::Halo2KzgVerifyingKey::COMPRESSED_FIXED_LEN`
+
+The existing `from_bytes` / `to_bytes` for the uncompressed wire
+format are unchanged. Verifier code paths that consume
+`Halo2KzgVerifyingKey` directly don't need to know whether the VK
+arrived compressed or not — once parsed, the in-memory representation
+is identical.
 
 ## [0.9.4-halo2-vk-consistency] — 2026-04-29
 

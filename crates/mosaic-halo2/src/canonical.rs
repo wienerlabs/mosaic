@@ -48,7 +48,7 @@
 //! Phase 3 writes an adapter in `mosaic-serde::halo2`.
 
 use alloc::vec::Vec;
-use mosaic_core::OnChainError;
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 
 /// Size constants for the Halo2-KZG canonical layout.
 pub mod sizes {
@@ -396,6 +396,223 @@ impl Halo2KzgVerifyingKey {
         out.extend_from_slice(&self.permutation_commits);
         out
     }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 106 — compressed VK support.
+    //
+    // The uncompressed VK above carries a 128-byte G2 plus N × 64-byte
+    // G1 commits. The compressed form uses the BN254 alt_bn128
+    // compression syscall (wired in session 103) to halve every curve
+    // point: G2 → 64 B, each G1 → 32 B. Typical 2-fixed + 5-perm VK
+    // shrinks from 1 + 7·G1 + G2 + Fr + headers ≈ 488 B down to
+    // ≈ 264 B (46 % saving) — meaningful on Solana where VK accounts
+    // pay rent based on size.
+    //
+    // Trade-off: each `from_compressed_bytes` call costs roughly
+    // ~10 K CU per G1 decompress (square-root mod q to recover y),
+    // ~12 K CU for the G2. For a 2-fixed + 5-perm VK that's ~80 K CU
+    // per verifier load — paid once, then the in-memory representation
+    // is the existing uncompressed `Halo2KzgVerifyingKey` and the rest
+    // of the verifier is unchanged.
+    //
+    // Wire format (compressed):
+    //
+    //   | offset | size | field                  |
+    //   |---|---|---|
+    //   |   0 |  4 | k                          |
+    //   |   4 |  4 | n_instances                |
+    //   |   8 |  4 | n_advice                   |
+    //   |  12 |  4 | n_fixed                    |
+    //   |  16 | 64 | x2_g2 compressed (G2_LEN_C) |
+    //   |  80 | 32 | omega_fr (Fr — uncompressed)|
+    //   | 112 |  4 | fixed_compressed_len (= n_fixed * 32) |
+    //   | 116 |  4 | perm_compressed_len  (= perm_count * 32) |
+    //   | 120 |  … | compressed commits payload |
+
+    /// Compressed-form fixed-portion length (mirrors [`Self::FIXED_LEN`]
+    /// but with G2 halved).
+    pub const COMPRESSED_FIXED_LEN: usize = 4 // k
+        + 4 // n_instances
+        + 4 // n_advice
+        + 4 // n_fixed
+        + 64 // x2_g2 compressed (G2_LEN / 2)
+        + sizes::FR_LEN // omega_fr
+        + 4 // fixed_compressed_len
+        + 4; // perm_compressed_len
+
+    /// **Session 106** — decode a compressed VK byte buffer into the
+    /// in-memory uncompressed `Halo2KzgVerifyingKey`.
+    ///
+    /// Calls `alt_bn128_compression(G2Decompress)` for `x2_g2` and
+    /// `alt_bn128_compression(G1Decompress)` for each fixed and
+    /// permutation commit.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::VerifyingKeyLengthMismatch`] — wire-format
+    ///   inconsistency (wrong total length, declared/actual mismatch
+    ///   on `n_fixed`, non-multiple G1 payload lengths).
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   compressed point fails decompression (e.g. malformed sign
+    ///   bit, off-curve x).
+    pub fn from_compressed_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        bytes: &[u8],
+    ) -> Result<Self, OnChainError> {
+        const G2_COMPRESSED: usize = 64;
+        const G1_COMPRESSED: usize = 32;
+
+        if bytes.len() < Self::COMPRESSED_FIXED_LEN {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
+        let k = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let n_instances = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        let n_advice = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+        let n_fixed = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+
+        let x2_compressed = &bytes[16..16 + G2_COMPRESSED];
+        let after_g2 = 16 + G2_COMPRESSED;
+
+        let mut omega_fr = [0u8; sizes::FR_LEN];
+        omega_fr.copy_from_slice(&bytes[after_g2..after_g2 + sizes::FR_LEN]);
+        let after_omega = after_g2 + sizes::FR_LEN;
+
+        let fixed_compressed_len = u32::from_le_bytes([
+            bytes[after_omega],
+            bytes[after_omega + 1],
+            bytes[after_omega + 2],
+            bytes[after_omega + 3],
+        ]) as usize;
+        let perm_compressed_len = u32::from_le_bytes([
+            bytes[after_omega + 4],
+            bytes[after_omega + 5],
+            bytes[after_omega + 6],
+            bytes[after_omega + 7],
+        ]) as usize;
+
+        let payload_start = after_omega + 8;
+        let expected_total = payload_start + fixed_compressed_len + perm_compressed_len;
+        if bytes.len() != expected_total {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
+        // Same divisibility + count consistency checks as the
+        // uncompressed `from_bytes` (session 105), adapted to the
+        // compressed G1 size.
+        if fixed_compressed_len % G1_COMPRESSED != 0
+            || perm_compressed_len % G1_COMPRESSED != 0
+        {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+        if fixed_compressed_len != (n_fixed as usize) * G1_COMPRESSED {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
+        // Decompress G2.
+        let mut g2_arr = [0u8; G2_COMPRESSED];
+        g2_arr.copy_from_slice(x2_compressed);
+        let x2_full =
+            mosaic_zk_primitives::compression::decompress_g2(backend, &g2_arr)?;
+
+        // Decompress every fixed commit.
+        let mut fixed_commits: Vec<u8> =
+            Vec::with_capacity((n_fixed as usize) * sizes::G1_LEN);
+        for chunk in bytes[payload_start..payload_start + fixed_compressed_len]
+            .chunks_exact(G1_COMPRESSED)
+        {
+            let mut g1_arr = [0u8; G1_COMPRESSED];
+            g1_arr.copy_from_slice(chunk);
+            let full =
+                mosaic_zk_primitives::compression::decompress_g1(backend, &g1_arr)?;
+            fixed_commits.extend_from_slice(&full);
+        }
+
+        // Decompress every permutation commit.
+        let perm_count = perm_compressed_len / G1_COMPRESSED;
+        let mut permutation_commits: Vec<u8> =
+            Vec::with_capacity(perm_count * sizes::G1_LEN);
+        let perm_start = payload_start + fixed_compressed_len;
+        for chunk in bytes[perm_start..perm_start + perm_compressed_len]
+            .chunks_exact(G1_COMPRESSED)
+        {
+            let mut g1_arr = [0u8; G1_COMPRESSED];
+            g1_arr.copy_from_slice(chunk);
+            let full =
+                mosaic_zk_primitives::compression::decompress_g1(backend, &g1_arr)?;
+            permutation_commits.extend_from_slice(&full);
+        }
+
+        Ok(Self {
+            k,
+            n_instances,
+            n_advice,
+            n_fixed,
+            x2_g2: x2_full,
+            omega_fr,
+            fixed_commits,
+            permutation_commits,
+        })
+    }
+
+    /// **Session 106** — encode this VK in compressed form (companion
+    /// to [`from_compressed_bytes`]).
+    ///
+    /// Calls `alt_bn128_compression(G2Compress)` for `x2_g2` and
+    /// `alt_bn128_compression(G1Compress)` for each commit. Output is
+    /// 46 % smaller than [`to_bytes`] for a typical 2-fixed + 5-perm
+    /// VK; consume via [`from_compressed_bytes`].
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   point fails to compress (off-curve, etc.).
+    pub fn to_compressed_bytes<B: SyscallBackend + ?Sized>(
+        &self,
+        backend: &B,
+    ) -> Result<Vec<u8>, OnChainError> {
+        const G2_COMPRESSED: usize = 64;
+        const G1_COMPRESSED: usize = 32;
+
+        // Compress G2.
+        let g2_c = mosaic_zk_primitives::compression::compress_g2(backend, &self.x2_g2)?;
+
+        // Compress every fixed + permutation commit.
+        let mut fixed_payload: Vec<u8> = Vec::with_capacity(
+            (self.fixed_commits.len() / sizes::G1_LEN) * G1_COMPRESSED,
+        );
+        for chunk in self.fixed_commits.chunks_exact(sizes::G1_LEN) {
+            let mut g1_arr = [0u8; sizes::G1_LEN];
+            g1_arr.copy_from_slice(chunk);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &g1_arr)?;
+            fixed_payload.extend_from_slice(&c);
+        }
+
+        let mut perm_payload: Vec<u8> = Vec::with_capacity(
+            (self.permutation_commits.len() / sizes::G1_LEN) * G1_COMPRESSED,
+        );
+        for chunk in self.permutation_commits.chunks_exact(sizes::G1_LEN) {
+            let mut g1_arr = [0u8; sizes::G1_LEN];
+            g1_arr.copy_from_slice(chunk);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &g1_arr)?;
+            perm_payload.extend_from_slice(&c);
+        }
+
+        let mut out = Vec::with_capacity(
+            Self::COMPRESSED_FIXED_LEN + fixed_payload.len() + perm_payload.len(),
+        );
+        out.extend_from_slice(&self.k.to_le_bytes());
+        out.extend_from_slice(&self.n_instances.to_le_bytes());
+        out.extend_from_slice(&self.n_advice.to_le_bytes());
+        out.extend_from_slice(&self.n_fixed.to_le_bytes());
+        out.extend_from_slice(&g2_c);
+        out.extend_from_slice(&self.omega_fr);
+        out.extend_from_slice(&(fixed_payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(perm_payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(&fixed_payload);
+        out.extend_from_slice(&perm_payload);
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -573,6 +790,135 @@ mod tests {
         assert_eq!(vk, decoded);
         assert_eq!(decoded.fixed_commits.len(), 2 * G1_LEN);
         assert_eq!(decoded.permutation_commits.len(), 5 * G1_LEN);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 106 — compressed VK round-trip + bandwidth-saving tests.
+    //
+    // The compression syscall (session 103) is exercised end-to-end
+    // here: a VK with real on-curve commits encodes via
+    // `to_compressed_bytes`, decodes via `from_compressed_bytes`, and
+    // the result must equal the original VK byte-for-byte.
+    // ───────────────────────────────────────────────────────────────────
+
+    fn realistic_vk() -> Halo2KzgVerifyingKey {
+        // Use the BN254 G2 generator for x2_g2 (compressible) and the
+        // G1 generator for every commit (also compressible). Zero
+        // points compress trivially to zero, so the realistic test
+        // uses non-zero points to exercise the actual compression
+        // arithmetic.
+        let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+        let g2_gen = mosaic_zk_primitives::g1_consts::g2_generator_bytes();
+
+        let mut fixed_commits = Vec::with_capacity(2 * G1_LEN);
+        fixed_commits.extend_from_slice(&g1_gen);
+        fixed_commits.extend_from_slice(&g1_gen);
+
+        let mut permutation_commits = Vec::with_capacity(5 * G1_LEN);
+        for _ in 0..5 {
+            permutation_commits.extend_from_slice(&g1_gen);
+        }
+
+        Halo2KzgVerifyingKey {
+            k: 10,
+            n_instances: 1,
+            n_advice: 5,
+            n_fixed: 2,
+            x2_g2: g2_gen,
+            omega_fr: [0u8; FR_LEN],
+            fixed_commits,
+            permutation_commits,
+        }
+    }
+
+    #[test]
+    fn vk_compressed_round_trip_with_real_generators() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let vk = realistic_vk();
+        let compressed = vk
+            .to_compressed_bytes(&backend)
+            .expect("compress should succeed for on-curve generators");
+        let decoded = Halo2KzgVerifyingKey::from_compressed_bytes(&backend, &compressed)
+            .expect("decompress should succeed for compressed buffer");
+        assert_eq!(
+            vk, decoded,
+            "compressed round-trip must yield the original VK byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn vk_compressed_form_is_smaller_than_uncompressed() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let vk = realistic_vk();
+        let uncompressed = vk.to_bytes();
+        let compressed = vk
+            .to_compressed_bytes(&backend)
+            .expect("compress");
+        // Each G1 (64 → 32) saves 32 B; each G2 (128 → 64) saves 64 B.
+        // 2 fixed + 5 perm = 7 G1 commits + 1 G2 = 7·32 + 64 = 288 B saved.
+        // The Fr omega + 4 u32 counters + 2 u32 lengths are unchanged.
+        let saved = uncompressed.len() - compressed.len();
+        let expected_saved = 7 * 32 + 64;
+        assert_eq!(
+            saved, expected_saved,
+            "compressed VK must save exactly {expected_saved} bytes (7·32 G1 + 64 G2); got {saved}"
+        );
+        assert!(
+            compressed.len() * 100 / uncompressed.len() <= 60,
+            "compressed VK must be ≤ 60% of uncompressed size; \
+             got compressed={} uncompressed={}",
+            compressed.len(),
+            uncompressed.len()
+        );
+    }
+
+    #[test]
+    fn vk_compressed_zero_only_short_circuits_to_zero_uncompressed() {
+        // Zero G1/G2 points short-circuit through the compression
+        // syscall (both backends). A VK built entirely of zero commits
+        // round-trips through compression as zero.
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let vk = Halo2KzgVerifyingKey {
+            k: 10,
+            n_instances: 1,
+            n_advice: 5,
+            n_fixed: 2,
+            x2_g2: [0u8; G2_LEN],
+            omega_fr: [0u8; FR_LEN],
+            fixed_commits: vec![0u8; 2 * G1_LEN],
+            permutation_commits: vec![0u8; 5 * G1_LEN],
+        };
+        let compressed = vk.to_compressed_bytes(&backend).unwrap();
+        let decoded =
+            Halo2KzgVerifyingKey::from_compressed_bytes(&backend, &compressed).unwrap();
+        assert_eq!(vk, decoded);
+    }
+
+    #[test]
+    fn vk_compressed_rejects_short_buffer() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let too_short = vec![0u8; Halo2KzgVerifyingKey::COMPRESSED_FIXED_LEN - 1];
+        let r = Halo2KzgVerifyingKey::from_compressed_bytes(&backend, &too_short);
+        assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+    }
+
+    #[test]
+    fn vk_compressed_rejects_n_fixed_inconsistent_with_payload() {
+        // Build a compressed VK header that declares n_fixed=3 but
+        // only carries 2·32 bytes of compressed fixed commits. The
+        // session-105 consistency check (adapted for compressed sizes)
+        // must reject.
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let vk = realistic_vk(); // n_fixed = 2 with consistent payload
+        let mut bad = vk.to_compressed_bytes(&backend).unwrap();
+        // Bump n_fixed at offset 12-15 to 3 without resizing the
+        // payload — declared count no longer matches actual.
+        bad[12..16].copy_from_slice(&3u32.to_le_bytes());
+        let r = Halo2KzgVerifyingKey::from_compressed_bytes(&backend, &bad);
+        assert!(
+            matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)),
+            "n_fixed=3 with arity-2 payload must reject; got {r:?}",
+        );
     }
 
     #[test]

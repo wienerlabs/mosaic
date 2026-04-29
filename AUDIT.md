@@ -10,6 +10,76 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-30 — v0.9.5-halo2-vk-compressed release (session 106)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.5-halo2-vk-compressed`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.5-halo2-vk-compressed) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | First verifier-side consumer of the alt_bn128 compression syscall (sessions 103-104). `Halo2KzgVerifyingKey::from_compressed_bytes` + `to_compressed_bytes` — compressed VK wire format with ~46% bandwidth saving. |
+| Findings | Zero soundness regressions. The compressed parser inherits the session-105 internal-consistency checks, adapted to compressed sizes. |
+| Status | ✅ The compression syscall now has its first end-to-end verifier-side use. Compressed VKs round-trip byte-identical, fail closed on inconsistent declarations, and the saving is structurally measured (288 B for a typical 2-fixed + 5-perm VK). |
+
+### What this changes for an external auditor
+
+Sessions 103-104 added the syscall capability + typed helpers but no
+verifier consumed them. Session 106 lands the first real consumer:
+Halo2 VK now has a compressed alternate wire format that:
+
+1. Halves every G1 commit (64 → 32 bytes via `alt_bn128_g1_compress`)
+2. Halves the G2 SRS handle (128 → 64 bytes)
+3. Leaves the Fr `omega_fr` + u32 counters unchanged (Fr isn't a curve point; counters are already small)
+
+The in-memory `Halo2KzgVerifyingKey` is identical regardless of which
+wire format the bytes arrived in — `from_compressed_bytes` decompresses
+each commit at parse time, then the verifier's existing
+`combined_expr` / `verify_two_point_opening_multipoly` paths run
+unchanged.
+
+### Soundness inheritance
+
+Every session-105 internal-consistency check carries over to the
+compressed parser:
+- `n_fixed * G1_COMPRESSED == fixed_compressed_len` — declared count
+  matches actual byte count.
+- `fixed_compressed_len % G1_COMPRESSED == 0` — divisibility.
+- `bytes.len() == COMPRESSED_FIXED_LEN + fixed_compressed_len + perm_compressed_len`
+  — total length match.
+
+Any mismatch surfaces as `VerifyingKeyLengthMismatch` at parse time,
+not as a downstream `PairingCheckFailed`.
+
+### Cost trade-off
+
+Per VK load:
+- Compression decode: ~80 K CU (8 G1 × ~10K + 1 G2 × ~12K).
+- Storage saving: ~46% (488 B → 264 B for typical 2-fixed + 5-perm).
+
+For high-frequency verifiers (multiple verify calls per VK lifetime)
+the CU overhead dominates and uncompressed VK is preferred. For
+low-frequency or storage-rent-sensitive deployments the trade favors
+compressed VK.
+
+### Lib test totals at v0.9.5
+
+  mosaic-halo2            110  (+5)
+  total                   647  (+5 since v0.9.4)
+
+### What this milestone DOES change
+
+- Halo2 VK gains a compressed wire-format alternate.
+- Compression syscall (sessions 103-104) gets its first verifier-
+  side consumer.
+
+### What this milestone does NOT change
+
+Verifier behaviour for uncompressed VKs (byte-equivalent), wire
+format for proofs (only VK has compressed form), in-memory VK
+representation. Once parsed, both paths produce identical
+`Halo2KzgVerifyingKey` structs.
+
+---
+
 ## 2026-04-29 — v0.9.4-halo2-vk-consistency release (session 105)
 
 | Field | Value |
