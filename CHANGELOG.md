@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.6-halo2-multi-lookup
+### Planned beyond v0.9.7-halo2-proof-compressed
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.7-halo2-proof-compressed] — 2026-04-30
+
+**Halo2 proof gains compressed wire format.** Sister to session
+106's compressed VK. The proof's G1 commits (advice, lookup,
+permutation_z, quotient, w_xi, w_xiw) compress to 32 B each via the
+alt_bn128 syscall; Fr evaluations stay 32 B (not curve points).
+
+### Wire format
+
+```text
+| offset | size | field                                  |
+|---|---|---|
+|   0..20 | unchanged 5-counter header (FIXED_HEADER_LEN) |
+|  20..   | 32 × n_advice compressed advice commits       |
+|    ..   | 32 × n_lookups compressed lookup commits      |
+|    ..   | 32 compressed permutation_z                   |
+|    ..   | 32 × n_quotient compressed quotient chunks    |
+|    ..   | 32 × n_evals Fr evaluations (unchanged)       |
+|    ..   | 32 compressed w_xi                            |
+|    ..   | 32 compressed w_xiw                           |
+```
+
+For a typical proof with 5 advice + 1 perm_z + 3 quotient + 2
+openings = 11 G1 commits at arity-1, the compressed form saves
+352 B (11 × 32). Adding lookup commits scales the saving linearly.
+
+### Cost trade-off (per `decompress_to_canonical_bytes` call)
+
+For a 5+0+1+3+2 = 11 G1 proof: ~110 K CU decompression.
+
+For high-frequency verifiers the CU overhead dominates.
+For storage-rent-sensitive deployments (compressed proof archives,
+on-chain proof records) the bandwidth saving wins.
+
+### Added — session 108
+
+#### `Halo2KzgProof::compress_from_canonical_bytes<B>(backend, canonical)`
+Encodes the proof in compressed form. Validates input as a
+canonical proof (calling `from_bytes` upfront), then iterates
+each G1 commit and replaces it with the compressed equivalent.
+
+#### `Halo2KzgProof::decompress_to_canonical_bytes<B>(backend, compressed)`
+Decoder inverse. Parses the header, decompresses every G1 commit
+via the alt_bn128 syscall, copies Fr evaluations as-is, and emits
+the canonical uncompressed bytes. The caller chains
+`Halo2KzgProof::from_bytes(&decoded)` to obtain a borrowed view.
+
+Both methods are `Halo2KzgProof::*` static methods (proof is a
+zero-copy view, can't own data; static helpers return `Vec<u8>`).
+
+### New tests at v0.9.7 (mosaic-halo2: 117 → 123)
+
+- `proof_compressed_round_trip_with_real_generators` — proof with
+  BN254 G1 generators round-trips through compress + decompress
+  byte-for-byte.
+- `proof_compressed_form_is_smaller_than_uncompressed` — asserts
+  exactly 11·32 = 352 B saving for the 5+0+1+3+2 commit shape.
+- `proof_compressed_zero_only_round_trips` — zero G1 short-circuit.
+- `proof_compressed_rejects_short_buffer` — < `header + perm_z + 2 openings`
+  rejects.
+- `proof_compressed_rejects_wrong_total_length` — trailing garbage
+  rejects with `ProofLengthMismatch`.
+- `proof_decompressed_parses_as_canonical_via_from_bytes` — chained
+  decompress → from_bytes path produces a valid proof view with
+  expected counter values.
+
+### Lib test totals at v0.9.7
+
+  mosaic-halo2            123  (+6 since v0.9.6)
+  total                   660  (+6 since v0.9.6)
+
+### Migration notes
+
+Public API additions (no breakage):
+- `mosaic_halo2::Halo2KzgProof::compress_from_canonical_bytes<B>`
+- `mosaic_halo2::Halo2KzgProof::decompress_to_canonical_bytes<B>`
+
+The existing `from_bytes` (uncompressed canonical wire format) is
+unchanged. To use compressed proofs end-to-end:
+
+```rust
+let canonical = Halo2KzgProof::decompress_to_canonical_bytes(
+    &backend, &compressed_bytes,
+)?;
+let proof = Halo2KzgProof::from_bytes(&canonical)?;
+verifier.verify(&vk_bytes, &canonical, &public_inputs)?;
+```
+
+Combined with the session-106 compressed VK + session-108
+compressed proof, a typical Halo2 deployment saves:
+- VK:    ~46 % (~224 B for 2-fixed + 5-perm)
+- Proof: ~32 % (~352 B for 5-advice + 1-lookup + 3-quotient)
 
 ## [0.9.6-halo2-multi-lookup] — 2026-04-30
 

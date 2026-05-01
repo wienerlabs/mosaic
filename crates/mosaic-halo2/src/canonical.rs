@@ -278,6 +278,299 @@ impl<'a> Halo2KzgProof<'a> {
     }
 }
 
+/// **Session 108** — Halo2 proof compression / decompression utilities.
+///
+/// Parallel to session 106's compressed VK support, the proof's G1
+/// commitments (advice, lookup, permutation_z, quotient, w_xi, w_xiw)
+/// can be wire-encoded in compressed form (32 B each) instead of
+/// uncompressed (64 B each). The Fr evaluations stay 32 B uncompressed
+/// because they aren't curve points.
+///
+/// Layout (compressed):
+///
+/// ```text
+/// | offset | size | field                                  |
+/// |---|---|---|
+/// |   0..20 | unchanged 5-counter header (FIXED_HEADER_LEN) |
+/// |  20..   | 32 × n_advice compressed advice commits       |
+/// |    ..   | 32 × n_lookups compressed lookup commits      |
+/// |    ..   | 32 compressed permutation_z                   |
+/// |    ..   | 32 × n_quotient compressed quotient chunks    |
+/// |    ..   | 32 × n_evals Fr evaluations (unchanged)       |
+/// |    ..   | 32 compressed w_xi                            |
+/// |    ..   | 32 compressed w_xiw                           |
+/// ```
+///
+/// Bandwidth saving: each G1 → 32 B from 64 B = 32 B saved per
+/// commit. For a typical Halo2 proof with 5 advice + 1 lookup +
+/// 3 quotient + 1 perm_z + 2 openings = 12 G1 commits, the
+/// compressed proof is 12·32 = 384 B smaller than uncompressed.
+///
+/// CU trade-off: each `decompress_to_canonical_bytes` call costs
+/// roughly `(n_advice + n_lookups + 1 + n_quotient + 2) × ~10 K CU`.
+/// For the same 12-commit example: ~120 K CU per decompression.
+/// Whether worthwhile depends on per-proof-size sensitivity vs CU
+/// budget.
+///
+/// The proof view (`Halo2KzgProof<'a>`) consumes uncompressed
+/// canonical bytes via `from_bytes`. To use compressed bytes:
+///
+/// ```ignore
+/// let canonical = Halo2KzgProof::decompress_to_canonical_bytes(
+///     &backend, &compressed_bytes,
+/// )?;
+/// let proof = Halo2KzgProof::from_bytes(&canonical)?;
+/// ```
+impl Halo2KzgProof<'_> {
+    /// Compressed-form G1 length (mirrors `sizes::G1_LEN` halved).
+    const G1_COMPRESSED_LEN: usize = 32;
+
+    /// Decompress a compressed-format proof byte buffer into the
+    /// canonical uncompressed wire format.
+    ///
+    /// The header (20 bytes) is copied as-is. Each G1 commit
+    /// (advice, lookup, permutation_z, quotient_chunks, w_xi,
+    /// w_xiw) is decompressed via the alt_bn128 syscall. Fr
+    /// evaluations are copied unchanged.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — header counters
+    ///   over the bounded ranges, or compressed buffer total length
+    ///   doesn't match the declared shape.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   compressed point fails decompression.
+    pub fn decompress_to_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        compressed: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{
+            DEFAULT_LOOKUP_ARITY, FIXED_HEADER_LEN, FR_LEN, G1_LEN, MAX_ADVICE_COLUMNS,
+            MAX_EVALUATIONS, MAX_LOOKUPS, MAX_LOOKUP_ARITY, MAX_QUOTIENT_CHUNKS,
+        };
+        const G1_C: usize = 32; // Halo2KzgProof::G1_COMPRESSED_LEN — duplicated as a const to avoid `Self` resolution inside closures.
+
+        if compressed.len() < FIXED_HEADER_LEN + G1_C + 2 * G1_C {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        // Parse header — same byte offsets as the uncompressed format.
+        let n_advice = u32::from_le_bytes([
+            compressed[0],
+            compressed[1],
+            compressed[2],
+            compressed[3],
+        ]);
+        let n_lookups = u32::from_le_bytes([
+            compressed[4],
+            compressed[5],
+            compressed[6],
+            compressed[7],
+        ]);
+        let n_quotient = u32::from_le_bytes([
+            compressed[8],
+            compressed[9],
+            compressed[10],
+            compressed[11],
+        ]);
+        let n_evals = u32::from_le_bytes([
+            compressed[12],
+            compressed[13],
+            compressed[14],
+            compressed[15],
+        ]);
+        let arity_raw = u32::from_le_bytes([
+            compressed[16],
+            compressed[17],
+            compressed[18],
+            compressed[19],
+        ]);
+        let lookup_arity = if arity_raw == 0 {
+            DEFAULT_LOOKUP_ARITY
+        } else {
+            arity_raw
+        };
+
+        if n_advice > MAX_ADVICE_COLUMNS
+            || n_lookups > MAX_LOOKUPS
+            || n_quotient > MAX_QUOTIENT_CHUNKS
+            || n_evals > MAX_EVALUATIONS
+            || lookup_arity > MAX_LOOKUP_ARITY
+        {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        let advice_clen = (n_advice as usize)
+            .checked_mul(G1_C)
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        let lookup_clen = (n_lookups as usize)
+            .checked_mul(G1_C)
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        let quotient_clen = (n_quotient as usize)
+            .checked_mul(G1_C)
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        let evals_len = (n_evals as usize)
+            .checked_mul(FR_LEN)
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+
+        let expected_clen = FIXED_HEADER_LEN
+            + advice_clen
+            + lookup_clen
+            + G1_C // permutation_z compressed
+            + quotient_clen
+            + evals_len
+            + 2 * G1_C; // w_xi, w_xiw compressed
+
+        if compressed.len() != expected_clen {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        // Build the uncompressed canonical buffer.
+        let advice_len = (n_advice as usize) * G1_LEN;
+        let lookup_len = (n_lookups as usize) * G1_LEN;
+        let quotient_len = (n_quotient as usize) * G1_LEN;
+        let canonical_len = FIXED_HEADER_LEN
+            + advice_len
+            + lookup_len
+            + G1_LEN
+            + quotient_len
+            + evals_len
+            + 2 * G1_LEN;
+        let mut out: Vec<u8> = Vec::with_capacity(canonical_len);
+        // Header: copy as-is (the lookup_arity raw value is preserved
+        // even when 0 — let from_bytes do the DEFAULT_LOOKUP_ARITY
+        // reinterpretation).
+        out.extend_from_slice(&compressed[..FIXED_HEADER_LEN]);
+
+        // Helper closure: decompress one G1 from a 32-byte slice and
+        // append the 64-byte uncompressed result to `out`.
+        let mut o = FIXED_HEADER_LEN;
+        let mut decompress_g1_into = |slice: &[u8],
+                                       sink: &mut Vec<u8>|
+         -> Result<(), OnChainError> {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(slice);
+            let full =
+                mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            sink.extend_from_slice(&full);
+            Ok(())
+        };
+
+        // advice commits
+        for _ in 0..(n_advice as usize) {
+            decompress_g1_into(&compressed[o..o + G1_C], &mut out)?;
+            o += G1_C;
+        }
+        // lookup commits
+        for _ in 0..(n_lookups as usize) {
+            decompress_g1_into(&compressed[o..o + G1_C], &mut out)?;
+            o += G1_C;
+        }
+        // permutation_z
+        decompress_g1_into(&compressed[o..o + G1_C], &mut out)?;
+        o += G1_C;
+        // quotient chunks
+        for _ in 0..(n_quotient as usize) {
+            decompress_g1_into(&compressed[o..o + G1_C], &mut out)?;
+            o += G1_C;
+        }
+        // Fr evaluations: copy as-is (not compressible).
+        out.extend_from_slice(&compressed[o..o + evals_len]);
+        o += evals_len;
+        // w_xi
+        decompress_g1_into(&compressed[o..o + G1_C], &mut out)?;
+        o += G1_C;
+        // w_xiw
+        decompress_g1_into(&compressed[o..o + G1_C], &mut out)?;
+
+        debug_assert_eq!(out.len(), canonical_len);
+        Ok(out)
+    }
+
+    /// Compress a canonical uncompressed proof byte buffer into the
+    /// compressed wire format.
+    ///
+    /// Companion to [`decompress_to_canonical_bytes`]. The header
+    /// (20 bytes) and Fr evaluations are copied unchanged; every G1
+    /// commit is compressed via the alt_bn128 syscall.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — input doesn't parse
+    ///   as a valid canonical proof (`Halo2KzgProof::from_bytes`
+    ///   would reject).
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   point fails to compress (off-curve, etc.).
+    pub fn compress_from_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{FIXED_HEADER_LEN, FR_LEN, G1_LEN};
+        const G1_C: usize = 32; // Halo2KzgProof::G1_COMPRESSED_LEN — duplicated as a const to avoid `Self` resolution inside closures.
+
+        // Parse the canonical proof to validate shape + extract
+        // counters. This rejects malformed input upfront.
+        let proof = Halo2KzgProof::from_bytes(canonical)?;
+        let n_advice = proof.n_advice as usize;
+        let n_lookups = proof.n_lookups as usize;
+        let n_quotient = proof.n_quotient as usize;
+        let n_evals = proof.n_evals as usize;
+
+        let advice_clen = n_advice * G1_C;
+        let lookup_clen = n_lookups * G1_C;
+        let quotient_clen = n_quotient * G1_C;
+        let evals_len = n_evals * FR_LEN;
+        let expected_clen = FIXED_HEADER_LEN
+            + advice_clen
+            + lookup_clen
+            + G1_C
+            + quotient_clen
+            + evals_len
+            + 2 * G1_C;
+        let mut out: Vec<u8> = Vec::with_capacity(expected_clen);
+
+        // Copy the 20-byte header as-is.
+        out.extend_from_slice(&canonical[..FIXED_HEADER_LEN]);
+
+        // Helper closure: compress one G1 (64 bytes) and append the
+        // 32-byte compressed result to `out`.
+        let mut compress_g1_into = |slice: &[u8],
+                                     sink: &mut Vec<u8>|
+         -> Result<(), OnChainError> {
+            let mut arr = [0u8; G1_LEN];
+            arr.copy_from_slice(slice);
+            let c =
+                mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            sink.extend_from_slice(&c);
+            Ok(())
+        };
+
+        // advice commits
+        for chunk in proof.advice_commits.chunks_exact(G1_LEN) {
+            compress_g1_into(chunk, &mut out)?;
+        }
+        // lookup commits
+        for chunk in proof.lookup_commits.chunks_exact(G1_LEN) {
+            compress_g1_into(chunk, &mut out)?;
+        }
+        // permutation_z
+        compress_g1_into(proof.permutation_z, &mut out)?;
+        // quotient chunks
+        for chunk in proof.quotient_chunks.chunks_exact(G1_LEN) {
+            compress_g1_into(chunk, &mut out)?;
+        }
+        // Fr evaluations: copy as-is.
+        out.extend_from_slice(proof.evaluations);
+        // w_xi
+        compress_g1_into(proof.w_xi, &mut out)?;
+        // w_xiw
+        compress_g1_into(proof.w_xiw, &mut out)?;
+
+        debug_assert_eq!(out.len(), expected_clen);
+        Ok(out)
+    }
+}
+
 /// Halo2-KZG verifying key.
 ///
 /// **Placeholder** — real VK has preprocessing commitments for custom
@@ -933,6 +1226,189 @@ mod tests {
             matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)),
             "n_fixed=3 with arity-2 payload must reject; got {r:?}",
         );
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 108 — compressed proof round-trip + bandwidth-saving tests.
+    //
+    // The proof's G1 commits (advice, lookup, permutation_z, quotient,
+    // w_xi, w_xiw) are compressed via the alt_bn128 syscall. Fr
+    // evaluations are uncompressed (not curve points).
+    //
+    // Same trade-off pattern as session-106 compressed VK: ~10 K CU
+    // per G1 decompression, ~32 B saving per commit.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Build a canonical (uncompressed) Halo2 proof with realistic
+    /// G1 commits. All commits use the BN254 G1 generator (compressible)
+    /// and Fr evaluations stay zero.
+    fn realistic_canonical_proof() -> Vec<u8> {
+        use crate::canonical::sizes::{FR_LEN, G1_LEN};
+        let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+
+        let n_advice: u32 = 5;
+        let n_lookups: u32 = 0; // legacy implicit-1 mode
+        let n_quotient: u32 = 3;
+        let n_evals: u32 = 19; // 13 + 1·(2·1+1) + 3 = 19
+        let arity: u32 = 1;
+
+        let total = sizes::FIXED_HEADER_LEN
+            + (n_advice as usize) * G1_LEN
+            + (n_lookups as usize) * G1_LEN
+            + G1_LEN
+            + (n_quotient as usize) * G1_LEN
+            + (n_evals as usize) * FR_LEN
+            + 2 * G1_LEN;
+        let mut buf = vec![0u8; total];
+        buf[0..4].copy_from_slice(&n_advice.to_le_bytes());
+        buf[4..8].copy_from_slice(&n_lookups.to_le_bytes());
+        buf[8..12].copy_from_slice(&n_quotient.to_le_bytes());
+        buf[12..16].copy_from_slice(&n_evals.to_le_bytes());
+        buf[16..20].copy_from_slice(&arity.to_le_bytes());
+
+        // Place G1 generator into every G1 commit slot.
+        let mut o = sizes::FIXED_HEADER_LEN;
+        // advice commits
+        for _ in 0..n_advice {
+            buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+            o += G1_LEN;
+        }
+        // lookup commits (n_lookups = 0, no-op)
+        // permutation_z
+        buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+        o += G1_LEN;
+        // quotient chunks
+        for _ in 0..n_quotient {
+            buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+            o += G1_LEN;
+        }
+        // Fr evaluations: leave zero
+        o += (n_evals as usize) * FR_LEN;
+        // w_xi
+        buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+        o += G1_LEN;
+        // w_xiw
+        buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+        buf
+    }
+
+    #[test]
+    fn proof_compressed_round_trip_with_real_generators() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let canonical = realistic_canonical_proof();
+        let compressed =
+            Halo2KzgProof::compress_from_canonical_bytes(&backend, &canonical)
+                .expect("compress proof");
+        let decoded =
+            Halo2KzgProof::decompress_to_canonical_bytes(&backend, &compressed)
+                .expect("decompress proof");
+        assert_eq!(
+            decoded, canonical,
+            "compressed proof round-trip must yield original canonical bytes"
+        );
+    }
+
+    #[test]
+    fn proof_compressed_form_is_smaller_than_uncompressed() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let canonical = realistic_canonical_proof();
+        let compressed =
+            Halo2KzgProof::compress_from_canonical_bytes(&backend, &canonical)
+                .expect("compress");
+        // 5 advice + 0 lookups + 1 perm_z + 3 quotient + 2 openings = 11 G1
+        // commits → 11·32 = 352 B saving (each G1 64→32).
+        let expected_saving = 11 * 32;
+        let actual_saving = canonical.len() - compressed.len();
+        assert_eq!(
+            actual_saving, expected_saving,
+            "compressed proof must save exactly {expected_saving} B; got {actual_saving}"
+        );
+    }
+
+    #[test]
+    fn proof_compressed_zero_only_round_trips() {
+        // All-zero proof: every G1 = identity. Compression syscall
+        // short-circuits zero G1 to zero (32 B). Round-trip stays
+        // all-zero.
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let canonical = {
+            let n_advice: u32 = 5;
+            let n_lookups: u32 = 0;
+            let n_quotient: u32 = 3;
+            let n_evals: u32 = 19;
+            let arity: u32 = 1;
+            let total = sizes::FIXED_HEADER_LEN
+                + (n_advice as usize) * sizes::G1_LEN
+                + (n_lookups as usize) * sizes::G1_LEN
+                + sizes::G1_LEN
+                + (n_quotient as usize) * sizes::G1_LEN
+                + (n_evals as usize) * sizes::FR_LEN
+                + 2 * sizes::G1_LEN;
+            let mut buf = vec![0u8; total];
+            buf[0..4].copy_from_slice(&n_advice.to_le_bytes());
+            buf[4..8].copy_from_slice(&n_lookups.to_le_bytes());
+            buf[8..12].copy_from_slice(&n_quotient.to_le_bytes());
+            buf[12..16].copy_from_slice(&n_evals.to_le_bytes());
+            buf[16..20].copy_from_slice(&arity.to_le_bytes());
+            buf
+        };
+        let compressed =
+            Halo2KzgProof::compress_from_canonical_bytes(&backend, &canonical).unwrap();
+        let decoded =
+            Halo2KzgProof::decompress_to_canonical_bytes(&backend, &compressed).unwrap();
+        assert_eq!(decoded, canonical);
+    }
+
+    #[test]
+    fn proof_compressed_rejects_short_buffer() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        // Min size = header + 1·G1_C (perm_z) + 2·G1_C (openings) = 20 + 32 + 64 = 116.
+        let too_short = vec![0u8; 115];
+        let r = Halo2KzgProof::decompress_to_canonical_bytes(&backend, &too_short);
+        assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+    }
+
+    #[test]
+    fn proof_compressed_rejects_wrong_total_length() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let canonical = realistic_canonical_proof();
+        let mut compressed =
+            Halo2KzgProof::compress_from_canonical_bytes(&backend, &canonical).unwrap();
+        // Append trailing garbage — total length no longer matches
+        // declared shape.
+        compressed.push(0xFF);
+        let r =
+            Halo2KzgProof::decompress_to_canonical_bytes(&backend, &compressed);
+        assert!(
+            matches!(r, Err(OnChainError::ProofLengthMismatch)),
+            "trailing-garbage compressed proof must reject; got {r:?}",
+        );
+    }
+
+    /// Decompressed proof must be parseable as a normal canonical
+    /// proof — i.e. the chained `decompress → from_bytes` path
+    /// gives a valid `Halo2KzgProof<'a>` view.
+    #[test]
+    fn proof_decompressed_parses_as_canonical_via_from_bytes() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let canonical = realistic_canonical_proof();
+        let compressed =
+            Halo2KzgProof::compress_from_canonical_bytes(&backend, &canonical).unwrap();
+        let decoded =
+            Halo2KzgProof::decompress_to_canonical_bytes(&backend, &compressed).unwrap();
+        let parsed = Halo2KzgProof::from_bytes(&decoded).expect("from_bytes parse");
+        assert_eq!(parsed.n_advice, 5);
+        assert_eq!(parsed.n_lookups, 0);
+        assert_eq!(parsed.n_quotient, 3);
+        assert_eq!(parsed.n_evals, 19);
+        assert_eq!(parsed.lookup_arity, 1);
+        // 5 advice + 1 perm_z + 3 quotient + 2 openings = 11 G1 = 11·64 = 704 B
+        // of G1 commitments (excluding lookup_commits which is 0 at n_lookups=0).
+        assert_eq!(parsed.advice_commits.len(), 5 * 64);
+        assert_eq!(parsed.permutation_z.len(), 64);
+        assert_eq!(parsed.quotient_chunks.len(), 3 * 64);
+        assert_eq!(parsed.w_xi.len(), 64);
+        assert_eq!(parsed.w_xiw.len(), 64);
     }
 
     #[test]

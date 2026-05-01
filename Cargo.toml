@@ -26,7 +26,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.9.6-halo2-multi-lookup"
+version = "0.9.7-halo2-proof-compressed"
 edition = "2021"
 rust-version = "1.85.0"
 license = "Apache-2.0 OR MIT"
@@ -40,18 +40,18 @@ categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
 # Workspace member crates
-mosaic-core = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-core", default-features = false }
-mosaic-zk-primitives = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-zk-primitives", default-features = false }
-mosaic-groth16 = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-groth16", default-features = false }
-mosaic-plonk = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-plonk", default-features = false }
-mosaic-hyperplonk = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-hyperplonk", default-features = false }
-mosaic-halo2 = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-halo2", default-features = false }
-mosaic-stark = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-stark", default-features = false }
-mosaic-nova = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-nova", default-features = false }
-mosaic-serde = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-serde", default-features = false }
-mosaic-chunked = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-chunked", default-features = false }
-mosaic-program = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-program" }
-mosaic-sdk = { version = "0.9.6-halo2-multi-lookup", path = "crates/mosaic-sdk" }
+mosaic-core = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-core", default-features = false }
+mosaic-zk-primitives = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-zk-primitives", default-features = false }
+mosaic-groth16 = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-groth16", default-features = false }
+mosaic-plonk = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-plonk", default-features = false }
+mosaic-hyperplonk = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-hyperplonk", default-features = false }
+mosaic-halo2 = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-halo2", default-features = false }
+mosaic-stark = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-stark", default-features = false }
+mosaic-nova = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-nova", default-features = false }
+mosaic-serde = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-serde", default-features = false }
+mosaic-chunked = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-chunked", default-features = false }
+mosaic-program = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-program" }
+mosaic-sdk = { version = "0.9.7-halo2-proof-compressed", path = "crates/mosaic-sdk" }
 
 # Solana — pinned to 2.x; Solana 3.0 CLI is backward-compatible with 2.x program SDK.
 # We deliberately avoid the unstable 3.x API surface during phase 1 to keep MSRV stable.

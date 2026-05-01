@@ -10,6 +10,77 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-30 — v0.9.7-halo2-proof-compressed release (session 108)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.7-halo2-proof-compressed`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.7-halo2-proof-compressed) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Halo2 proof gains compressed wire format alongside session-106's compressed VK. Combined VK + proof compression saves ~46 %/~32 % wire size respectively for a typical 2-fixed + 5-perm + 5-advice deployment. |
+| Findings | Zero soundness regressions. Round-trip correctness pinned by `proof_compressed_round_trip_with_real_generators`; size invariant pinned by `proof_compressed_form_is_smaller_than_uncompressed`; rejection paths covered for short buffers + trailing garbage. |
+| Status | ✅ Compression syscall (sessions 103-104) now has TWO real consumers: VK (session 106) + proof (session 108). |
+
+### What this changes for an external auditor
+
+Real Halo2 proofs are bandwidth-heavy. A typical 5-advice + 1-lookup
++ 3-quotient + 2-opening proof carries 12 G1 commits × 64 B = 768 B
+of curve-point data, plus ~600 B of Fr evaluations. Pre-session-108
+proofs could only land on Solana in their full 1.4 KB form;
+session-108 lets a deployment opt into the 1.05 KB compressed form
+(~26 % smaller overall).
+
+For chunked-upload-protocol consumers (`mosaic-program::dispatch_verify`)
+the compressed form fits more proofs per chunk and reduces the
+number of chunks needed for proofs near the 1232 B instruction-data
+limit.
+
+### Soundness inheritance
+
+The compressed proof parser leverages the canonical
+`Halo2KzgProof::from_bytes` for shape validation:
+- `compress_from_canonical_bytes` calls `from_bytes` upfront → any
+  malformed canonical input rejects before compression.
+- `decompress_to_canonical_bytes` validates the compressed buffer
+  total length against the declared shape (n_advice +
+  n_lookups + 1 + n_quotient + 2 G1 commits + n_evals Fr).
+
+Mismatches surface as `ProofLengthMismatch` at parse time, never as
+silent data corruption.
+
+### Lib test totals at v0.9.7
+
+  mosaic-halo2            123  (+6)
+  total                   660  (+6 since v0.9.6)
+
+### What this milestone DOES change
+
+- Halo2 proof gains a compressed wire-format alternate.
+- Compression syscall (sessions 103-104) now has 2 real verifier-
+  side consumers (VK + proof).
+
+### What this milestone does NOT change
+
+- Verifier behaviour for uncompressed proofs (byte-equivalent),
+  in-memory proof representation. Once decompressed, the proof
+  view matches the existing canonical layout.
+- Header layout (FIXED_HEADER_LEN = 20 bytes, unchanged since
+  session 100).
+- Other verifier crates (Groth16, PLONK, HyperPlonk, Nova, STARK)
+  proof formats unchanged.
+
+### Cumulative compression saving for a typical Halo2 deployment
+
+| Component | Uncompressed | Compressed | Saving |
+|---|---|---|---|
+| VK (2 fixed + 5 perm) | 488 B | 264 B | 224 B (46%) |
+| Proof (5+1+3+2 commits + evals) | 1408 B | 1056 B | 352 B (25%) |
+| **Combined** | **1896 B** | **1320 B** | **576 B (30%)** |
+
+For 100K Halo2 verify transactions on Solana, the combined saving
+is ~57.6 MB of instruction data — meaningful at scale.
+
+---
+
 ## 2026-04-30 — v0.9.6-halo2-multi-lookup release (session 107)
 
 | Field | Value |
