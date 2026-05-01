@@ -470,6 +470,73 @@ pub fn combined_expr_multi_column(
     Ok(gate + *y * perm_value + y_sq * lookup_value)
 }
 
+/// **Session 107** — `combined_expr` with arbitrary number of
+/// lookup arguments, each weighted by a distinct y-power for
+/// soundness.
+///
+/// Real Halo2 vanishing identity:
+///
+/// ```text
+/// gate(ξ)
+///   + y · perm(ξ)
+///   + y² · L₀(ξ)
+///   + y³ · L₁(ξ)
+///   + …
+///   + y^(n+1) · L_{n-1}(ξ)
+///   = t(ξ) · Z_H(ξ)
+/// ```
+///
+/// where `Lⱼ(ξ)` is the per-row log-derivative lookup identity for
+/// the j-th lookup argument. Distinct y-powers are critical for
+/// soundness: with the same weight (`y² · (L₀ + L₁ + …)`), the
+/// prover could let `L₀ = -L₁` to satisfy the identity at one row
+/// without either lookup being individually satisfied.
+///
+/// At `lookups.is_empty()` this collapses to `gate + y · perm` —
+/// the no-lookup case used by lookup-less Halo2 circuits.
+///
+/// At `lookups.len() == 1` it produces the same scalar as
+/// [`combined_expr_multi_column`] (same y² weighting on a single
+/// lookup).
+///
+/// At `lookups.len() ≥ 2` it sums each lookup with a distinct
+/// y-power, generalizing the session-100 single-lookup path to real
+/// Halo2 multi-lookup circuits.
+///
+/// ## Errors
+///
+/// Propagates errors from [`multi_column_lookup_expr`] for any
+/// lookup in the slice (empty cols, arity mismatch, θ = 0, or
+/// denominator inverse failure).
+#[allow(clippy::too_many_arguments)]
+pub fn combined_expr_multi_lookup(
+    wires: &WireEvals,
+    selectors: &SelectorEvals,
+    perm: &PermutationEvals,
+    lookups: &[MultiColumnLookupEvals],
+    theta: &Fr,
+    beta: &Fr,
+    gamma: &Fr,
+    y: &Fr,
+    xi: &Fr,
+) -> Result<Fr, OnChainError> {
+    let gate = gate_expr(wires, selectors);
+    let perm_value = permutation_expr(wires, perm, beta, gamma, xi);
+
+    // Distinct y-power per lookup: starts at y² for lookup 0, then
+    // y³, y⁴, … . Build by multiplication so each iteration costs one
+    // Fr mul instead of recomputing fr_pow_u64 from scratch.
+    let mut y_pow = *y * y; // y²
+    let mut lookup_sum = Fr::from(0u64);
+    for lookup in lookups {
+        let l_value = multi_column_lookup_expr(lookup, theta)?;
+        lookup_sum += y_pow * l_value;
+        y_pow *= y;
+    }
+
+    Ok(gate + *y * perm_value + lookup_sum)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

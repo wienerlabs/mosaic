@@ -82,7 +82,8 @@ pub use bundle::EvaluationBundle;
 pub use canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
 pub use challenges::{derive_challenges, Halo2Challenges};
 pub use circuit::{
-    combined_expr, gate_expr, lookup_expr, multi_column_lookup_expr, permutation_expr,
+    combined_expr, combined_expr_multi_column, combined_expr_multi_lookup, gate_expr,
+    lookup_expr, multi_column_lookup_expr, permutation_expr,
     verify_multi_column_lookup_identity, LookupEvals, MultiColumnLookupEvals, PermutationEvals,
     SelectorEvals, WireEvals,
 };

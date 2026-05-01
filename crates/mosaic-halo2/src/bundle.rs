@@ -109,15 +109,33 @@ pub mod idx {
     pub const LOOKUP_INPUT_BASE: usize = 13;
 
     /// Number of fixed-position evaluations before the quotient tail
-    /// at arity 1 (16 = 13 + 2 + 1).
+    /// at arity 1 with **a single lookup** (16 = 13 + 2 + 1).
     pub const FIXED_SLOTS: usize = 16;
 
-    /// Compute the fixed-slot count for a given lookup arity.
-    /// `13 + 2k + 1` where 13 covers wires/selectors/permutation,
-    /// 2k covers k input + k table evals, and 1 covers the m eval.
+    /// Compute the fixed-slot count for a given lookup arity, assuming
+    /// a single lookup argument. Kept for compatibility with sessions
+    /// 100-101 callers; new code (session 107+) should prefer
+    /// [`fixed_slots_for_lookups`] which scales with `n_lookups` too.
     #[must_use]
     pub const fn fixed_slots_for_arity(arity: u32) -> usize {
         13 + 2 * (arity as usize) + 1
+    }
+
+    /// **Session 107** — compute the fixed-slot count for a given
+    /// (lookup_arity, n_lookups) pair.
+    ///
+    /// Each lookup section consumes `2k + 1` slots
+    /// (`k` input + `k` table + 1 multiplicity). With `n` lookup
+    /// arguments, the eval bundle has `13 + n × (2k + 1)` fixed
+    /// slots before the quotient tail.
+    ///
+    /// At `n_lookups = 1` this reduces to
+    /// [`fixed_slots_for_arity`]. At `n_lookups = 0` no lookup data
+    /// is carried at all and the bundle has just `13` fixed slots
+    /// (wires + selectors + permutation).
+    #[must_use]
+    pub const fn fixed_slots_for_lookups(arity: u32, n_lookups: u32) -> usize {
+        13 + (n_lookups as usize) * (2 * (arity as usize) + 1)
     }
 }
 
@@ -131,40 +149,83 @@ pub struct EvaluationBundle {
     /// Permutation grand-product + σ evaluations.
     pub permutation: PermutationEvals,
     /// Single-column lookup argument evaluations (arity-1 view of the
-    /// proof's lookup data — first input/table column + m). For
-    /// `arity = 1` this is the canonical lookup; for `arity ≥ 2` it
-    /// holds the **first** column pair (useful for tests / fallback)
-    /// and the full multi-column data is in [`Self::multi_lookup`].
-    pub lookup: LookupEvals,
-    /// **Session 100** — multi-column lookup data when the proof
-    /// declares `lookup_arity ≥ 2`. `None` for `arity = 1` (the
-    /// `lookup` field above is the canonical view in that case).
+    /// **first** lookup's data — first input/table column + m).
     ///
-    /// When present, this is the structured multi-column eval bundle
-    /// that the verifier feeds into
-    /// [`crate::verify_multi_column_lookup_identity`].
+    /// - `n_lookups = 0`: holds zero values (legacy callers reading
+    ///   `bundle.lookup` on lookup-less proofs see the all-zero
+    ///   identity-satisfying tuple).
+    /// - `n_lookups ≥ 1`: holds lookup #0's first column pair + m.
+    ///
+    /// Sessions 100/101/107 all preserve this field for callers that
+    /// haven't migrated to the multi-lookup `multi_lookups` slice.
+    pub lookup: LookupEvals,
+    /// **Session 100** — multi-column view of the **first** lookup
+    /// when the proof declares `lookup_arity ≥ 2` and `n_lookups ≥ 1`.
+    /// `None` for `arity = 1` or `n_lookups = 0`.
+    ///
+    /// Kept for backwards compatibility with verifier code paths that
+    /// dispatch on `Option<MultiColumnLookupEvals>`. New code should
+    /// prefer [`Self::multi_lookups`] which carries every lookup.
     pub multi_lookup: Option<MultiColumnLookupEvals>,
+    /// **Session 107** — full multi-lookup bundle. Length always
+    /// equals `proof.n_lookups`:
+    ///
+    /// - `0`: empty Vec, no lookup contribution to the vanishing
+    ///   identity (verifier skips the lookup term).
+    /// - `1`: one entry, equivalent to [`Self::multi_lookup`] when
+    ///   arity ≥ 2 (or constructed from [`Self::lookup`] when
+    ///   arity = 1).
+    /// - `≥ 2`: multiple distinct lookup arguments, each summed
+    ///   into the vanishing identity with a distinct y-power
+    ///   (y², y³, …) for soundness.
+    ///
+    /// Each entry is a `MultiColumnLookupEvals` regardless of
+    /// arity — the arity-1 case holds a single-column tuple
+    /// inside the multi-column container, exercising the
+    /// session-89 backwards-compat bridge
+    /// (`From<LookupEvals> for MultiColumnLookupEvals`).
+    pub multi_lookups: Vec<MultiColumnLookupEvals>,
     /// Quotient chunk evaluations `h_i(ξ)`. Length = `n_quotient`.
     pub quotient_chunks: Vec<Fr>,
 }
 
 impl EvaluationBundle {
     /// Decode from the proof's flat `evaluations` bytes + `n_quotient`
-    /// from the header.
+    /// + `n_lookups` + `lookup_arity` from the header.
     ///
-    /// Required:
-    /// - For `lookup_arity ≤ 1`: `n_evals == FIXED_SLOTS + n_quotient`
-    ///   (16 + n_quotient — the legacy single-column layout).
-    /// - For `lookup_arity = k ≥ 2`: `n_evals == 13 + 2k + 1 + n_quotient`
-    ///   (the multi-column layout).
+    /// Required (sessions 100, 107):
+    /// - `n_lookups = 0` (legacy implicit single-lookup mode):
+    ///   `n_evals == 13 + (2k + 1) + n_quotient`. The bundle parses
+    ///   1 lookup eval section but the KZG opening skips m-poly
+    ///   pairing because no m-commit is present in the proof's
+    ///   commit section. This preserves backward compatibility with
+    ///   pre-session-107 scaffold fixtures.
+    /// - `n_lookups ≥ 1` (explicit multi-lookup mode):
+    ///   `n_evals == 13 + n_lookups · (2k + 1) + n_quotient`. The
+    ///   bundle carries `n_lookups` lookup sections; the verifier
+    ///   sums each into the vanishing identity with a distinct
+    ///   y-power.
     ///
     /// Returns [`OnChainError::ProofLengthMismatch`] on any size
     /// mismatch.
     pub fn from_proof(proof: &Halo2KzgProof<'_>) -> Result<Self, OnChainError> {
         let n_quotient = proof.n_quotient as usize;
         let arity = proof.lookup_arity;
-        let lookup_slots = idx::fixed_slots_for_arity(arity);
-        let expected_evals = lookup_slots + n_quotient;
+        let n_lookups = proof.n_lookups;
+        let arity_us = arity as usize;
+
+        // Session 107 — `n_lookups = 0` is reinterpreted as the
+        // legacy implicit single-lookup mode (1 eval section, no
+        // m-commit pairing). Tracks `effective_n_lookups` for the
+        // bundle's lookup-section sizing while leaving the proof's
+        // declared `n_lookups` intact for downstream KZG opening
+        // logic which uses it for commit counting.
+        let effective_n_lookups = if n_lookups == 0 { 1 } else { n_lookups };
+        let effective_n_lookups_us = effective_n_lookups as usize;
+
+        let lookup_section_size =
+            idx::fixed_slots_for_lookups(arity, effective_n_lookups);
+        let expected_evals = lookup_section_size + n_quotient;
         if proof.n_evals as usize != expected_evals {
             return Err(OnChainError::ProofLengthMismatch);
         }
@@ -197,41 +258,63 @@ impl EvaluationBundle {
             sigma_3: fr_at(idx::SIGMA_3)?,
         };
 
-        // Decode lookup section based on arity.
-        // Layout: [13, 13+arity) inputs, [13+arity, 13+2·arity) tables,
-        // [13+2·arity] m_eval.
-        let arity_us = arity as usize;
-        let mut input_cols: Vec<Fr> = Vec::with_capacity(arity_us);
-        for i in 0..arity_us {
-            input_cols.push(fr_at(idx::LOOKUP_INPUT_BASE + i)?);
-        }
-        let mut table_cols: Vec<Fr> = Vec::with_capacity(arity_us);
-        for i in 0..arity_us {
-            table_cols.push(fr_at(idx::LOOKUP_INPUT_BASE + arity_us + i)?);
-        }
-        let m_eval = fr_at(idx::LOOKUP_INPUT_BASE + 2 * arity_us)?;
-
-        // Always populate the legacy `lookup` field for callsites that
-        // haven't been migrated to multi-column. For arity-1, this IS
-        // the canonical view; for arity ≥ 2, it holds column 0.
-        let lookup = LookupEvals {
-            input: input_cols[0],
-            table: table_cols[0],
-            m: m_eval,
-        };
-
-        let multi_lookup = if arity >= 2 {
-            Some(MultiColumnLookupEvals::try_new(
+        // Session 107 — decode every lookup section in order.
+        // Each section: [base + j × (2k+1) .. base + (j+1) × (2k+1))
+        // with sub-layout
+        //   [..k)      input cols
+        //   [k..2k)    table cols
+        //   [2k..2k+1) m_eval
+        let per_section = 2 * arity_us + 1;
+        let mut multi_lookups: Vec<MultiColumnLookupEvals> =
+            Vec::with_capacity(effective_n_lookups_us);
+        for j in 0..effective_n_lookups_us {
+            let section_base = idx::LOOKUP_INPUT_BASE + j * per_section;
+            let mut input_cols: Vec<Fr> = Vec::with_capacity(arity_us);
+            for i in 0..arity_us {
+                input_cols.push(fr_at(section_base + i)?);
+            }
+            let mut table_cols: Vec<Fr> = Vec::with_capacity(arity_us);
+            for i in 0..arity_us {
+                table_cols.push(fr_at(section_base + arity_us + i)?);
+            }
+            let m_eval = fr_at(section_base + 2 * arity_us)?;
+            multi_lookups.push(MultiColumnLookupEvals::try_new(
                 input_cols,
                 table_cols,
                 m_eval,
-            )?)
+            )?);
+        }
+
+        // Legacy single-column view: first lookup's column-0 +
+        // m_eval. For n_lookups = 0 we synthesize an all-zero tuple
+        // so callers reading bundle.lookup on lookup-less proofs see
+        // the identity-satisfying default.
+        let lookup = if let Some(first) = multi_lookups.first() {
+            LookupEvals {
+                input: first.input_cols[0],
+                table: first.table_cols[0],
+                m: first.m,
+            }
+        } else {
+            LookupEvals {
+                input: Fr::from(0u64),
+                table: Fr::from(0u64),
+                m: Fr::from(0u64),
+            }
+        };
+
+        // Legacy multi-column view: first lookup, when arity ≥ 2 and
+        // n_lookups ≥ 1. Preserves the session-100 dispatch contract
+        // for verifier callsites that haven't migrated to
+        // `multi_lookups`.
+        let multi_lookup = if arity >= 2 && !multi_lookups.is_empty() {
+            Some(multi_lookups[0].clone())
         } else {
             None
         };
 
-        // Quotient chunks start after the lookup section.
-        let quotient_base = lookup_slots;
+        // Quotient chunks start after the entire lookup section.
+        let quotient_base = lookup_section_size;
         let mut quotient_chunks = Vec::with_capacity(n_quotient);
         for i in 0..n_quotient {
             quotient_chunks.push(fr_at(quotient_base + i)?);
@@ -243,6 +326,7 @@ impl EvaluationBundle {
             permutation,
             lookup,
             multi_lookup,
+            multi_lookups,
             quotient_chunks,
         })
     }

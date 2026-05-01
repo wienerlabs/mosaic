@@ -10,6 +10,97 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-30 — v0.9.6-halo2-multi-lookup release (session 107)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.6-halo2-multi-lookup`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.6-halo2-multi-lookup) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Multiple lookup arguments per Halo2 proof — generalizes session-100/101 single-column-multi-column to n distinct lookups, each summed with a distinct y-power for soundness. |
+| Findings | Zero soundness regressions. The distinct-y-power weighting is critical: tamper-rejection tests pin that any lookup index's m_eval tamper surfaces (without distinct powers, lookup contributions could cancel out adversarially). |
+| Status | ✅ Real Halo2 circuits (which routinely declare 2-5 lookup arguments — byte-range, XOR, MUL, hash round-constants) are now structurally verifiable end-to-end. Session-102's m_eval/commit binding gap remains the documented Phase-3 fixture-driven testing dependency. |
+
+### What this changes for an external auditor
+
+Pre-session-107 Halo2 verifier accepted exactly 1 lookup argument
+(implicit, 3 eval slots in the bundle). Real Halo2 toolchains
+(PSE halo2, halo2_proofs) emit proofs with 2-5 lookup arguments by
+default — a circuit with byte-range + XOR table + hash
+round-constants table is `n_lookups = 3`. Pre-session-107 these
+proofs couldn't be verified; the verifier silently dropped the
+extra lookup contributions.
+
+After session 107:
+- The proof header's `n_lookups: u32` field is the actual lookup
+  count.
+- The bundle parser reads `n_lookups × (2k + 1)` lookup eval slots.
+- The verifier's vanishing identity sums each lookup's
+  `multi_column_lookup_expr` value with a distinct y-power
+  (`y², y³, y⁴, …`).
+- Per-lookup tampering is detectable at any lookup index (proven by
+  tests `n_lookups_2_rejects_tampered_{first,second}_lookup_m_eval`
+  and `n_lookups_3_rejects_tampered_third_lookup_m_eval`).
+
+### Why distinct y-powers (not shared y²)
+
+If every lookup were summed with the same `y²` weight, an adversary
+could let `L₀ = -L₁` so the sum vanishes at one row without either
+lookup being individually valid. Distinct powers
+(`y² · L₀ + y³ · L₁ + y⁴ · L₂ + …`) force each lookup to vanish
+independently — Schwartz-Zippel over the random `y` challenge says
+that any non-zero per-lookup polynomial is detectable with
+overwhelming probability.
+
+The session-107 implementation pins this with three tests targeting
+each of the three lookup positions in an n_lookups=3 setup. If a
+future refactor accidentally collapses to shared-y weighting, those
+tests fail loudly.
+
+### Soundness inheritance
+
+All session-105 internal-consistency checks generalize:
+- `n_advice ≥ 2 · arity · n_lookups` (each lookup reserves 2k
+  advice columns; n lookups need 2nk total).
+- `n_evals == 13 + max(1, n_lookups) · (2k + 1) + n_quotient`
+  (bundle eval-section sizing matches declared lookup count).
+- VK / proof / public-input divisibility checks unchanged.
+
+A malformed multi-lookup header (e.g. n_lookups=3 with arity-2-sized
+n_evals) rejects at parse time with `ProofLengthMismatch`, not
+downstream as `PairingCheckFailed`.
+
+### Lib test totals at v0.9.6
+
+  mosaic-halo2            117  (+7 since v0.9.5)
+  total                   654  (+7 since v0.9.5)
+
+### What this milestone DOES change
+
+- Halo2 verifier accepts `n_lookups ≥ 2` proofs.
+- New `combined_expr_multi_lookup` function sums lookups with
+  distinct y-powers.
+- New `bundle.multi_lookups: Vec<MultiColumnLookupEvals>` field
+  carries every lookup.
+
+### What this milestone does NOT change
+
+- `n_lookups = 0` legacy implicit-single-lookup mode preserved
+  for backward compat with pre-session-107 scaffold fixtures.
+- Single-lookup arity-1 proofs (every Halo2 fixture in the
+  workspace) verify byte-equivalently via the legacy
+  `combined_expr` dispatch path.
+- Single-lookup arity ≥ 2 proofs (sessions 100-101) verify
+  byte-equivalently via the `combined_expr_multi_column` path.
+- Wire format header layout (FIXED_HEADER_LEN = 20 bytes,
+  unchanged since session 100).
+- m_eval ↔ lookup_commits[0] binding gap (session 102 documented):
+  scaffold tests at n_lookups ≥ 1 still surface as
+  `PairingCheckFailed` because there's no real m-poly commit.
+  Resolution requires fixture-driven differential testing with
+  a real prover.
+
+---
+
 ## 2026-04-30 — v0.9.5-halo2-vk-compressed release (session 106)
 
 | Field | Value |

@@ -188,8 +188,22 @@ impl<'a> Halo2KzgProof<'a> {
         // against). Real Halo2 provers always emit n_lookups ≥ 1;
         // the differential-testing campaign will pin this once
         // fixture-driven Phase-3 tests land.
-        if lookup_arity >= 2 && n_advice < 2 * lookup_arity {
-            return Err(OnChainError::ProofLengthMismatch);
+        // Session 100 constraint: arity ≥ 2 reserves the last 2k advice
+        // columns for the lookup (input cols + table cols).
+        // Session 107 generalization: n_lookups arguments, each
+        // claiming 2k advice columns, must collectively fit into
+        // `n_advice`. This is `n_advice ≥ 2 * arity * n_lookups`.
+        // For arity = 1 the lookup uses standalone (input, table, m)
+        // wire-style evals so no advice reservation applies — the
+        // constraint only kicks in for arity ≥ 2.
+        if lookup_arity >= 2 {
+            let reserved = (lookup_arity as u64)
+                .checked_mul(2)
+                .and_then(|v| v.checked_mul(n_lookups.max(1) as u64))
+                .ok_or(OnChainError::ProofLengthMismatch)?;
+            if (n_advice as u64) < reserved {
+                return Err(OnChainError::ProofLengthMismatch);
+            }
         }
 
         let advice_len = (n_advice as usize)

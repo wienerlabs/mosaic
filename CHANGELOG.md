@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.5-halo2-vk-compressed
+### Planned beyond v0.9.6-halo2-multi-lookup
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,152 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.6-halo2-multi-lookup] — 2026-04-30
+
+**Multiple lookup arguments per Halo2 proof.** Sessions 100-101 added
+multi-column lookup (single argument with arity ≥ 2 column pairs).
+Session 107 generalizes to multiple distinct lookup arguments
+(n_lookups ≥ 2), each with its own arity-k input/table column pair
++ multiplicity polynomial. Real Halo2 circuits typically declare
+2-5 lookup arguments (byte-range table, XOR table, MUL table, hash
+round-constants, …); session 107 makes them all verifiable.
+
+### Why this matters
+
+Real Halo2 toolchains (PSE halo2, halo2_proofs, axiom-halo2) emit
+proofs with multiple lookup arguments by default. A circuit with a
+byte-range lookup AND an XOR table is `n_lookups = 2`; adding a
+hash round-constants table makes it 3. Pre-session-107 the verifier
+hardcoded 1 implicit lookup. Session 107 lets the verifier accept
+proofs with arbitrary `n_lookups`.
+
+### Wire format
+
+The proof header field `n_lookups: u32` (already present since v0.1)
+is now the bundle-side eval-section count too:
+
+- `n_lookups = 0`: legacy implicit single-lookup mode for backward
+  compat with pre-session-107 scaffold fixtures. The bundle reads
+  1 lookup section but the multi-poly opening skips m-poly pairing
+  because the proof's commit section carries no m-commit.
+- `n_lookups ≥ 1`: explicit multi-lookup mode. Bundle reads
+  `n_lookups × (2k + 1)` lookup eval slots. Multi-poly opening
+  pairs each m-commit (in proof's commit section) with the
+  corresponding m-eval.
+
+`n_evals` constraint:
+
+```text
+n_evals == 13 + max(1, n_lookups) × (2 × lookup_arity + 1) + n_quotient
+```
+
+### Soundness — distinct y-powers
+
+The vanishing identity sums each lookup's contribution with a
+distinct y-power:
+
+```text
+gate(ξ)
+  + y · perm(ξ)
+  + y² · L₀(ξ)
+  + y³ · L₁(ξ)
+  + …
+  + y^(n+1) · L_{n-1}(ξ)
+  = t(ξ) · Z_H(ξ)
+```
+
+Distinct y-powers are critical for soundness. With the same y² weight
+on every lookup, an adversary could let `L₀ = -L₁` to satisfy the
+identity at one row without either lookup being individually valid.
+Distinct powers force every lookup to vanish independently
+(Schwartz-Zippel argument).
+
+### Added — session 107
+
+#### `circuit::combined_expr_multi_lookup` function
+Sums each lookup with `y^(j+2)` weighting. At `lookups.is_empty()`
+collapses to `gate + y · perm` (no-lookup case). At
+`lookups.len() == 1` produces the same scalar as
+`combined_expr_multi_column` (single-lookup multi-column path
+unchanged).
+
+#### `bundle::EvaluationBundle::multi_lookups: Vec<MultiColumnLookupEvals>`
+New field carrying every lookup's evals. Length = `effective_n_lookups`
+(`max(1, proof.n_lookups)`). Existing `lookup` and `multi_lookup`
+fields preserved for backwards compat with pre-session-107 callers.
+
+#### `bundle::idx::fixed_slots_for_lookups(arity, n_lookups)` helper
+Generalizes session-100's `fixed_slots_for_arity(arity)` to scale
+with the lookup count: `13 + n × (2k + 1)`.
+
+#### `n_advice ≥ 2 · arity · n_lookups` proof-parser constraint
+Session-101's "last 2k advice columns reserved for lookup" constraint
+now scales with the lookup count: each of the `n_lookups` arguments
+claims its own 2k advice columns. Insufficient `n_advice` rejects at
+proof parse time with `ProofLengthMismatch`.
+
+### Verifier dispatch order
+
+The verifier's vanishing-identity check now dispatches by precedence:
+
+1. `bundle.multi_lookups.len() ≥ 2` → `combined_expr_multi_lookup`
+   (session-107 multi-lookup path).
+2. `bundle.multi_lookup.is_some()` → `combined_expr_multi_column`
+   (session-100 single multi-column lookup path).
+3. Otherwise → `combined_expr` (legacy single-column path).
+
+Byte-equivalent for arity = 1 + n_lookups ≤ 1 (every existing
+fixture stays on path #3); session-100 multi-column proofs stay on
+path #2; new n_lookups ≥ 2 proofs hit path #1.
+
+### New tests at v0.9.6 (mosaic-halo2: 110 → 117)
+
+Multi-lookup end-to-end:
+- `n_lookups_2_arity_1_combined_expr_passes_then_pairing_fails` —
+  arity-1 × 2 lookups: combined identity passes, opening fails on
+  m_eval/commit mismatch (documented Phase-3 gap).
+- `n_lookups_3_arity_1_combined_expr_passes` — same pattern at
+  n_lookups=3, exercises y⁴ contribution.
+- `n_lookups_2_arity_2_multi_column_combined_expr_passes` —
+  2 multi-column lookups (arity=2 × n=2), n_advice=8 reserved.
+
+Tamper rejection (proves distinct y-powers detect tampering at any
+lookup index):
+- `n_lookups_2_rejects_tampered_first_lookup_m_eval` (lookup #0)
+- `n_lookups_2_rejects_tampered_second_lookup_m_eval` (lookup #1)
+- `n_lookups_3_rejects_tampered_third_lookup_m_eval` (lookup #2 at
+  y⁴ weight)
+
+Constraint validation:
+- `n_lookups_2_arity_2_rejects_insufficient_n_advice` —
+  n_advice=5 < 2·2·2=8 rejects at parse with `ProofLengthMismatch`.
+
+### Lib test totals at v0.9.6
+
+  mosaic-halo2            117  (+7 since v0.9.5)
+  total                   654  (+7 since v0.9.5)
+
+### Migration notes
+
+Public API additions (no breakage):
+- `mosaic_halo2::combined_expr_multi_lookup`
+- `mosaic_halo2::EvaluationBundle::multi_lookups: Vec<MultiColumnLookupEvals>`
+- `mosaic_halo2::bundle::idx::fixed_slots_for_lookups`
+
+Wire format:
+- `n_lookups = 0` retains its legacy implicit-1-section semantics
+  for pre-session-107 scaffold fixtures. Real provers always emit
+  `n_lookups ≥ 1`.
+- `n_lookups ≥ 2` is the new explicit multi-lookup mode.
+- The session-105 internal-consistency checks
+  (`n_advice ≥ 2·arity·n_lookups`, `n_evals ==
+  13 + max(1,n_lookups)·(2k+1) + n_quotient`) ensure malformed
+  multi-lookup headers reject at parse time.
+
+Existing single-lookup proofs (every Halo2 fixture in the workspace)
+verify byte-equivalently. New multi-lookup proofs land on the new
+dispatch path.
 
 ## [0.9.5-halo2-vk-compressed] — 2026-04-30
 

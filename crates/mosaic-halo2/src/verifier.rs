@@ -66,7 +66,7 @@ use crate::{
     bundle::{idx, EvaluationBundle},
     canonical::{Halo2KzgProof, Halo2KzgVerifyingKey},
     challenges::derive_challenges,
-    circuit::{combined_expr, combined_expr_multi_column},
+    circuit::{combined_expr, combined_expr_multi_column, combined_expr_multi_lookup},
     kzg::verify_two_point_opening_multipoly,
     vanishing::{compute_t_from_chunks, compute_z_h, vanishing_identity_holds},
 };
@@ -140,20 +140,43 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
 
         // 4. Vanishing-identity check at ξ.
         //    LHS: t(ξ) · Z_H(ξ) where t(ξ) comes from quotient chunks.
-        //    RHS: gate_expr + y·perm_expr + y²·lookup_expr.
+        //    RHS: gate_expr + y·perm_expr + Σⱼ y^(j+2)·lookup_j_expr.
         //
-        //    **Session 100** — dispatch on the proof's `lookup_arity`:
-        //    - arity = 1 (legacy): single-column `lookup_expr` via
-        //      `combined_expr` with `bundle.lookup`.
-        //    - arity ≥ 2 (multi-column): θ-combined log-derivative
-        //      via `combined_expr_multi_column` with
-        //      `bundle.multi_lookup`. The multi-column primitive
-        //      (sessions 88-89) is now wired into the actual
-        //      verifier path, not just isolated as an audit gate.
+        //    **Sessions 100, 107** — dispatch progression:
+        //
+        //    - Session 100 (arity dispatch): for `lookup_arity = 1` use
+        //      single-column `combined_expr`; for `lookup_arity ≥ 2`
+        //      use `combined_expr_multi_column` (single lookup).
+        //    - Session 107 (multi-lookup): when `bundle.multi_lookups.len() ≥ 2`
+        //      use `combined_expr_multi_lookup` which sums each
+        //      lookup with a distinct y-power for soundness.
+        //
+        //    The arity-1 single-lookup path stays on `combined_expr`
+        //    for byte-equivalence with pre-session-107 fixtures
+        //    (legacy m=1 trick relies on the exact `combined_expr`
+        //    arithmetic). Arity ≥ 2 with single lookup uses
+        //    `combined_expr_multi_column`. n_lookups ≥ 2 (session 107
+        //    new path) uses `combined_expr_multi_lookup`.
         let t_xi = compute_t_from_chunks(&bundle.quotient_chunks, &challenges.xi, vk.k)?;
         let z_h_xi = compute_z_h(&challenges.xi, vk.k)?;
-        let combined = match &bundle.multi_lookup {
-            Some(multi) => combined_expr_multi_column(
+        let combined = if bundle.multi_lookups.len() >= 2 {
+            // Session 107 — explicit multi-lookup path. Sums every
+            // lookup with distinct y-powers (y², y³, …) into the
+            // combined identity.
+            combined_expr_multi_lookup(
+                &bundle.wires,
+                &bundle.selectors,
+                &bundle.permutation,
+                &bundle.multi_lookups,
+                &challenges.theta,
+                &challenges.beta,
+                &challenges.gamma,
+                &challenges.y,
+                &challenges.xi,
+            )?
+        } else if let Some(multi) = &bundle.multi_lookup {
+            // Session 100 — arity ≥ 2, single lookup.
+            combined_expr_multi_column(
                 &bundle.wires,
                 &bundle.selectors,
                 &bundle.permutation,
@@ -163,8 +186,10 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
                 &challenges.gamma,
                 &challenges.y,
                 &challenges.xi,
-            )?,
-            None => combined_expr(
+            )?
+        } else {
+            // Legacy single-column path (arity = 1).
+            combined_expr(
                 &bundle.wires,
                 &bundle.selectors,
                 &bundle.permutation,
@@ -174,7 +199,7 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
                 &challenges.gamma,
                 &challenges.y,
                 &challenges.xi,
-            )?,
+            )?
         };
         // Split gate / perm / lookup back out for identity check: we
         // passed them through `combined_expr` already, which computes
@@ -528,12 +553,19 @@ mod tests {
     /// proof. The vanishing identity still reads `LOOKUP_M = 1` from
     /// the evaluation bundle (lookup_expr → 0 with m=1 & input=table=0),
     /// so gate+perm+lookup combined_expr stays at 0 on the RHS.
+    ///
+    /// Session 107: bundle parser treats `n_lookups = 0` as the
+    /// **legacy implicit single-lookup mode** for backward compat —
+    /// the 3 lookup eval slots are read but no m-poly commit is
+    /// expected in the opening (because n_lookups = 0 in the commit
+    /// section). For explicit multi-lookup proofs, set
+    /// `n_lookups ≥ 1` and match the eval section size.
     fn dummy_proof_bytes_typical() -> alloc::vec::Vec<u8> {
         use mosaic_zk_primitives::field::fr_to_canonical_bytes;
         let n_advice: u32 = 5;
         let n_lookups: u32 = 0;
         let n_quotient: u32 = 3;
-        let n_evals: u32 = 19; // 16 + 3
+        let n_evals: u32 = 19; // 13 + 1 implicit lookup section (3) + 3
         let total = FIXED_HEADER_LEN
             + (n_advice as usize) * G1_LEN
             + (n_lookups as usize) * G1_LEN
@@ -1004,10 +1036,11 @@ mod tests {
         // Session 101: n_advice must satisfy `n_advice ≥ 2*arity`
         // because the LAST 2*arity advice columns are reserved for the
         // multi-column lookup's input and table columns.
-        // Session 102: m_eval binding via lookup_commits[0] is a
-        // documented Phase-3 gap (see canonical.rs); scaffold tests
-        // use n_lookups=0 because we don't have a real m commit to
-        // open against. Real Halo2 provers always emit n_lookups ≥ 1.
+        // Session 107: keep `n_lookups = 0` (legacy implicit single-
+        // lookup mode) — bundle parser reads 1 lookup section, the
+        // KZG opening skips m-poly pairing because the commit section
+        // is empty. The session-102 m_eval ↔ commit binding gap stays
+        // documented; multi-lookup-explicit tests set n_lookups ≥ 1.
         let n_advice: u32 = core::cmp::max(5, 2 * arity);
         let n_lookups: u32 = 0;
         let n_quotient: u32 = 3;
@@ -1238,6 +1271,286 @@ mod tests {
         assert!(
             matches!(r, Err(OnChainError::ProofLengthMismatch)),
             "arity-3 declared with arity-2 n_evals should reject as ProofLengthMismatch; got {r:?}",
+        );
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 107 — multi-lookup (n_lookups ≥ 2) end-to-end tests.
+    //
+    // Build proofs that explicitly declare n_lookups ≥ 2 and carry
+    // matching eval sections. The verifier dispatches to
+    // `combined_expr_multi_lookup` which sums each lookup with a
+    // distinct y-power for soundness.
+    //
+    // Constraints exercised:
+    //   - n_advice ≥ 2·arity·n_lookups (session 107 generalization
+    //     of the session-101 arity constraint).
+    //   - bundle parser reads exactly `13 + n_lookups·(2k+1) + n_quotient`
+    //     eval slots.
+    //   - Each lookup's per-row identity must vanish (m=1, input=table=0)
+    //     for the satisfying baseline; tampering any lookup's m_eval
+    //     breaks the combined identity → SumcheckFailed.
+    //
+    // Phase-3 caveat: KZG opening for explicit n_lookups ≥ 2 requires
+    // `n_lookups` real m-poly commits; scaffold builds zero commits +
+    // m_eval = 1, so the multi-poly batched opening's lookup-side
+    // pairing fails. We therefore assert on the rejection error
+    // type (PairingCheckFailed) for the success-pattern case below.
+    // The combined_expr arithmetic is exercised either way and
+    // proptest coverage in `circuit::tests::proptest_*` pins the
+    // soundness contract algebraically.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Build a proof with explicit `n_lookups` lookup arguments at
+    /// `lookup_arity`. Each lookup section is set to the satisfying
+    /// pattern: input_cols = table_cols = zeros, m_eval = 1, so each
+    /// lookup_expr vanishes individually and the combined sum
+    /// vanishes too.
+    fn dummy_n_lookups_proof_bytes(arity: u32, n_lookups: u32) -> alloc::vec::Vec<u8> {
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+        // n_advice ≥ 2·arity·n_lookups (session 107 constraint).
+        let min_advice = 2 * arity * n_lookups.max(1);
+        let n_advice = core::cmp::max(5, min_advice);
+        let n_quotient: u32 = 3;
+        // Each section: 2k + 1 slots; n_lookups sections + 13 fixed +
+        // n_quotient.
+        let lookup_section = 2 * arity + 1;
+        let n_evals: u32 = 13 + n_lookups * lookup_section + n_quotient;
+
+        let total = FIXED_HEADER_LEN
+            + (n_advice as usize) * G1_LEN
+            + (n_lookups as usize) * G1_LEN
+            + G1_LEN // permutation_z
+            + (n_quotient as usize) * G1_LEN
+            + (n_evals as usize) * FR_LEN
+            + 2 * G1_LEN;
+        let mut buf = alloc::vec![0u8; total];
+        buf[0..4].copy_from_slice(&n_advice.to_le_bytes());
+        buf[4..8].copy_from_slice(&n_lookups.to_le_bytes());
+        buf[8..12].copy_from_slice(&n_quotient.to_le_bytes());
+        buf[12..16].copy_from_slice(&n_evals.to_le_bytes());
+        buf[16..20].copy_from_slice(&arity.to_le_bytes());
+
+        // Eval section base offset.
+        let evals_off = FIXED_HEADER_LEN
+            + (n_advice as usize) * G1_LEN
+            + (n_lookups as usize) * G1_LEN
+            + G1_LEN
+            + (n_quotient as usize) * G1_LEN;
+        // Set each lookup's m_eval to 1 (last slot of each section
+        // at offset 13 + j·(2k+1) + 2k from eval start).
+        let one_bytes = fr_to_canonical_bytes(&Fr::from(1u64));
+        for j in 0..(n_lookups as usize) {
+            let m_slot_idx = 13 + j * (2 * arity as usize + 1) + 2 * arity as usize;
+            let m_off = evals_off + m_slot_idx * FR_LEN;
+            buf[m_off..m_off + FR_LEN].copy_from_slice(&one_bytes);
+        }
+        buf
+    }
+
+    /// Tamper a specific lookup's m_eval value. Used to verify the
+    /// distinct-y-power summation in `combined_expr_multi_lookup`
+    /// catches tampering at any lookup index, not just the first.
+    fn tamper_n_lookups_proof_m_eval(
+        proof: &mut [u8],
+        arity: u32,
+        n_lookups: u32,
+        lookup_idx: usize,
+        new_m_value: u64,
+    ) {
+        use mosaic_zk_primitives::field::fr_to_canonical_bytes;
+        let n_advice = core::cmp::max(5, 2 * arity * n_lookups.max(1));
+        let n_quotient: u32 = 3;
+        let evals_off = FIXED_HEADER_LEN
+            + (n_advice as usize) * G1_LEN
+            + (n_lookups as usize) * G1_LEN
+            + G1_LEN
+            + (n_quotient as usize) * G1_LEN;
+        let m_slot_idx =
+            13 + lookup_idx * (2 * arity as usize + 1) + 2 * arity as usize;
+        let m_off = evals_off + m_slot_idx * FR_LEN;
+        let new_bytes = fr_to_canonical_bytes(&Fr::from(new_m_value));
+        proof[m_off..m_off + FR_LEN].copy_from_slice(&new_bytes);
+    }
+
+    /// `n_lookups = 2` with arity = 1: bundle carries 2 single-column
+    /// lookup sections. With each m=1 and zeros elsewhere, every
+    /// lookup_expr vanishes individually, so the y²·L₀ + y³·L₁ sum
+    /// stays zero. Combined identity holds.
+    ///
+    /// We can't assert Ok(()) end-to-end because the KZG opening
+    /// expects n_lookups m-commits to pair against the m_evals;
+    /// scaffold has zero commits but m_eval=1, so the multi-poly
+    /// batched opening fails. Assert PairingCheckFailed (not
+    /// SumcheckFailed) — proves the sumcheck identity passes (the
+    /// session-107 multi-lookup combiner works algebraically) and
+    /// the failure is downstream at the opening.
+    #[test]
+    fn n_lookups_2_arity_1_combined_expr_passes_then_pairing_fails() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes_with_n_advice(5);
+        let proof = dummy_n_lookups_proof_bytes(1, 2);
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        // Expected: combined_expr_multi_lookup returns 0 (sumcheck
+        // passes), but multi-poly opening fails because the 2 lookup
+        // commits are zero while the m_evals are 1 — opening check
+        // surfaces as PairingCheckFailed.
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "n_lookups=2 arity=1 should pass sumcheck and fail at \
+             multi-poly opening (m_eval=1 vs zero commit); got {r:?}",
+        );
+    }
+
+    /// Tampering m_eval of lookup #1 (the SECOND lookup) breaks the
+    /// y³·L₁ contribution to the combined identity. The combined
+    /// expression no longer vanishes → SumcheckFailed at the
+    /// vanishing-identity check (before the opening).
+    ///
+    /// This proves the session-107 multi-lookup combiner uses
+    /// distinct y-powers correctly: tampering lookup #1 wouldn't
+    /// surface if both lookups shared the same y² weight (could be
+    /// compensated by lookup #0).
+    #[test]
+    fn n_lookups_2_rejects_tampered_second_lookup_m_eval() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes_with_n_advice(5);
+        let mut proof = dummy_n_lookups_proof_bytes(1, 2);
+        // Tamper lookup #1's m_eval from 1 to 5. Each lookup's
+        // identity is m·(table+θ)⁻¹ - (input+θ)⁻¹; with input=table=0,
+        // lookup_1_expr = 5/θ - 1/θ = 4/θ ≠ 0.
+        tamper_n_lookups_proof_m_eval(&mut proof, 1, 2, 1, 5);
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "tampered lookup #1 m_eval breaks combined identity; got {r:?}",
+        );
+    }
+
+    /// Same test pattern but tampering m_eval of lookup #0 (the FIRST
+    /// lookup) — also breaks identity. Pins symmetry: distinct
+    /// y-powers detect tampering at any lookup index.
+    #[test]
+    fn n_lookups_2_rejects_tampered_first_lookup_m_eval() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes_with_n_advice(5);
+        let mut proof = dummy_n_lookups_proof_bytes(1, 2);
+        tamper_n_lookups_proof_m_eval(&mut proof, 1, 2, 0, 7);
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "tampered lookup #0 m_eval breaks combined identity; got {r:?}",
+        );
+    }
+
+    /// `n_lookups = 3` stress test: bundle carries 3 lookup sections
+    /// at arity = 1 (9 lookup eval slots). Same satisfying pattern
+    /// (each m=1, zeros elsewhere). Tests the y⁴·L₂ contribution is
+    /// included in the combined sum.
+    #[test]
+    fn n_lookups_3_arity_1_combined_expr_passes() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        // n_lookups=3 + arity=1 → fixture computes min_advice = 2·1·3 = 6.
+        // VK must declare matching n_advice to pass the
+        // VerifyingKeyProofMismatch check.
+        let vk = dummy_vk_bytes_with_n_advice(6);
+        let proof = dummy_n_lookups_proof_bytes(1, 3);
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        // Same as n_lookups=2 case — sumcheck passes, opening fails.
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "n_lookups=3 arity=1 should pass sumcheck and fail at \
+             multi-poly opening; got {r:?}",
+        );
+    }
+
+    /// Tampering lookup #2 (the THIRD lookup) at n_lookups=3 with
+    /// distinct y-powers (y², y³, y⁴) — proves the y⁴ weighting
+    /// makes the third lookup's tamper observable in the combined
+    /// sum.
+    #[test]
+    fn n_lookups_3_rejects_tampered_third_lookup_m_eval() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes_with_n_advice(6);
+        let mut proof = dummy_n_lookups_proof_bytes(1, 3);
+        tamper_n_lookups_proof_m_eval(&mut proof, 1, 3, 2, 9);
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::SumcheckFailed)),
+            "tampered lookup #2 m_eval at n_lookups=3 should reject; got {r:?}",
+        );
+    }
+
+    /// `n_lookups = 2` with `arity = 2`: bundle carries 2 multi-column
+    /// lookup sections, each with 2 input + 2 table + 1 m = 5 slots.
+    /// Total lookup eval section = 10 slots. `combined_expr_multi_lookup`
+    /// must dispatch to `multi_column_lookup_expr` for each lookup
+    /// (arity ≥ 2).
+    ///
+    /// Constraint: n_advice ≥ 2·arity·n_lookups = 2·2·2 = 8.
+    #[test]
+    fn n_lookups_2_arity_2_multi_column_combined_expr_passes() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        // Need n_advice ≥ 8 for arity=2, n_lookups=2.
+        let vk = dummy_vk_bytes_with_n_advice(8);
+        let proof = dummy_n_lookups_proof_bytes(2, 2);
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &proof, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::PairingCheckFailed)),
+            "n_lookups=2 arity=2 (multi-column × multi-lookup) sumcheck \
+             should pass; opening fails on m_eval/commit mismatch; got {r:?}",
+        );
+    }
+
+    /// Insufficient n_advice for n_lookups·arity reservation must
+    /// reject at proof parse time. n_advice=5, arity=2, n_lookups=2 →
+    /// reserved = 2·2·2 = 8 > 5 → ProofLengthMismatch.
+    #[test]
+    fn n_lookups_2_arity_2_rejects_insufficient_n_advice() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = Halo2KzgBn254::new(&backend);
+        let vk = dummy_vk_bytes_with_n_advice(5); // < 8
+        // Forge a proof header that DECLARES n_advice=5 (insufficient)
+        // but builds the buffer assuming reserved=2·2·2=8 won't fit.
+        // We construct it manually so the proof length is consistent
+        // with n_advice=5 — the rejection should come from the
+        // n_advice<reserved check, not a length check.
+        let arity: u32 = 2;
+        let n_lookups: u32 = 2;
+        let n_advice: u32 = 5;
+        let n_quotient: u32 = 3;
+        let lookup_section = 2 * arity + 1;
+        let n_evals = 13 + n_lookups * lookup_section + n_quotient;
+        let total = FIXED_HEADER_LEN
+            + (n_advice as usize) * G1_LEN
+            + (n_lookups as usize) * G1_LEN
+            + G1_LEN
+            + (n_quotient as usize) * G1_LEN
+            + (n_evals as usize) * FR_LEN
+            + 2 * G1_LEN;
+        let mut buf = alloc::vec![0u8; total];
+        buf[0..4].copy_from_slice(&n_advice.to_le_bytes());
+        buf[4..8].copy_from_slice(&n_lookups.to_le_bytes());
+        buf[8..12].copy_from_slice(&n_quotient.to_le_bytes());
+        buf[12..16].copy_from_slice(&n_evals.to_le_bytes());
+        buf[16..20].copy_from_slice(&arity.to_le_bytes());
+        let pi = [0u8; FR_LEN];
+        let r = Halo2KzgBn254::verify(&v, &vk, &buf, &pi);
+        assert!(
+            matches!(r, Err(OnChainError::ProofLengthMismatch)),
+            "n_advice=5 < 2·2·2=8 must reject at proof parse; got {r:?}",
         );
     }
 }
