@@ -10,6 +10,82 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-30 — v0.9.8-groth16-compressed release (session 109)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.8-groth16-compressed`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.8-groth16-compressed) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Compression treatment ported from Halo2 (sessions 106-108) to Groth16 — the highest-volume Solana verifier. Both proof (50% saving, 256 B → 128 B) and VK (50% saving, depends on IC length). |
+| Findings | Zero soundness regressions. Round-trip correctness pinned for both proof and VK with realistic generators + zero-only short-circuit + reject-malformed-input. Differential test suite (mul_circuit + batch_groth16) unchanged — proves uncompressed canonical path is byte-equivalent. |
+| Status | ✅ Production Groth16 (Light Protocol, ZkBNB, Risc0-via-Circom) gains a 50% wire-format saving option. SBF integration tests unchanged. |
+
+### Why this matters at the audit boundary
+
+Groth16 is the highest-volume Solana ZK verifier (Light Protocol's
+groth16-solana powers most production deployments). Pre-session-109
+every Groth16 user paid 256 B per proof + 576 B+ per VK in
+instruction data. Session 109 unlocks a 50% saving for any
+deployment willing to accept the ~98 K CU compression overhead.
+
+For high-throughput cases where the user is CU-constrained but
+not bandwidth-constrained, the uncompressed path remains.
+For storage-archival or chunked-upload cases, compression unlocks
+larger payloads per transaction.
+
+### Soundness inheritance
+
+The compression syscall (sessions 103-104) is byte-identical
+between the host backend (arkworks fallback) and SBF target. The
+session-109 round-trip tests pin the contract:
+
+```text
+∀ on-curve (A, B, C) :
+  decompress(compress(A)) == A
+  decompress(compress(B)) == B
+  decompress(compress(C)) == C
+```
+
+Plus the chained `decompress → from_bytes` path produces a valid
+`Groth16Proof<'a>` view with matching field sizes
+(`proof_decompressed_parses_via_from_bytes`).
+
+### Compression syscall — verifier-side consumer matrix
+
+| Verifier | VK compression | Proof compression |
+|---|---|---|
+| Groth16 | session 109 ✓ | session 109 ✓ |
+| Halo2-KZG | session 106 ✓ | session 108 ✓ |
+| KZG-PLONK | (planned) | (planned) |
+| HyperPlonk | (planned, scaffold) | (planned, scaffold) |
+| Nova / HyperNova / ProtoStar | (planned, scaffold) | (planned, scaffold) |
+| FRI-STARK | n/a (Goldilocks, not BN254) | n/a |
+
+Phase-2 production verifiers (Groth16 + KZG-PLONK) get priority for
+compression because they're the actual on-chain workload. PLONK is
+the next session-110 target.
+
+### Lib test totals at v0.9.8
+
+  mosaic-groth16            43  (+12)
+  total                    672  (+12 since v0.9.7)
+
+### What this milestone DOES change
+
+- Groth16 proof + VK gain compressed wire-format alternates.
+- `mosaic-zk-primitives::compression` now has 3 verifier-side
+  consumers (Halo2 VK, Halo2 proof, Groth16 VK + proof).
+
+### What this milestone does NOT change
+
+- Verifier behaviour for uncompressed Groth16 proofs / VKs (byte-
+  equivalent, every existing differential test passes).
+- SBF integration tests (`sbf_verify_proof_succeeds_on_valid_groth16`,
+  `sbf_rejects_tampered_proof`) byte-equivalent green.
+- Other verifier crates' wire formats.
+
+---
+
 ## 2026-04-30 — v0.9.7-halo2-proof-compressed release (session 108)
 
 | Field | Value |

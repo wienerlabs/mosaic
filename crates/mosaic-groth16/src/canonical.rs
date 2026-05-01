@@ -26,7 +26,7 @@
 
 use crate::sizes::{G1_LEN, G2_LEN, PROOF_LEN};
 use alloc::vec::Vec;
-use mosaic_core::OnChainError;
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 
 /// Canonical-format Groth16 proof: zero-copy view into a 256-byte buffer.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -49,6 +49,103 @@ impl<'a> Groth16Proof<'a> {
         let (b, c) = rest.split_at(G2_LEN);
         debug_assert_eq!(c.len(), G1_LEN);
         Ok(Self { a, b, c })
+    }
+}
+
+/// **Session 109** — Groth16 proof compression utilities.
+///
+/// Layout (compressed):
+///
+/// ```text
+/// | offset | size | field      |
+/// |---|---|---|
+/// |  0..32 | A compressed (G1) |
+/// | 32..96 | B compressed (G2) |
+/// | 96..128| C compressed (G1) |
+/// ```
+///
+/// Compressed proof is **128 bytes** vs 256 bytes uncompressed —
+/// exactly 50 % saving. With three of the highest-volume Solana
+/// proof systems being Groth16 (Light Protocol, ZkBNB, Risc0
+/// receipts wrapped in Circom), this saving aggregates meaningfully
+/// at network scale.
+///
+/// CU cost per `decompress_to_canonical_bytes` call: ~32 K CU
+/// (2 G1 decompress + 1 G2 decompress, each ~10-12 K CU).
+impl Groth16Proof<'_> {
+    /// Compressed Groth16 proof length.
+    pub const COMPRESSED_LEN: usize = 32 + 64 + 32;
+
+    /// Decompress a compressed-format Groth16 proof into the
+    /// canonical 256-byte uncompressed wire format.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — input is not
+    ///   exactly `COMPRESSED_LEN` (128) bytes.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   compressed point fails decompression (off-curve x, etc.).
+    pub fn decompress_to_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        compressed: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        if compressed.len() != Self::COMPRESSED_LEN {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        // Split: A (32) ‖ B (64) ‖ C (32).
+        let mut a_arr = [0u8; 32];
+        a_arr.copy_from_slice(&compressed[0..32]);
+        let mut b_arr = [0u8; 64];
+        b_arr.copy_from_slice(&compressed[32..96]);
+        let mut c_arr = [0u8; 32];
+        c_arr.copy_from_slice(&compressed[96..128]);
+
+        let a_full = mosaic_zk_primitives::compression::decompress_g1(backend, &a_arr)?;
+        let b_full = mosaic_zk_primitives::compression::decompress_g2(backend, &b_arr)?;
+        let c_full = mosaic_zk_primitives::compression::decompress_g1(backend, &c_arr)?;
+
+        let mut out = Vec::with_capacity(PROOF_LEN);
+        out.extend_from_slice(&a_full);
+        out.extend_from_slice(&b_full);
+        out.extend_from_slice(&c_full);
+        debug_assert_eq!(out.len(), PROOF_LEN);
+        Ok(out)
+    }
+
+    /// Compress canonical Groth16 proof bytes (256 B) into the
+    /// compressed wire format (128 B).
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — input is not
+    ///   exactly `PROOF_LEN` (256) bytes.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   point fails to compress.
+    pub fn compress_from_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        if canonical.len() != PROOF_LEN {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        // Split: A (64) ‖ B (128) ‖ C (64).
+        let mut a_arr = [0u8; 64];
+        a_arr.copy_from_slice(&canonical[0..64]);
+        let mut b_arr = [0u8; 128];
+        b_arr.copy_from_slice(&canonical[64..192]);
+        let mut c_arr = [0u8; 64];
+        c_arr.copy_from_slice(&canonical[192..256]);
+
+        let a_c = mosaic_zk_primitives::compression::compress_g1(backend, &a_arr)?;
+        let b_c = mosaic_zk_primitives::compression::compress_g2(backend, &b_arr)?;
+        let c_c = mosaic_zk_primitives::compression::compress_g1(backend, &c_arr)?;
+
+        let mut out = Vec::with_capacity(Self::COMPRESSED_LEN);
+        out.extend_from_slice(&a_c);
+        out.extend_from_slice(&b_c);
+        out.extend_from_slice(&c_c);
+        debug_assert_eq!(out.len(), Self::COMPRESSED_LEN);
+        Ok(out)
     }
 }
 
@@ -138,6 +235,134 @@ impl Groth16VerifyingKey {
             out.extend_from_slice(ic);
         }
         out
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 109 — Groth16 compressed VK support.
+    //
+    // VK shape (uncompressed): 64 (α) + 128 × 3 (β,γ,δ) + 64 × ic.len()
+    // VK shape (compressed):   32     + 64  × 3       + 32 × ic.len()
+    //
+    // For ic.len() = 2 (1 public input):
+    //   Uncompressed: 576 B
+    //   Compressed:   288 B  (-50%)
+    //
+    // For ic.len() = 6 (5 public inputs — typical Circom):
+    //   Uncompressed: 832 B
+    //   Compressed:   416 B  (-50%)
+    //
+    // CU cost per from_compressed_bytes: ~10 K (α G1) + 3 × ~12 K (β,γ,δ G2)
+    //   + ic.len() × ~10 K = ~46 K + ic.len()·10 K. For ic.len() = 2: ~66 K CU.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Compressed-form VK byte length for a given `ic_len`.
+    ///
+    /// `32 (α compressed) + 64 × 3 (β,γ,δ compressed) + 32 × ic_len`
+    #[must_use]
+    pub fn compressed_serialized_len(&self) -> usize {
+        32 + 64 * 3 + 32 * self.ic.len()
+    }
+
+    /// Decode a compressed-format Groth16 VK byte buffer into the
+    /// in-memory uncompressed `Groth16VerifyingKey` struct.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::VerifyingKeyLengthMismatch`] — input is
+    ///   shorter than the fixed compressed header (32 + 64·3 = 224 B)
+    ///   or the IC tail is not a multiple of 32 bytes.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   compressed point fails decompression.
+    pub fn from_compressed_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        bytes: &[u8],
+    ) -> Result<Self, OnChainError> {
+        const G1_C: usize = 32;
+        const G2_C: usize = 64;
+        let header = G1_C + G2_C * 3;
+        if bytes.len() < header {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+        let (alpha_c, rest) = bytes.split_at(G1_C);
+        let (beta_c, rest) = rest.split_at(G2_C);
+        let (gamma_c, rest) = rest.split_at(G2_C);
+        let (delta_c, ic_bytes) = rest.split_at(G2_C);
+
+        if ic_bytes.is_empty() || ic_bytes.len() % G1_C != 0 {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
+        let mut alpha_arr = [0u8; G1_C];
+        alpha_arr.copy_from_slice(alpha_c);
+        let alpha_g1 =
+            mosaic_zk_primitives::compression::decompress_g1(backend, &alpha_arr)?;
+
+        let mut beta_arr = [0u8; G2_C];
+        beta_arr.copy_from_slice(beta_c);
+        let beta_g2 =
+            mosaic_zk_primitives::compression::decompress_g2(backend, &beta_arr)?;
+
+        let mut gamma_arr = [0u8; G2_C];
+        gamma_arr.copy_from_slice(gamma_c);
+        let gamma_g2 =
+            mosaic_zk_primitives::compression::decompress_g2(backend, &gamma_arr)?;
+
+        let mut delta_arr = [0u8; G2_C];
+        delta_arr.copy_from_slice(delta_c);
+        let delta_g2 =
+            mosaic_zk_primitives::compression::decompress_g2(backend, &delta_arr)?;
+
+        let ic_count = ic_bytes.len() / G1_C;
+        let mut ic = Vec::with_capacity(ic_count);
+        for chunk in ic_bytes.chunks_exact(G1_C) {
+            let mut ic_arr = [0u8; G1_C];
+            ic_arr.copy_from_slice(chunk);
+            let full =
+                mosaic_zk_primitives::compression::decompress_g1(backend, &ic_arr)?;
+            ic.push(full);
+        }
+
+        Ok(Self {
+            alpha_g1,
+            beta_g2,
+            gamma_g2,
+            delta_g2,
+            ic,
+        })
+    }
+
+    /// Encode this VK in compressed form (companion to
+    /// [`from_compressed_bytes`]). The IC vector is iterated and
+    /// each element compressed; α is compressed; β/γ/δ are compressed.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   point fails to compress (off-curve, etc.).
+    pub fn to_compressed_bytes<B: SyscallBackend + ?Sized>(
+        &self,
+        backend: &B,
+    ) -> Result<Vec<u8>, OnChainError> {
+        let alpha_c =
+            mosaic_zk_primitives::compression::compress_g1(backend, &self.alpha_g1)?;
+        let beta_c =
+            mosaic_zk_primitives::compression::compress_g2(backend, &self.beta_g2)?;
+        let gamma_c =
+            mosaic_zk_primitives::compression::compress_g2(backend, &self.gamma_g2)?;
+        let delta_c =
+            mosaic_zk_primitives::compression::compress_g2(backend, &self.delta_g2)?;
+
+        let mut out = Vec::with_capacity(self.compressed_serialized_len());
+        out.extend_from_slice(&alpha_c);
+        out.extend_from_slice(&beta_c);
+        out.extend_from_slice(&gamma_c);
+        out.extend_from_slice(&delta_c);
+        for ic in &self.ic {
+            let ic_c =
+                mosaic_zk_primitives::compression::compress_g1(backend, ic)?;
+            out.extend_from_slice(&ic_c);
+        }
+        Ok(out)
     }
 }
 
@@ -412,6 +637,192 @@ mod tests {
             b[differ_at] = b_byte;
             prop_assert!(lt_be(&a, &b));
             prop_assert!(!lt_be(&b, &a));
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 109 — Groth16 compressed proof + VK round-trip tests.
+    //
+    // Same pattern as session 106-108 Halo2 compression tests:
+    // round-trip + bandwidth-saving + reject-malformed-input.
+    //
+    // Groth16 proof shape: A (G1) ‖ B (G2) ‖ C (G1) — uncompressed
+    // 256 B, compressed 128 B (50 % saving). VK shape: α (G1) +
+    // β/γ/δ (G2) + IC vector (G1) — compressed VK halves to ~50 %.
+    // ───────────────────────────────────────────────────────────────────
+    #[cfg(feature = "host-backend")]
+    mod compression {
+        use super::*;
+        use mosaic_core::syscall::host::HostBackend;
+
+        fn realistic_proof() -> Vec<u8> {
+            // Use the BN254 G1 + G2 generators for A, B, C. Both are
+            // on-curve, both are non-zero — exercising the actual
+            // compression arithmetic instead of zero short-circuits.
+            let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+            let g2_gen = mosaic_zk_primitives::g1_consts::g2_generator_bytes();
+            let mut buf = Vec::with_capacity(PROOF_LEN);
+            buf.extend_from_slice(&g1_gen);
+            buf.extend_from_slice(&g2_gen);
+            buf.extend_from_slice(&g1_gen);
+            buf
+        }
+
+        fn realistic_vk() -> Groth16VerifyingKey {
+            let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+            let g2_gen = mosaic_zk_primitives::g1_consts::g2_generator_bytes();
+            Groth16VerifyingKey {
+                alpha_g1: g1_gen,
+                beta_g2: g2_gen,
+                gamma_g2: g2_gen,
+                delta_g2: g2_gen,
+                ic: vec![g1_gen, g1_gen, g1_gen], // 1 const term + 2 PI commits
+            }
+        }
+
+        // ── Proof tests ─────────────────────────────────────────────
+
+        #[test]
+        fn proof_round_trip_with_real_generators() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof();
+            let compressed =
+                Groth16Proof::compress_from_canonical_bytes(&backend, &canonical)
+                    .expect("compress");
+            assert_eq!(compressed.len(), Groth16Proof::COMPRESSED_LEN);
+            let decoded =
+                Groth16Proof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .expect("decompress");
+            assert_eq!(decoded, canonical, "round-trip must be byte-identical");
+        }
+
+        #[test]
+        fn proof_compressed_size_is_exactly_half() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof();
+            let compressed =
+                Groth16Proof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            assert_eq!(canonical.len(), 256);
+            assert_eq!(compressed.len(), 128);
+        }
+
+        #[test]
+        fn proof_zero_only_round_trips() {
+            let backend = HostBackend::new();
+            let canonical = vec![0u8; PROOF_LEN];
+            let compressed =
+                Groth16Proof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            assert_eq!(compressed, vec![0u8; Groth16Proof::COMPRESSED_LEN]);
+            let decoded =
+                Groth16Proof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_compress_rejects_wrong_canonical_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; PROOF_LEN - 1];
+            let r = Groth16Proof::compress_from_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_decompress_rejects_wrong_compressed_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; Groth16Proof::COMPRESSED_LEN - 1];
+            let r = Groth16Proof::decompress_to_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_decompressed_parses_via_from_bytes() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof();
+            let compressed =
+                Groth16Proof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            let decoded =
+                Groth16Proof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+            let proof = Groth16Proof::from_bytes(&decoded).expect("from_bytes parse");
+            assert_eq!(proof.a.len(), G1_LEN);
+            assert_eq!(proof.b.len(), G2_LEN);
+            assert_eq!(proof.c.len(), G1_LEN);
+        }
+
+        // ── VK tests ───────────────────────────────────────────────
+
+        #[test]
+        fn vk_round_trip_with_real_generators() {
+            let backend = HostBackend::new();
+            let vk = realistic_vk();
+            let compressed = vk.to_compressed_bytes(&backend).expect("compress");
+            assert_eq!(compressed.len(), vk.compressed_serialized_len());
+            let decoded =
+                Groth16VerifyingKey::from_compressed_bytes(&backend, &compressed)
+                    .expect("decompress");
+            assert_eq!(vk, decoded, "VK round-trip must be byte-identical");
+        }
+
+        #[test]
+        fn vk_compressed_size_is_exactly_half() {
+            let backend = HostBackend::new();
+            let vk = realistic_vk();
+            let uncompressed = vk.to_bytes();
+            let compressed = vk.to_compressed_bytes(&backend).unwrap();
+            // ic.len() = 3 → uncompressed = 64 + 384 + 192 = 640 B,
+            //                compressed   = 32 + 192 + 96  = 320 B.
+            assert_eq!(uncompressed.len(), 640);
+            assert_eq!(compressed.len(), 320);
+            assert_eq!(compressed.len() * 2, uncompressed.len());
+        }
+
+        #[test]
+        fn vk_zero_only_round_trips() {
+            let backend = HostBackend::new();
+            let vk = Groth16VerifyingKey {
+                alpha_g1: [0u8; G1_LEN],
+                beta_g2: [0u8; G2_LEN],
+                gamma_g2: [0u8; G2_LEN],
+                delta_g2: [0u8; G2_LEN],
+                ic: vec![[0u8; G1_LEN], [0u8; G1_LEN]],
+            };
+            let compressed = vk.to_compressed_bytes(&backend).unwrap();
+            let decoded =
+                Groth16VerifyingKey::from_compressed_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(vk, decoded);
+        }
+
+        #[test]
+        fn vk_decompress_rejects_short_buffer() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; 32 + 64 * 3 - 1]; // < header
+            let r =
+                Groth16VerifyingKey::from_compressed_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+        }
+
+        #[test]
+        fn vk_decompress_rejects_non_multiple_g1_ic_tail() {
+            let backend = HostBackend::new();
+            // header + 31 bytes (not a multiple of 32 for compressed G1).
+            let bad = vec![0u8; 32 + 64 * 3 + 31];
+            let r = Groth16VerifyingKey::from_compressed_bytes(&backend, &bad);
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+        }
+
+        #[test]
+        fn vk_decompress_rejects_empty_ic() {
+            let backend = HostBackend::new();
+            // header only (no IC payload) — empty IC violates Groth16
+            // soundness (IC[0] always present).
+            let bad = vec![0u8; 32 + 64 * 3];
+            let r = Groth16VerifyingKey::from_compressed_bytes(&backend, &bad);
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
         }
     }
 }

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.7-halo2-proof-compressed
+### Planned beyond v0.9.8-groth16-compressed
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.8-groth16-compressed] — 2026-04-30
+
+**Compression treatment for Groth16 (the most-used Solana verifier).**
+Sessions 106-108 added compressed VK + proof for Halo2; session 109
+ports the same pattern to Groth16. Real production benefit — every
+Light Protocol / ZkBNB / Risc0-via-Circom user sees a 50% wire-size
+reduction with opt-in compression.
+
+### Wire format
+
+| Component | Uncompressed | Compressed | Saving |
+|---|---|---|---|
+| Proof = A ‖ B ‖ C | 256 B | 128 B | 50% |
+| VK (1 PI, ic.len=2) | 576 B | 288 B | 50% |
+| VK (5 PI, ic.len=6) | 832 B | 416 B | 50% |
+
+Groth16's structure (single proof = 2 G1 + 1 G2; VK = 1 G1 + 3 G2 +
+n G1) is uniform — every proof type has exactly 50% saving.
+
+### Added — session 109
+
+#### `Groth16Proof::compress_from_canonical_bytes<B>(backend, canonical)`
+Encodes the 256 B canonical proof as 128 B compressed.
+
+#### `Groth16Proof::decompress_to_canonical_bytes<B>(backend, compressed)`
+Decoder inverse. Caller chains with `Groth16Proof::from_bytes` to
+obtain the canonical view.
+
+#### `Groth16VerifyingKey::from_compressed_bytes<B>(backend, bytes)`
+Decodes compressed VK. Iterates the IC vector and decompresses each
+element via the alt_bn128 syscall.
+
+#### `Groth16VerifyingKey::to_compressed_bytes<B>(backend)`
+Companion encoder.
+
+#### `Groth16VerifyingKey::compressed_serialized_len()`
+Helper for callers computing buffer sizes upfront:
+`32 + 64·3 + 32·ic.len()`.
+
+#### `Groth16Proof::COMPRESSED_LEN` constant (= 128)
+Public constant for the compressed proof length.
+
+### CU trade-off
+
+- Per `decompress_to_canonical_bytes` (proof): ~32 K CU (2 G1 + 1 G2).
+- Per `from_compressed_bytes` (VK with ic.len=2): ~66 K CU
+  (1 G1 + 3 G2 + 2 IC G1).
+
+For a Groth16 verify path: ~98 K CU compression overhead total.
+The Light Protocol Groth16 base cost is ~83 K CU; compressed mode
+roughly doubles it. For storage-rent-sensitive deployments
+(compressed proof archives, on-chain proof records) the bandwidth
+saving still wins.
+
+### New tests at v0.9.8 (mosaic-groth16: 31 → 43)
+
+Proof tests (6):
+- `proof_round_trip_with_real_generators`
+- `proof_compressed_size_is_exactly_half` (256 → 128)
+- `proof_zero_only_round_trips`
+- `proof_compress_rejects_wrong_canonical_length`
+- `proof_decompress_rejects_wrong_compressed_length`
+- `proof_decompressed_parses_via_from_bytes` (chained
+  decompress → from_bytes path)
+
+VK tests (6):
+- `vk_round_trip_with_real_generators`
+- `vk_compressed_size_is_exactly_half` (640 → 320 for ic.len=3)
+- `vk_zero_only_round_trips`
+- `vk_decompress_rejects_short_buffer`
+- `vk_decompress_rejects_non_multiple_g1_ic_tail`
+- `vk_decompress_rejects_empty_ic`
+
+All under `#[cfg(feature = "host-backend")]` since they require the
+host syscall backend.
+
+### Lib test totals at v0.9.8
+
+  mosaic-groth16            43  (+12 since v0.9.7)
+  total                    672  (+12 since v0.9.7)
+
+### Compression syscall consumer count
+
+Sessions 103-104 added the syscall + typed helpers. Sessions
+106 + 108 + 109 are the three verifier-side consumers (Halo2 VK,
+Halo2 proof, Groth16 VK + proof).
+
+### Migration notes
+
+Public API additions (no breakage):
+- `mosaic_groth16::Groth16Proof::{compress,decompress}_*_canonical_bytes`
+- `mosaic_groth16::Groth16Proof::COMPRESSED_LEN`
+- `mosaic_groth16::Groth16VerifyingKey::{from,to}_compressed_bytes`
+- `mosaic_groth16::Groth16VerifyingKey::compressed_serialized_len`
+
+The existing canonical wire format is unchanged. Compression is
+opt-in.
 
 ## [0.9.7-halo2-proof-compressed] — 2026-04-30
 
