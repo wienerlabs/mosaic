@@ -58,7 +58,7 @@
 //! [issue #1](https://github.com/wienerlabs/mosaic/issues/1).
 
 use alloc::vec::Vec;
-use mosaic_core::OnChainError;
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 
 /// Canonical sizes for the byte layout.
 pub mod sizes {
@@ -148,6 +148,98 @@ impl<'a> PlonkProof<'a> {
             eval_s2,
             eval_zw,
         })
+    }
+}
+
+/// **Session 110** — PLONK proof compression utilities.
+///
+/// PLONK proof shape:
+///   9 G1 commits: A, B, C, Z, T1, T2, T3, W_xi, W_xiw
+///   6 Fr evals:   eval_a, eval_b, eval_c, eval_s1, eval_s2, eval_zw
+///
+/// Uncompressed: 9·64 + 6·32 = 576 + 192 = 768 bytes
+/// Compressed:   9·32 + 6·32 = 288 + 192 = 480 bytes
+/// Saving:       288 bytes (37.5 %)
+///
+/// CU cost per `decompress_to_canonical_bytes`:
+///   9 × ~10 K CU = ~90 K CU. Plus the existing ~970 K CU PLONK
+///   verify cost = ~9 % overhead.
+impl PlonkProof<'_> {
+    /// Compressed PLONK proof byte length.
+    pub const COMPRESSED_LEN: usize = 9 * 32 + 6 * 32;
+
+    /// Decompress a compressed-format PLONK proof into the canonical
+    /// 768-byte uncompressed wire format.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — input is not exactly
+    ///   `COMPRESSED_LEN` (480) bytes.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any G1
+    ///   commit fails decompression.
+    pub fn decompress_to_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        compressed: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{FR_LEN, G1_LEN, PROOF_LEN};
+        const G1_C: usize = 32;
+
+        if compressed.len() != Self::COMPRESSED_LEN {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        let mut out = Vec::with_capacity(PROOF_LEN);
+
+        // Decompress 9 G1 commits in order.
+        let mut o = 0;
+        for _ in 0..9 {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full =
+                mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+        debug_assert_eq!(out.len(), 9 * G1_LEN);
+
+        // Copy 6 Fr evaluations as-is (not curve points, not compressed).
+        out.extend_from_slice(&compressed[o..o + 6 * FR_LEN]);
+        debug_assert_eq!(out.len(), PROOF_LEN);
+        Ok(out)
+    }
+
+    /// Compress a canonical PLONK proof byte buffer.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — input is not exactly
+    ///   `PROOF_LEN` (768) bytes.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any G1
+    ///   commit fails compression (off-curve, etc.).
+    pub fn compress_from_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{FR_LEN, G1_LEN, PROOF_LEN};
+
+        if canonical.len() != PROOF_LEN {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        let mut out = Vec::with_capacity(Self::COMPRESSED_LEN);
+        // Compress 9 G1 commits in order.
+        let mut o = 0;
+        for _ in 0..9 {
+            let mut arr = [0u8; G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += G1_LEN;
+        }
+        // Copy 6 Fr evaluations as-is.
+        out.extend_from_slice(&canonical[o..o + 6 * FR_LEN]);
+        debug_assert_eq!(out.len(), Self::COMPRESSED_LEN);
+        Ok(out)
     }
 }
 
@@ -282,6 +374,152 @@ impl PlonkVerifyingKey {
         out.extend_from_slice(&self.n_public.to_le_bytes());
         debug_assert_eq!(out.len(), sizes::VK_HEADER_LEN);
         out
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 110 — PLONK compressed VK support.
+    //
+    // VK shape: 8 G1 (selectors q_M/L/R/O/C + perm σ_1/2/3) + 1 G2
+    //   (X_2 SRS) + Fr fields (k1, k2, omega) + u32 fields (power,
+    //   n_public).
+    //
+    // Uncompressed: 8·64 + 128 + 3·32 + 2·4 = 512 + 128 + 96 + 8 = 744 B
+    // Compressed:   8·32 + 64  + 3·32 + 2·4 = 256 + 64  + 96 + 8 = 424 B
+    // Saving:       320 bytes (43 %)
+    //
+    // CU per from_compressed_bytes: 8 × ~10 K + 1 × ~12 K = ~92 K CU.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Compressed PLONK VK byte length: 8 compressed G1 + 1 compressed
+    /// G2 + Fr/u32 fields = 424 bytes.
+    pub const COMPRESSED_LEN: usize = 8 * 32 + 64 + 3 * 32 + 2 * 4;
+
+    /// Decode a compressed-format PLONK VK byte buffer.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::VerifyingKeyLengthMismatch`] — input length
+    ///   ≠ `COMPRESSED_LEN`.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   compressed point fails decompression.
+    pub fn from_compressed_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        bytes: &[u8],
+    ) -> Result<Self, OnChainError> {
+        use sizes::FR_LEN;
+        const G1_C: usize = 32;
+        const G2_C: usize = 64;
+
+        if bytes.len() != Self::COMPRESSED_LEN {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
+        let mut o = 0_usize;
+        macro_rules! decompress_g1_field {
+            () => {{
+                let mut arr = [0u8; G1_C];
+                arr.copy_from_slice(&bytes[o..o + G1_C]);
+                o += G1_C;
+                mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?
+            }};
+        }
+        let qm_g1 = decompress_g1_field!();
+        let ql_g1 = decompress_g1_field!();
+        let qr_g1 = decompress_g1_field!();
+        let qo_g1 = decompress_g1_field!();
+        let qc_g1 = decompress_g1_field!();
+        let s1_g1 = decompress_g1_field!();
+        let s2_g1 = decompress_g1_field!();
+        let s3_g1 = decompress_g1_field!();
+
+        // G2: SRS element X_2.
+        let mut x2_arr = [0u8; G2_C];
+        x2_arr.copy_from_slice(&bytes[o..o + G2_C]);
+        o += G2_C;
+        let x2_g2 =
+            mosaic_zk_primitives::compression::decompress_g2(backend, &x2_arr)?;
+
+        // power (u32 LE)
+        let power = u32::from_le_bytes([
+            bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3],
+        ]);
+        o += 4;
+
+        // k1, k2, omega (32-byte Fr fields)
+        let mut k1 = [0u8; FR_LEN];
+        k1.copy_from_slice(&bytes[o..o + FR_LEN]);
+        o += FR_LEN;
+        let mut k2 = [0u8; FR_LEN];
+        k2.copy_from_slice(&bytes[o..o + FR_LEN]);
+        o += FR_LEN;
+        let mut omega = [0u8; FR_LEN];
+        omega.copy_from_slice(&bytes[o..o + FR_LEN]);
+        o += FR_LEN;
+
+        // n_public (u32 LE)
+        let n_public = u32::from_le_bytes([
+            bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3],
+        ]);
+
+        Ok(Self {
+            qm_g1,
+            ql_g1,
+            qr_g1,
+            qo_g1,
+            qc_g1,
+            s1_g1,
+            s2_g1,
+            s3_g1,
+            x2_g2,
+            power,
+            k1,
+            k2,
+            omega,
+            n_public,
+        })
+    }
+
+    /// Encode this VK in compressed form.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any
+    ///   point fails to compress (off-curve, etc.).
+    pub fn to_compressed_bytes<B: SyscallBackend + ?Sized>(
+        &self,
+        backend: &B,
+    ) -> Result<Vec<u8>, OnChainError> {
+        let mut out = Vec::with_capacity(Self::COMPRESSED_LEN);
+
+        macro_rules! compress_g1_field {
+            ($field:expr) => {{
+                let c = mosaic_zk_primitives::compression::compress_g1(
+                    backend, &$field,
+                )?;
+                out.extend_from_slice(&c);
+            }};
+        }
+        compress_g1_field!(self.qm_g1);
+        compress_g1_field!(self.ql_g1);
+        compress_g1_field!(self.qr_g1);
+        compress_g1_field!(self.qo_g1);
+        compress_g1_field!(self.qc_g1);
+        compress_g1_field!(self.s1_g1);
+        compress_g1_field!(self.s2_g1);
+        compress_g1_field!(self.s3_g1);
+
+        let x2_c =
+            mosaic_zk_primitives::compression::compress_g2(backend, &self.x2_g2)?;
+        out.extend_from_slice(&x2_c);
+
+        out.extend_from_slice(&self.power.to_le_bytes());
+        out.extend_from_slice(&self.k1);
+        out.extend_from_slice(&self.k2);
+        out.extend_from_slice(&self.omega);
+        out.extend_from_slice(&self.n_public.to_le_bytes());
+
+        debug_assert_eq!(out.len(), Self::COMPRESSED_LEN);
+        Ok(out)
     }
 }
 
@@ -555,6 +793,229 @@ mod tests {
             prop_assert_eq!(decoded.k2, vk.k2);
             prop_assert_eq!(decoded.omega, vk.omega);
             prop_assert_eq!(decoded.n_public, vk.n_public);
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 110 — PLONK compressed proof + VK round-trip tests.
+    //
+    // PLONK proof shape: 9 G1 commits + 6 Fr evals.
+    //   Uncompressed: 768 B   Compressed: 480 B   Saving: 288 B (37.5 %)
+    //
+    // PLONK VK shape: 8 G1 + 1 G2 + Fr/u32 fields.
+    //   Uncompressed: 744 B   Compressed: 424 B   Saving: 320 B (43 %)
+    // ───────────────────────────────────────────────────────────────────
+    mod compression {
+        use super::*;
+        use mosaic_core::syscall::host::HostBackend;
+
+        fn realistic_proof() -> Vec<u8> {
+            use sizes::{FR_LEN, G1_LEN, PROOF_LEN};
+            let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+            let mut buf = Vec::with_capacity(PROOF_LEN);
+            // 9 G1 commits.
+            for _ in 0..9 {
+                buf.extend_from_slice(&g1_gen);
+            }
+            // 6 Fr evals — leave zero for simplicity.
+            buf.extend_from_slice(&[0u8; 6 * FR_LEN]);
+            debug_assert_eq!(buf.len(), PROOF_LEN);
+            // Sanity: each G1 commit fits exactly.
+            debug_assert_eq!(g1_gen.len(), G1_LEN);
+            buf
+        }
+
+        fn realistic_vk() -> PlonkVerifyingKey {
+            let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+            let g2_gen = mosaic_zk_primitives::g1_consts::g2_generator_bytes();
+            PlonkVerifyingKey {
+                qm_g1: g1_gen,
+                ql_g1: g1_gen,
+                qr_g1: g1_gen,
+                qo_g1: g1_gen,
+                qc_g1: g1_gen,
+                s1_g1: g1_gen,
+                s2_g1: g1_gen,
+                s3_g1: g1_gen,
+                x2_g2: g2_gen,
+                power: 10,
+                k1: [0u8; sizes::FR_LEN],
+                k2: [0u8; sizes::FR_LEN],
+                omega: [0u8; sizes::FR_LEN],
+                n_public: 3,
+            }
+        }
+
+        // ── Proof tests ─────────────────────────────────────────────
+
+        #[test]
+        fn proof_round_trip_with_real_generators() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof();
+            let compressed =
+                PlonkProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .expect("compress");
+            assert_eq!(compressed.len(), PlonkProof::COMPRESSED_LEN);
+            let decoded =
+                PlonkProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .expect("decompress");
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_compressed_size_saves_288_bytes() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof();
+            let compressed =
+                PlonkProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            let saving = canonical.len() - compressed.len();
+            // 9 G1 × 32 B = 288 B saved (Fr evals stay 32 B).
+            assert_eq!(saving, 288, "expected exactly 288 B saving");
+            assert_eq!(canonical.len(), 768);
+            assert_eq!(compressed.len(), 480);
+        }
+
+        #[test]
+        fn proof_zero_only_round_trips() {
+            let backend = HostBackend::new();
+            let canonical = vec![0u8; sizes::PROOF_LEN];
+            let compressed =
+                PlonkProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            let decoded =
+                PlonkProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_compress_rejects_wrong_canonical_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; sizes::PROOF_LEN - 1];
+            let r =
+                PlonkProof::compress_from_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_decompress_rejects_wrong_compressed_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; PlonkProof::COMPRESSED_LEN - 1];
+            let r =
+                PlonkProof::decompress_to_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_decompressed_parses_via_from_bytes() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof();
+            let compressed =
+                PlonkProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            let decoded =
+                PlonkProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+            let proof = PlonkProof::from_bytes(&decoded).expect("from_bytes parse");
+            assert_eq!(proof.a.len(), sizes::G1_LEN);
+            assert_eq!(proof.eval_zw.len(), sizes::FR_LEN);
+        }
+
+        // ── VK tests ───────────────────────────────────────────────
+
+        #[test]
+        fn vk_round_trip_with_real_generators() {
+            let backend = HostBackend::new();
+            let vk = realistic_vk();
+            let compressed = vk.to_compressed_bytes(&backend).expect("compress");
+            assert_eq!(compressed.len(), PlonkVerifyingKey::COMPRESSED_LEN);
+            let decoded = PlonkVerifyingKey::from_compressed_bytes(
+                &backend, &compressed,
+            )
+            .expect("decompress");
+            assert_eq!(vk, decoded);
+        }
+
+        #[test]
+        fn vk_compressed_size_saves_320_bytes() {
+            let backend = HostBackend::new();
+            let vk = realistic_vk();
+            let uncompressed = vk.to_bytes();
+            let compressed = vk.to_compressed_bytes(&backend).unwrap();
+            // 8 G1 × 32 + 1 G2 × 64 = 256 + 64 = 320 B saved.
+            // Fr/u32 fields stay unchanged.
+            let saving = uncompressed.len() - compressed.len();
+            assert_eq!(saving, 320, "expected exactly 320 B saving");
+            assert_eq!(uncompressed.len(), 744);
+            assert_eq!(compressed.len(), 424);
+        }
+
+        #[test]
+        fn vk_zero_only_round_trips() {
+            let backend = HostBackend::new();
+            let vk = PlonkVerifyingKey {
+                qm_g1: [0u8; sizes::G1_LEN],
+                ql_g1: [0u8; sizes::G1_LEN],
+                qr_g1: [0u8; sizes::G1_LEN],
+                qo_g1: [0u8; sizes::G1_LEN],
+                qc_g1: [0u8; sizes::G1_LEN],
+                s1_g1: [0u8; sizes::G1_LEN],
+                s2_g1: [0u8; sizes::G1_LEN],
+                s3_g1: [0u8; sizes::G1_LEN],
+                x2_g2: [0u8; sizes::G2_LEN],
+                power: 0,
+                k1: [0u8; sizes::FR_LEN],
+                k2: [0u8; sizes::FR_LEN],
+                omega: [0u8; sizes::FR_LEN],
+                n_public: 0,
+            };
+            let compressed = vk.to_compressed_bytes(&backend).unwrap();
+            let decoded =
+                PlonkVerifyingKey::from_compressed_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(vk, decoded);
+        }
+
+        #[test]
+        fn vk_decompress_rejects_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; PlonkVerifyingKey::COMPRESSED_LEN - 1];
+            let r = PlonkVerifyingKey::from_compressed_bytes(
+                &backend, &too_short,
+            );
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+
+            let too_long = vec![0u8; PlonkVerifyingKey::COMPRESSED_LEN + 1];
+            let r = PlonkVerifyingKey::from_compressed_bytes(
+                &backend, &too_long,
+            );
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+        }
+
+        #[test]
+        fn vk_compressed_preserves_non_curve_fields_byte_for_byte() {
+            // Fr fields and u32 counters bypass compression — they
+            // must round-trip byte-identical regardless of curve-point
+            // arithmetic.
+            let backend = HostBackend::new();
+            let mut vk = realistic_vk();
+            vk.power = 0xDEAD_BEEF;
+            vk.n_public = 0x1234_5678;
+            // Set k1/k2/omega to distinct non-zero patterns.
+            vk.k1 = [0xAA; sizes::FR_LEN];
+            vk.k2 = [0xBB; sizes::FR_LEN];
+            vk.omega = [0xCC; sizes::FR_LEN];
+
+            let compressed = vk.to_compressed_bytes(&backend).unwrap();
+            let decoded =
+                PlonkVerifyingKey::from_compressed_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(decoded.power, 0xDEAD_BEEF);
+            assert_eq!(decoded.n_public, 0x1234_5678);
+            assert_eq!(decoded.k1, [0xAA; sizes::FR_LEN]);
+            assert_eq!(decoded.k2, [0xBB; sizes::FR_LEN]);
+            assert_eq!(decoded.omega, [0xCC; sizes::FR_LEN]);
         }
     }
 }

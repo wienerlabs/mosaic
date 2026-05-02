@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.8-groth16-compressed
+### Planned beyond v0.9.9-plonk-compressed
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.9-plonk-compressed] — 2026-04-30
+
+**Compression treatment for KZG-PLONK (the second Phase-2
+production verifier).** Sessions 106-109 ported alt_bn128 compression
+to Halo2 + Groth16; session 110 finishes the Phase-2 sweep with
+PLONK. Both Phase-2 production verifiers now have opt-in compressed
+wire formats.
+
+### Wire format
+
+| Component | Uncompressed | Compressed | Saving |
+|---|---|---|---|
+| Proof (9 G1 + 6 Fr) | 768 B | 480 B | 288 B (37.5%) |
+| VK (8 G1 + 1 G2 + Fr/u32) | 744 B | 424 B | 320 B (43%) |
+| **Combined** | **1512 B** | **904 B** | **608 B (40%)** |
+
+Fr evaluations stay 32 B in the compressed proof (not curve points).
+Fr/u32 fields in the VK (k1, k2, omega, power, n_public) likewise
+stay uncompressed.
+
+### Added — session 110
+
+#### `PlonkProof::{compress_from,decompress_to}_canonical_bytes<B>`
+Encode / decode 768 B canonical proof ↔ 480 B compressed.
+
+#### `PlonkProof::COMPRESSED_LEN` constant (= 480)
+
+#### `PlonkVerifyingKey::{from,to}_compressed_bytes<B>`
+Encode / decode 744 B canonical VK ↔ 424 B compressed.
+
+#### `PlonkVerifyingKey::COMPRESSED_LEN` constant (= 424)
+
+### CU trade-off
+
+| Operation | CU cost |
+|---|---|
+| Proof decompress | ~90 K (9 G1) |
+| VK decompress | ~92 K (8 G1 + 1 G2) |
+| Combined verify-path overhead | ~182 K |
+
+PLONK base CU cost is ~970 K; compressed mode adds ~19 % overhead.
+Whether worthwhile depends on tx priority + storage rent.
+
+### New tests at v0.9.9 (mosaic-plonk: 38 → 49)
+
+Proof tests (6):
+- `proof_round_trip_with_real_generators`
+- `proof_compressed_size_saves_288_bytes`
+- `proof_zero_only_round_trips`
+- `proof_compress_rejects_wrong_canonical_length`
+- `proof_decompress_rejects_wrong_compressed_length`
+- `proof_decompressed_parses_via_from_bytes`
+
+VK tests (5):
+- `vk_round_trip_with_real_generators`
+- `vk_compressed_size_saves_320_bytes`
+- `vk_zero_only_round_trips`
+- `vk_decompress_rejects_wrong_length` (both too-short + too-long)
+- `vk_compressed_preserves_non_curve_fields_byte_for_byte` —
+  pins that Fr/u32 fields (k1, k2, omega, power, n_public) bypass
+  compression and round-trip byte-identical regardless of curve-
+  point arithmetic.
+
+### Lib test totals at v0.9.9
+
+  mosaic-plonk             49  (+11 since v0.9.8)
+  total                   683  (+11 since v0.9.8)
+
+### Compression syscall consumer count
+
+Sessions 103-104: syscall + typed helpers.
+Session 106: Halo2 VK
+Session 108: Halo2 proof
+Session 109: Groth16 VK + proof
+**Session 110: PLONK VK + proof**
+
+Phase-2 sweep complete. Phase-3 verifiers (HyperPlonk, Nova, STARK)
+remain on uncompressed wire formats — they're scaffold-only for now,
+compression treatment lands when fixture-driven differential testing
+matures the soundness story.
+
+### Total Phase-2 compression saving (per verify)
+
+For a typical workload on Solana:
+
+| Workload | Uncompressed | Compressed | Saving |
+|---|---|---|---|
+| Groth16 (1 PI) | 256 + 576 = 832 B | 128 + 288 = 416 B | 416 B |
+| KZG-PLONK | 768 + 744 = 1512 B | 480 + 424 = 904 B | 608 B |
+
+For 100 K Phase-2 verify transactions: ~96 MB of saved instruction
+data. At Solana's 1232 B per-tx limit, this is consequential.
+
+### Migration notes
+
+Public API additions (no breakage). Existing canonical wire formats
+unchanged; compression is opt-in.
 
 ## [0.9.8-groth16-compressed] — 2026-04-30
 

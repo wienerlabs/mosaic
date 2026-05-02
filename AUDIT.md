@@ -10,6 +10,38 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-30 — v0.9.9-plonk-compressed release (session 110)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.9-plonk-compressed`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.9-plonk-compressed) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | KZG-PLONK proof + VK gain compressed wire format. Completes the Phase-2 sweep — both production-grade BN254 verifiers (Groth16, PLONK) now support opt-in compression. |
+| Findings | Zero soundness regressions. snarkjs-fixture differential test (`tests/differential/tests/plonk_fixture.rs`) byte-equivalent green. |
+| Status | ✅ Phase-2 compression sweep complete. Combined Groth16 + PLONK deployments save ~96 MB instruction data per 100K verify txns. |
+
+### Lib test totals at v0.9.9
+
+  mosaic-plonk             49  (+11)
+  total                   683  (+11 since v0.9.8)
+
+### Compression syscall consumer matrix at v0.9.9
+
+| Verifier | VK | Proof |
+|---|---|---|
+| Groth16 BN254 | s109 ✓ | s109 ✓ |
+| KZG-PLONK BN254 | s110 ✓ | s110 ✓ |
+| Halo2-KZG | s106 ✓ | s108 ✓ |
+| HyperPlonk-KZG | (planned) | (planned) |
+| Nova / HyperNova / ProtoStar | (planned) | (planned) |
+| FRI-STARK | n/a (Goldilocks) | n/a |
+
+Phase-2 sweep complete. Phase-3 BN254 verifiers (HyperPlonk, Nova)
+will get the same treatment when their fixture-driven differential
+testing matures the soundness story.
+
+---
+
 ## 2026-04-30 — v0.9.8-groth16-compressed release (session 109)
 
 | Field | Value |
