@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.10-compression-fuzz
+### Planned beyond v0.9.11-compression-bench
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.11-compression-bench] — 2026-04-30
+
+**Compression cost characteristics measured.** Sessions 103-110 added
+the alt_bn128 compression syscall + 6 verifier-side consumers. Their
+CHANGELOG entries cite cost estimates (~10 K CU per G1 decompress,
+~12 K CU per G2). Session 112 adds a criterion bench measuring the
+host-side wall-clock baselines — establishes regression detection
++ characterizes the cost ratios that the SBF syscall side must
+preserve.
+
+### Added — `crates/mosaic-bench/benches/compression_host.rs`
+
+10 criterion functions across 4 surface categories:
+
+**Single-point primitives (4)**:
+- `compress_g1_generator_host` — BN254 G1 compress
+- `decompress_g1_generator_host` — BN254 G1 decompress (sqrt mod q)
+- `compress_g2_generator_host` — BN254 G2 compress
+- `decompress_g2_generator_host` — BN254 G2 decompress
+
+**End-to-end Groth16 round-trips (2)**:
+- `groth16_proof_compress_host` (256 → 128 B)
+- `groth16_proof_decompress_host`
+- `groth16_vk_compress_host_ic_3` (640 → 320 B)
+- `groth16_vk_decompress_host_ic_3`
+
+**End-to-end PLONK round-trips (2)**:
+- `plonk_proof_compress_host` (768 → 480 B)
+- `plonk_proof_decompress_host`
+- `plonk_vk_compress_host` (744 → 424 B)
+- `plonk_vk_decompress_host`
+
+**End-to-end Halo2 round-trips (2)**:
+- `halo2_proof_compress_host_5_advice_3_quot`
+- `halo2_proof_decompress_host_5_advice_3_quot`
+- `halo2_vk_compress_host_2_fixed_5_perm`
+- `halo2_vk_decompress_host_2_fixed_5_perm`
+
+### Reference measurement
+
+First smoke-run on macOS arm64 measured `decompress_g1_generator_host`
+at ~5.6 µs. This is the host (arkworks) baseline; SBF (real on-chain
+syscall) cost is governed by the per-op CU schedule. Cost ratio
+comparison once both sides are measured will validate the v0.9.5/.7/
+.8/.9 trade-off claims.
+
+### Wire into Cargo.toml
+
+```toml
+[[bench]]
+name = "compression_host"
+harness = false
+```
+
+Run with:
+
+```bash
+cargo bench -p mosaic-bench --bench compression_host
+```
+
+### Bench inventory at v0.9.11
+
+| Bench file | Targets | Coverage |
+|---|---|---|
+| `groth16_host` | 1 | Phase-1 Groth16 verify end-to-end |
+| `phase3_host` | 4 | Phase-3 verify end-to-end |
+| `audit_gates_host` | 5 | Phase-3 audit gates in isolation (s97) |
+| **`compression_host`** | **10** | **Compression cost characteristics (s112)** |
+| `bpf-bench` (binary) | 7 | On-chain CU per system |
+
+### Lib test totals at v0.9.11
+
+Unchanged from v0.9.10 (683). Pure bench-coverage release.
+
+### Migration notes
+
+No code changes to verifier crates. The bench file is purely
+additive. Existing bench invocations work unchanged.
 
 ## [0.9.10-compression-fuzz] — 2026-04-30
 

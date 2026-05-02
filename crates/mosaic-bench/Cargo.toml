@@ -50,6 +50,14 @@ harness = false
 name = "audit_gates_host"
 harness = false
 
+# Session 112 — alt_bn128 compression cost characteristics. Measures
+# wall-clock for compress_g1/g2/decompress_g1/g2 + end-to-end VK +
+# proof round-trips for Halo2/Groth16/PLONK. Validates the trade-off
+# claims in v0.9.5/.7/.8/.9 CHANGELOG entries.
+[[bench]]
+name = "compression_host"
+harness = false
+
 [[bin]]
 name = "bpf-bench"
 path = "src/bin/bpf_bench.rs"

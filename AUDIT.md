@@ -10,6 +10,57 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-30 — v0.9.11-compression-bench release (session 112)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.11-compression-bench`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.11-compression-bench) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | Criterion bench measuring alt_bn128 compression cost characteristics on the host. Establishes regression baselines for the 4 primitive ops + 6 verifier-side end-to-end round-trips (Halo2/Groth16/PLONK proof + VK). |
+| Findings | First smoke-run measured `decompress_g1_generator_host` at ~5.6 µs. Bench validates the trade-off claims in v0.9.5/.7/.8/.9 entries; cost-ratio comparison vs SBF measurements will land when bpf-bench gains compression instructions. |
+| Status | ✅ Compression cost characteristics now measurable. Drift in any host arkworks compression ratio will surface in this bench before the SBF syscall side. |
+
+### Why host bench (not SBF CU)
+
+The user-visible benefit of compression lives on Solana SBF where
+the `sol_alt_bn128_compression` syscall has its own per-op CU
+schedule. To measure SBF cost we need an in-program decompression
+instruction (out of scope for session 112). The host bench still:
+
+- **Detects regressions** in arkworks compression cost.
+- **Characterizes ratios** (G1 vs G2; per-byte vs per-op) that SBF
+  syscall side must preserve.
+- **Validates trade-offs** cited in v0.9.5/.7/.8/.9 CHANGELOG
+  entries.
+
+### Compression infrastructure status at v0.9.11
+
+| Layer | Coverage |
+|---|---|
+| Syscall (s103-104) | Host + SBF backends ✓ |
+| Typed helpers (s104) | compress_g1/g2, decompress_g1/g2 ✓ |
+| Verifier consumers (s106-110) | Halo2 + Groth16 + PLONK proof + VK ✓ |
+| Lib tests (s106-110) | 26 round-trip + reject tests ✓ |
+| Fuzz (s111) | 6 panic-free harnesses, PR + nightly CI ✓ |
+| **Criterion bench (s112)** | **10 cost-characteristic measurements ✓** |
+| SBF on-chain CU bench | (planned) |
+| External audit | (pending) |
+
+### Lib test totals at v0.9.11
+
+Unchanged (683). Pure bench-coverage release.
+
+### What this milestone DOES change
+
+- New `compression_host` criterion bench file.
+- Cargo.toml [[bench]] entry.
+
+### What this milestone does NOT change
+
+Verifier behavior, wire format, public API.
+
+---
+
 ## 2026-04-30 — v0.9.10-compression-fuzz release (session 111)
 
 | Field | Value |
