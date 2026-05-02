@@ -264,5 +264,37 @@ path = "fuzz_targets/fuzz_halo2_compressed_vk.rs"
 test = false
 doc = false
 
+# ───────────────────────────────────────────────────────────────────────
+# Session 114 — Phase-3 compression fuzz harnesses (HyperPlonk + Nova).
+# Mirrors sessions 109-111's Phase-2 coverage (Groth16/PLONK/Halo2). The
+# STARK family has no BN254 curve points, so alt_bn128 compression is
+# not applicable — its proof/VK byte savings rely on field-element
+# packing instead, tracked by issue #44.
+# ───────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "fuzz_hyperplonk_compressed_proof"
+path = "fuzz_targets/fuzz_hyperplonk_compressed_proof.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_hyperplonk_compressed_vk"
+path = "fuzz_targets/fuzz_hyperplonk_compressed_vk.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_nova_compressed_proof"
+path = "fuzz_targets/fuzz_nova_compressed_proof.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_nova_compressed_vk"
+path = "fuzz_targets/fuzz_nova_compressed_vk.rs"
+test = false
+doc = false
+
 [lints]
 workspace = true

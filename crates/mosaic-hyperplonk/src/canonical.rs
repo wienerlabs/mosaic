@@ -54,7 +54,7 @@
 //! written.
 
 use alloc::vec::Vec;
-use mosaic_core::OnChainError;
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 
 /// Size constants for the `HyperPlonk` canonical layout.
 pub mod sizes {
@@ -162,6 +162,190 @@ impl<'a> HyperPlonkProof<'a> {
     /// Iterate over the `sumcheck_rounds` round polynomials.
     pub fn round_polys(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
         self.sumcheck_polys.chunks_exact(sizes::SUMCHECK_POLY_LEN)
+    }
+}
+
+/// **Session 114** — HyperPlonk proof compression utilities.
+///
+/// HyperPlonk proof shape:
+///   5 G1 commits: a, b, c, z, kzg_opening
+///   u32 sumcheck_rounds + variable Fr region (sumcheck_polys + final_evals)
+///
+/// Uncompressed: `5 · 64 + 4 + rounds · 96 + 12 · 32`
+///   = 320 + 4 + 96·rounds + 384 = 708 + 96·rounds bytes
+/// Compressed:   `5 · 32 + 4 + rounds · 96 + 12 · 32`
+///   = 160 + 4 + 96·rounds + 384 = 548 + 96·rounds bytes
+/// Saving:       160 bytes (constant, regardless of round count)
+///
+/// CU cost per `decompress_to_canonical_bytes`: 5 × ~10 K = ~50 K CU.
+/// Plus the existing `~505 K` HyperPlonk verify estimate gives ~10 %
+/// overhead — comparable to PLONK (9 %).
+///
+/// ## Wire-format layout (compressed)
+///
+/// ```text
+/// | offset | bytes | content                          |
+/// |--------|-------|----------------------------------|
+/// |   0    |  32   | compressed G1: a                 |
+/// |  32    |  32   | compressed G1: b                 |
+/// |  64    |  32   | compressed G1: c                 |
+/// |  96    |  32   | compressed G1: z                 |
+/// | 128    |   4   | sumcheck_rounds (u32 LE)         |
+/// | 132    | 96·R  | sumcheck_polys (R rounds × 3 Fr) |
+/// | 132+96R| 384   | final_evals (12 × 32 B Fr)       |
+/// | …      |  32   | compressed G1: kzg_opening       |
+/// ```
+///
+/// ## Why a single fixed `COMPRESSED_LEN` is **not** exposed
+///
+/// The proof carries a dynamic round count (`sumcheck_rounds`) that
+/// determines the proof size. Unlike PLONK (whose proof is fixed at
+/// 768 B), the HyperPlonk compressed buffer length is
+/// `MIN_COMPRESSED_LEN + 96 · rounds`. Callers parse the embedded
+/// u32 to derive the expected length — same pattern as Halo2.
+impl HyperPlonkProof<'_> {
+    /// G1 length under the alt_bn128 compressed encoding.
+    const G1_COMPRESSED_LEN: usize = 32;
+
+    /// Compressed proof byte length at zero sumcheck rounds (smallest
+    /// well-formed shape). Real HyperPlonk circuits use ≥ 1 round.
+    pub const MIN_COMPRESSED_LEN: usize =
+        5 * Self::G1_COMPRESSED_LEN + 4 + sizes::FINAL_EVALS * sizes::FR_LEN;
+
+    /// Compute the compressed proof length for a given sumcheck round
+    /// count. Returns `None` if `rounds > MAX_SUMCHECK_ROUNDS`.
+    #[must_use]
+    pub fn compressed_len_for_rounds(rounds: u32) -> Option<usize> {
+        if rounds > sizes::MAX_SUMCHECK_ROUNDS {
+            return None;
+        }
+        Some(Self::MIN_COMPRESSED_LEN + (rounds as usize) * sizes::SUMCHECK_POLY_LEN)
+    }
+
+    /// Decompress a compressed-format HyperPlonk proof into the
+    /// canonical uncompressed wire format.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — buffer too small to
+    ///   parse the round counter, declared `sumcheck_rounds` exceeds
+    ///   `MAX_SUMCHECK_ROUNDS`, or input length disagrees with
+    ///   `compressed_len_for_rounds(rounds)`.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any of
+    ///   the 5 G1 commits fail decompression (off-curve / malformed).
+    pub fn decompress_to_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        compressed: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{FINAL_EVALS, FR_LEN, G1_LEN, MAX_SUMCHECK_ROUNDS, SUMCHECK_POLY_LEN};
+        const G1_C: usize = 32;
+
+        if compressed.len() < Self::MIN_COMPRESSED_LEN {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        // Parse sumcheck_rounds at fixed offset 4·G1_C = 128.
+        let rounds_off = 4 * G1_C;
+        let sumcheck_rounds = u32::from_le_bytes([
+            compressed[rounds_off],
+            compressed[rounds_off + 1],
+            compressed[rounds_off + 2],
+            compressed[rounds_off + 3],
+        ]);
+        if sumcheck_rounds > MAX_SUMCHECK_ROUNDS {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        let polys_len = (sumcheck_rounds as usize)
+            .checked_mul(SUMCHECK_POLY_LEN)
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        let expected_clen =
+            Self::MIN_COMPRESSED_LEN.saturating_add(polys_len);
+        if compressed.len() != expected_clen {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        // Build canonical buffer: 5 G1 (uncompressed) + 4 + polys_len + final_evals.
+        let canonical_len =
+            4 * G1_LEN + 4 + polys_len + FINAL_EVALS * FR_LEN + G1_LEN;
+        let mut out: Vec<u8> = Vec::with_capacity(canonical_len);
+
+        // Decompress 4 leading G1 commits (a, b, c, z).
+        let mut o = 0;
+        for _ in 0..4 {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+        debug_assert_eq!(o, 4 * G1_C);
+        debug_assert_eq!(out.len(), 4 * G1_LEN);
+
+        // Copy sumcheck_rounds u32 + polys + final_evals as-is.
+        let pass_through_len = 4 + polys_len + FINAL_EVALS * FR_LEN;
+        out.extend_from_slice(&compressed[o..o + pass_through_len]);
+        o += pass_through_len;
+
+        // Decompress trailing G1 (kzg_opening).
+        let mut arr = [0u8; G1_C];
+        arr.copy_from_slice(&compressed[o..o + G1_C]);
+        let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+        out.extend_from_slice(&full);
+
+        debug_assert_eq!(out.len(), canonical_len);
+        Ok(out)
+    }
+
+    /// Compress a canonical HyperPlonk proof byte buffer.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — input buffer fails
+    ///   `from_bytes` validation (wrong length, declared rounds out
+    ///   of range, etc.).
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any of
+    ///   the 5 G1 commits fail compression (off-curve, etc.).
+    pub fn compress_from_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{FINAL_EVALS, FR_LEN, G1_LEN, SUMCHECK_POLY_LEN};
+        const G1_C: usize = 32;
+
+        // Round-trip through `from_bytes` so we re-use its length /
+        // round-count validation rather than open-coding it here.
+        let view = HyperPlonkProof::from_bytes(canonical)?;
+
+        let polys_len = (view.sumcheck_rounds as usize) * SUMCHECK_POLY_LEN;
+        let expected_clen =
+            Self::compressed_len_for_rounds(view.sumcheck_rounds)
+                .ok_or(OnChainError::ProofLengthMismatch)?;
+        let mut out: Vec<u8> = Vec::with_capacity(expected_clen);
+
+        // Compress 4 leading G1 commits (a, b, c, z).
+        let mut o = 0;
+        for _ in 0..4 {
+            let mut arr = [0u8; G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += G1_LEN;
+        }
+        debug_assert_eq!(out.len(), 4 * G1_C);
+
+        // Copy sumcheck_rounds u32 + polys + final_evals as-is.
+        let pass_through_len = 4 + polys_len + FINAL_EVALS * FR_LEN;
+        out.extend_from_slice(&canonical[o..o + pass_through_len]);
+        o += pass_through_len;
+
+        // Compress trailing G1 (kzg_opening).
+        let mut arr = [0u8; G1_LEN];
+        arr.copy_from_slice(&canonical[o..o + G1_LEN]);
+        let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+        out.extend_from_slice(&c);
+
+        debug_assert_eq!(out.len(), expected_clen);
+        Ok(out)
     }
 }
 
@@ -350,6 +534,135 @@ impl HyperPlonkVerifyingKey {
             .chain(iter::once(&self.sigma_1_g1))
             .chain(iter::once(&self.sigma_2_g1))
             .chain(iter::once(&self.sigma_3_g1))
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Session 114 — HyperPlonk VK compression utilities.
+    //
+    // VK shape (canonical):
+    //   8 (n_public + num_variables) + 128 (x2_g2) + 8·64 (selectors + σ)
+    //   + 3·32 (k_1, k_2, k_3) = 8 + 128 + 512 + 96 = 744 bytes
+    //
+    // VK shape (compressed):
+    //   8 + 64 (compressed G2) + 8·32 (compressed G1) + 96
+    //   = 8 + 64 + 256 + 96 = 424 bytes
+    // Saving: 320 bytes (43 %)
+    //
+    // CU cost per `from_compressed_bytes`: 8 × ~10 K (G1) + 1 × ~12 K
+    // (G2) = ~92 K CU. The VK is typically uploaded once per circuit
+    // and cached, so this cost is amortized aggressively.
+    //
+    // Wire-format layout (compressed):
+    //   |   0 |   4 | n_public (u32 LE)                   |
+    //   |   4 |   4 | num_variables (u32 LE)              |
+    //   |   8 |  64 | compressed G2: x2_g2                |
+    //   |  72 |  32 | compressed G1: q_m_g1               |
+    //   | 104 |  32 | compressed G1: q_l_g1               |
+    //   | 136 |  32 | compressed G1: q_r_g1               |
+    //   | 168 |  32 | compressed G1: q_o_g1               |
+    //   | 200 |  32 | compressed G1: q_c_g1               |
+    //   | 232 |  32 | compressed G1: sigma_1_g1           |
+    //   | 264 |  32 | compressed G1: sigma_2_g1           |
+    //   | 296 |  32 | compressed G1: sigma_3_g1           |
+    //   | 328 |  32 | k_1 (Fr canonical BE)               |
+    //   | 360 |  32 | k_2 (Fr canonical BE)               |
+    //   | 392 |  32 | k_3 (Fr canonical BE)               |
+    //   = 424 bytes total
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Compressed VK byte length.
+    ///
+    /// `n_public (4) + num_variables (4) + compressed G2 (64) +
+    /// 8 × compressed G1 (32) + 3 × Fr (32) = 424`.
+    pub const COMPRESSED_LEN: usize = 4 + 4 + 64 + Self::NUM_COMMITS * 32 + 3 * sizes::FR_LEN;
+
+    /// Decompress a compressed VK byte buffer into the canonical
+    /// 744-byte uncompressed wire format.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::VerifyingKeyLengthMismatch`] — input is not
+    ///   exactly `COMPRESSED_LEN` (424) bytes.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any of
+    ///   the 8 G1 commits or the G2 SRS element fails decompression.
+    pub fn from_compressed_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        compressed: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        const G1_C: usize = 32;
+        const G2_C: usize = 64;
+        if compressed.len() != Self::COMPRESSED_LEN {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
+        let mut out = Vec::with_capacity(Self::SERIALIZED_LEN);
+        // n_public + num_variables: 8 bytes pass-through.
+        out.extend_from_slice(&compressed[0..8]);
+
+        // Decompress G2 SRS element (x2_g2).
+        let mut g2_arr = [0u8; G2_C];
+        g2_arr.copy_from_slice(&compressed[8..8 + G2_C]);
+        let g2_full = mosaic_zk_primitives::compression::decompress_g2(backend, &g2_arr)?;
+        out.extend_from_slice(&g2_full);
+
+        // Decompress 8 G1 commits in canonical absorb order.
+        let mut o = 8 + G2_C;
+        for _ in 0..Self::NUM_COMMITS {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+
+        // Copy 3 Fr coset constants as-is.
+        out.extend_from_slice(&compressed[o..o + 3 * sizes::FR_LEN]);
+        debug_assert_eq!(out.len(), Self::SERIALIZED_LEN);
+        Ok(out)
+    }
+
+    /// Compress a canonical 744-byte VK byte buffer.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::VerifyingKeyLengthMismatch`] — input is not
+    ///   exactly `SERIALIZED_LEN` (744) bytes.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any of
+    ///   the 8 G1 commits or the G2 SRS element fails compression.
+    pub fn to_compressed_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        const G2_C: usize = 64;
+        if canonical.len() != Self::SERIALIZED_LEN {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+
+        let mut out = Vec::with_capacity(Self::COMPRESSED_LEN);
+        // n_public + num_variables: 8 bytes pass-through.
+        out.extend_from_slice(&canonical[0..8]);
+
+        // Compress G2 SRS element (x2_g2 starts at offset 8).
+        let mut g2_arr = [0u8; 128];
+        g2_arr.copy_from_slice(&canonical[8..8 + 128]);
+        let g2_c = mosaic_zk_primitives::compression::compress_g2(backend, &g2_arr)?;
+        debug_assert_eq!(g2_c.len(), G2_C);
+        out.extend_from_slice(&g2_c);
+
+        // Compress 8 G1 commits.
+        let mut o = 8 + 128;
+        for _ in 0..Self::NUM_COMMITS {
+            let mut arr = [0u8; sizes::G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + sizes::G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += sizes::G1_LEN;
+        }
+
+        // Copy 3 Fr coset constants as-is.
+        out.extend_from_slice(&canonical[o..o + 3 * sizes::FR_LEN]);
+        debug_assert_eq!(out.len(), Self::COMPRESSED_LEN);
+        Ok(out)
     }
 }
 
@@ -687,6 +1000,291 @@ mod tests {
             prop_assert_eq!(collected[5], &vk.sigma_1_g1);
             prop_assert_eq!(collected[6], &vk.sigma_2_g1);
             prop_assert_eq!(collected[7], &vk.sigma_3_g1);
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 114 — HyperPlonk compressed proof + VK round-trip tests.
+    //
+    // HyperPlonk proof shape: 5 G1 + variable Fr region.
+    //   Uncompressed (R=10): 1 668 B   Compressed: 1 508 B
+    //   Saving (constant): 160 B (≈10 % at R=10, lower at higher R).
+    //
+    // HyperPlonk VK shape: 8 G1 + 1 G2 + Fr/u32 fields.
+    //   Uncompressed: 744 B   Compressed: 424 B   Saving: 320 B (43 %).
+    // ───────────────────────────────────────────────────────────────────
+    mod compression {
+        use super::*;
+        use mosaic_core::syscall::host::HostBackend;
+        use mosaic_zk_primitives::g1_consts::{g1_generator_bytes, g2_generator_bytes};
+
+        /// Build a realistic proof: 5 G1 commits = generator, all Fr = 0,
+        /// `sumcheck_rounds = 10`. Decompression must succeed because
+        /// the generator is on-curve.
+        fn realistic_proof(rounds: u32) -> Vec<u8> {
+            use sizes::{FINAL_EVALS, FIXED_HEADER_LEN, FR_LEN, G1_LEN, SUMCHECK_POLY_LEN};
+            let g1_gen = g1_generator_bytes();
+            let polys_len = (rounds as usize) * SUMCHECK_POLY_LEN;
+            let canonical_len =
+                4 * G1_LEN + 4 + polys_len + FINAL_EVALS * FR_LEN + G1_LEN;
+            let mut buf = Vec::with_capacity(canonical_len);
+            // 4 leading G1 commits (a, b, c, z).
+            for _ in 0..4 {
+                buf.extend_from_slice(&g1_gen);
+            }
+            // sumcheck_rounds u32 LE.
+            buf.extend_from_slice(&rounds.to_le_bytes());
+            // sumcheck_polys + final_evals (all zero).
+            buf.extend(core::iter::repeat(0u8).take(polys_len + FINAL_EVALS * FR_LEN));
+            // Trailing kzg_opening G1.
+            buf.extend_from_slice(&g1_gen);
+            debug_assert_eq!(buf.len(), canonical_len);
+            // Sanity: header offset matches the rounds fixed location.
+            debug_assert_eq!(FIXED_HEADER_LEN, 4 * G1_LEN + 4);
+            buf
+        }
+
+        fn realistic_vk_bytes() -> Vec<u8> {
+            let g1_gen = g1_generator_bytes();
+            let g2_gen = g2_generator_bytes();
+            HyperPlonkVerifyingKey {
+                n_public: 3,
+                num_variables: 10,
+                x2_g2: g2_gen,
+                q_m_g1: g1_gen,
+                q_l_g1: g1_gen,
+                q_r_g1: g1_gen,
+                q_o_g1: g1_gen,
+                q_c_g1: g1_gen,
+                sigma_1_g1: g1_gen,
+                sigma_2_g1: g1_gen,
+                sigma_3_g1: g1_gen,
+                k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+                k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+                k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
+            }
+            .to_bytes()
+        }
+
+        // ── Proof tests ─────────────────────────────────────────────
+
+        #[test]
+        fn proof_round_trip_at_r10() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof(10);
+            let compressed =
+                HyperPlonkProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .expect("compress");
+            assert_eq!(
+                compressed.len(),
+                HyperPlonkProof::compressed_len_for_rounds(10).unwrap()
+            );
+            let decoded =
+                HyperPlonkProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .expect("decompress");
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_round_trip_at_r0_edge_case() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof(0);
+            let compressed =
+                HyperPlonkProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .expect("compress R=0");
+            assert_eq!(compressed.len(), HyperPlonkProof::MIN_COMPRESSED_LEN);
+            let decoded =
+                HyperPlonkProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_compressed_saves_160_bytes_per_proof() {
+            let backend = HostBackend::new();
+            for rounds in [0u32, 1, 10, sizes::MAX_SUMCHECK_ROUNDS] {
+                let canonical = realistic_proof(rounds);
+                let compressed = HyperPlonkProof::compress_from_canonical_bytes(
+                    &backend, &canonical,
+                )
+                .unwrap();
+                assert_eq!(
+                    canonical.len() - compressed.len(),
+                    5 * (sizes::G1_LEN - 32),
+                    "expected 5·(G1_LEN - G1_C) = 160 bytes saved at rounds={rounds}",
+                );
+            }
+        }
+
+        #[test]
+        fn proof_decompress_rejects_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; HyperPlonkProof::MIN_COMPRESSED_LEN - 1];
+            let r = HyperPlonkProof::decompress_to_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_decompress_rejects_oversized_rounds_counter() {
+            let backend = HostBackend::new();
+            let mut buf = vec![0u8; HyperPlonkProof::MIN_COMPRESSED_LEN];
+            // Set sumcheck_rounds = MAX + 1 at fixed offset 128.
+            let bad = sizes::MAX_SUMCHECK_ROUNDS + 1;
+            buf[128..132].copy_from_slice(&bad.to_le_bytes());
+            let r = HyperPlonkProof::decompress_to_canonical_bytes(&backend, &buf);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_compress_rejects_canonical_with_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; sizes::MIN_PROOF_LEN - 1];
+            let r =
+                HyperPlonkProof::compress_from_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_decompress_rejects_off_curve_g1() {
+            // Random non-zero bytes will (almost certainly) fail
+            // sqrt-decompression at the syscall.
+            let backend = HostBackend::new();
+            let mut buf = vec![0u8; HyperPlonkProof::MIN_COMPRESSED_LEN];
+            // First compressed G1 byte non-zero / non-curve.
+            buf[0] = 0xAB;
+            buf[1] = 0xCD;
+            let r = HyperPlonkProof::decompress_to_canonical_bytes(&backend, &buf);
+            // Either decompress fails (off-curve) or length check
+            // catches the pad earlier — both are valid rejections.
+            assert!(r.is_err());
+        }
+
+        // ── VK tests ────────────────────────────────────────────────
+
+        #[test]
+        fn vk_round_trip_with_real_generators() {
+            let backend = HostBackend::new();
+            let canonical = realistic_vk_bytes();
+            assert_eq!(canonical.len(), HyperPlonkVerifyingKey::SERIALIZED_LEN);
+            let compressed =
+                HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                    .expect("vk compress");
+            assert_eq!(compressed.len(), HyperPlonkVerifyingKey::COMPRESSED_LEN);
+            let decoded =
+                HyperPlonkVerifyingKey::from_compressed_bytes(&backend, &compressed)
+                    .expect("vk decompress");
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn vk_compressed_saves_320_bytes() {
+            let backend = HostBackend::new();
+            let canonical = realistic_vk_bytes();
+            let compressed =
+                HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                    .unwrap();
+            assert_eq!(canonical.len(), 744);
+            assert_eq!(compressed.len(), 424);
+            assert_eq!(canonical.len() - compressed.len(), 320);
+        }
+
+        #[test]
+        fn vk_compressed_preserves_non_curve_fields_byte_for_byte() {
+            let backend = HostBackend::new();
+            let canonical = realistic_vk_bytes();
+            let compressed =
+                HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                    .unwrap();
+
+            // n_public + num_variables (8 bytes pass-through).
+            assert_eq!(compressed[0..8], canonical[0..8]);
+
+            // 3 Fr coset constants at the tail (96 bytes pass-through).
+            let canon_k_off = canonical.len() - 3 * sizes::FR_LEN;
+            let comp_k_off = compressed.len() - 3 * sizes::FR_LEN;
+            assert_eq!(
+                compressed[comp_k_off..],
+                canonical[canon_k_off..],
+                "k_1, k_2, k_3 must pass through unchanged",
+            );
+        }
+
+        #[test]
+        fn vk_decompress_rejects_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; HyperPlonkVerifyingKey::COMPRESSED_LEN - 1];
+            let r =
+                HyperPlonkVerifyingKey::from_compressed_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+        }
+
+        #[test]
+        fn vk_compress_rejects_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; HyperPlonkVerifyingKey::SERIALIZED_LEN - 1];
+            let r =
+                HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+        }
+
+        #[test]
+        fn vk_decompress_rejects_off_curve_g2() {
+            // Non-zero non-curve bytes for G2 → syscall rejects.
+            let backend = HostBackend::new();
+            let mut buf = vec![0u8; HyperPlonkVerifyingKey::COMPRESSED_LEN];
+            // Compressed G2 starts at offset 8; first byte non-zero.
+            buf[8] = 0xAB;
+            let r = HyperPlonkVerifyingKey::from_compressed_bytes(&backend, &buf);
+            assert!(r.is_err());
+        }
+
+        /// Round-trip stability under bit-level perturbation of the
+        /// pass-through region (n_public, num_variables, k_1..k_3).
+        /// Exhausts the fact that compression touches only the curve
+        /// fields; non-curve bytes survive unchanged.
+        proptest! {
+            #[test]
+            fn proptest_vk_pass_through_bits_survive_compression(
+                np in 0u32..=8,
+                nv in 0u32..=20,
+                k1_byte in any::<u8>(),
+                k2_byte in any::<u8>(),
+                k3_byte in any::<u8>(),
+            ) {
+                let backend = HostBackend::new();
+                let g1_gen = g1_generator_bytes();
+                let g2_gen = g2_generator_bytes();
+                // Build a VK with curve fields = generator and Fr cosets
+                // filled with the random bytes (still inside Fr range
+                // because top byte is < 0x73 for any single-byte fill).
+                let vk = HyperPlonkVerifyingKey {
+                    n_public: np,
+                    num_variables: nv,
+                    x2_g2: g2_gen,
+                    q_m_g1: g1_gen,
+                    q_l_g1: g1_gen,
+                    q_r_g1: g1_gen,
+                    q_o_g1: g1_gen,
+                    q_c_g1: g1_gen,
+                    sigma_1_g1: g1_gen,
+                    sigma_2_g1: g1_gen,
+                    sigma_3_g1: g1_gen,
+                    // Force top byte to 0 to stay strictly below the
+                    // BN254 modulus (< 0x3064...). Lower 31 bytes use
+                    // the random fill.
+                    k_1: { let mut a = [0u8; 32]; a[1..].fill(k1_byte); a },
+                    k_2: { let mut a = [0u8; 32]; a[1..].fill(k2_byte); a },
+                    k_3: { let mut a = [0u8; 32]; a[1..].fill(k3_byte); a },
+                };
+                let canonical = vk.to_bytes();
+                let compressed =
+                    HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                        .unwrap();
+                let decoded =
+                    HyperPlonkVerifyingKey::from_compressed_bytes(&backend, &compressed)
+                        .unwrap();
+                prop_assert_eq!(decoded, canonical);
+            }
         }
     }
 }

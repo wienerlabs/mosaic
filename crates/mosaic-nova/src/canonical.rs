@@ -50,7 +50,7 @@
 
 use alloc::vec::Vec;
 use ark_bn254::Fr;
-use mosaic_core::OnChainError;
+use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::field::fr_from_canonical_bytes;
 
 /// Size + cap constants for the Nova canonical layout.
@@ -293,6 +293,254 @@ impl<'a> NovaFoldingProof<'a> {
     }
 }
 
+/// **Session 114** — Nova / `HyperNova` / `ProtoStar` proof compression.
+///
+/// Nova proof shape (canonical):
+///   Fixed: 16 (header) + 3·G1 (E/W/T) + Fr (u) + 4·G1 (base commits)
+///          + 4·Fr (Hadamard) + Fr (w_eval) + 2·G1 (openings)
+///   Variable: `num_aux × G1` aux commits + `n_public × Fr` PI
+///
+/// G1 commit count = `9 + num_aux` (3 fixed + 4 base + 2 opening + variable aux).
+///
+/// Saving: `(9 + num_aux) × 32` bytes per proof. For the typical Nova
+/// shape (`num_aux = 0`, `n_public = 4`): **288 bytes saved (≈ 36 %)**.
+/// For HyperNova with `num_aux = 4`: **416 bytes saved (≈ 50 %)**.
+///
+/// CU cost: `(9 + num_aux) × ~10 K = 90 K + 10 K · num_aux`. The
+/// existing Nova verifier estimate is ~885 K CU, so decompression
+/// adds ~10 % overhead at typical shapes.
+impl NovaFoldingProof<'_> {
+    /// G1 length under the alt_bn128 compressed encoding.
+    const G1_COMPRESSED_LEN: usize = 32;
+
+    /// Compute the compressed proof length for given (num_aux, n_public).
+    ///
+    /// Returns `None` when either counter exceeds its canonical
+    /// `MAX_*` cap.
+    #[must_use]
+    pub fn compressed_len_for_shape(num_aux: u8, n_public: u16) -> Option<usize> {
+        use sizes::{
+            FIXED_HEADER_LEN, FR_LEN, HADAMARD_EVALS_LEN, MAX_AUX_COMMITS,
+            MAX_PUBLIC_INPUTS, SCALAR_LEN, W_EVAL_LEN,
+        };
+        if num_aux > MAX_AUX_COMMITS || n_public > MAX_PUBLIC_INPUTS {
+            return None;
+        }
+        const G1_C: usize = NovaFoldingProof::G1_COMPRESSED_LEN;
+        let total = FIXED_HEADER_LEN
+            + 3 * G1_C // E, W, T
+            + SCALAR_LEN
+            + 4 * G1_C // base e_1, e_2, w_1, w_2
+            + HADAMARD_EVALS_LEN
+            + W_EVAL_LEN
+            + (num_aux as usize) * G1_C
+            + (n_public as usize) * FR_LEN
+            + 2 * G1_C; // w_xi, w_xiw
+        Some(total)
+    }
+
+    /// Decompress a compressed-format Nova proof into the canonical
+    /// uncompressed wire format.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — buffer too small to
+    ///   parse the header, declared `num_aux_commits` / `n_public`
+    ///   exceed the canonical caps, or input length disagrees with
+    ///   `compressed_len_for_shape(num_aux, n_public)`.
+    /// - [`OnChainError::UnknownProofSystem`] — variant byte not in
+    ///   `{0, 1, 2}`.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any G1
+    ///   commit fails decompression.
+    pub fn decompress_to_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        compressed: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{
+            FIXED_HEADER_LEN, FR_LEN, G1_LEN, HADAMARD_EVALS_LEN, MAX_AUX_COMMITS,
+            MAX_PUBLIC_INPUTS, SCALAR_LEN, W_EVAL_LEN,
+        };
+        const G1_C: usize = 32;
+
+        // Minimum compressed buffer must hold at least the header +
+        // fixed compressed regions.
+        let min_compressed = FIXED_HEADER_LEN
+            + 3 * G1_C
+            + SCALAR_LEN
+            + 4 * G1_C
+            + HADAMARD_EVALS_LEN
+            + W_EVAL_LEN
+            + 2 * G1_C;
+        if compressed.len() < min_compressed {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        // Parse header (same offsets as canonical).
+        let _variant = FoldingVariant::from_byte(compressed[0])?;
+        let num_aux_commits = compressed[1];
+        let n_public = u16::from_le_bytes([compressed[2], compressed[3]]);
+
+        if num_aux_commits > MAX_AUX_COMMITS || n_public > MAX_PUBLIC_INPUTS {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        let expected_clen = Self::compressed_len_for_shape(num_aux_commits, n_public)
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        if compressed.len() != expected_clen {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+
+        // Build canonical buffer.
+        let aux_len = (num_aux_commits as usize) * G1_LEN;
+        let pi_len = (n_public as usize) * FR_LEN;
+        let canonical_len = FIXED_HEADER_LEN
+            + 3 * G1_LEN
+            + SCALAR_LEN
+            + 4 * G1_LEN
+            + HADAMARD_EVALS_LEN
+            + W_EVAL_LEN
+            + aux_len
+            + pi_len
+            + 2 * G1_LEN;
+        let mut out: Vec<u8> = Vec::with_capacity(canonical_len);
+
+        // Header pass-through (16 bytes).
+        out.extend_from_slice(&compressed[..FIXED_HEADER_LEN]);
+        let mut o = FIXED_HEADER_LEN;
+
+        // 3 fixed G1 commits (E, W, T).
+        for _ in 0..3 {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+
+        // u (Fr) pass-through.
+        out.extend_from_slice(&compressed[o..o + SCALAR_LEN]);
+        o += SCALAR_LEN;
+
+        // 4 base G1 commits.
+        for _ in 0..4 {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+
+        // Hadamard evals + w_eval pass-through.
+        out.extend_from_slice(&compressed[o..o + HADAMARD_EVALS_LEN + W_EVAL_LEN]);
+        o += HADAMARD_EVALS_LEN + W_EVAL_LEN;
+
+        // num_aux variable G1 commits.
+        for _ in 0..(num_aux_commits as usize) {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+
+        // public_inputs pass-through.
+        out.extend_from_slice(&compressed[o..o + pi_len]);
+        o += pi_len;
+
+        // 2 trailing G1 (w_xi, w_xiw).
+        for _ in 0..2 {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+
+        debug_assert_eq!(out.len(), canonical_len);
+        Ok(out)
+    }
+
+    /// Compress a canonical Nova proof byte buffer.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::ProofLengthMismatch`] — input fails canonical
+    ///   `from_bytes` validation.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any G1
+    ///   commit fails compression (off-curve, etc.).
+    pub fn compress_from_canonical_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        use sizes::{
+            FIXED_HEADER_LEN, FR_LEN, G1_LEN, HADAMARD_EVALS_LEN, SCALAR_LEN, W_EVAL_LEN,
+        };
+
+        // Re-use canonical parser for length / shape validation.
+        let view = NovaFoldingProof::from_bytes(canonical)?;
+        let expected_clen =
+            Self::compressed_len_for_shape(view.num_aux_commits, view.n_public)
+                .ok_or(OnChainError::ProofLengthMismatch)?;
+        let mut out: Vec<u8> = Vec::with_capacity(expected_clen);
+
+        // Header pass-through.
+        out.extend_from_slice(&canonical[..FIXED_HEADER_LEN]);
+        let mut o = FIXED_HEADER_LEN;
+
+        // 3 fixed G1 commits.
+        for _ in 0..3 {
+            let mut arr = [0u8; G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += G1_LEN;
+        }
+
+        // u (Fr) pass-through.
+        out.extend_from_slice(&canonical[o..o + SCALAR_LEN]);
+        o += SCALAR_LEN;
+
+        // 4 base G1 commits.
+        for _ in 0..4 {
+            let mut arr = [0u8; G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += G1_LEN;
+        }
+
+        // Hadamard evals + w_eval pass-through.
+        out.extend_from_slice(&canonical[o..o + HADAMARD_EVALS_LEN + W_EVAL_LEN]);
+        o += HADAMARD_EVALS_LEN + W_EVAL_LEN;
+
+        // Variable aux G1 commits.
+        for _ in 0..(view.num_aux_commits as usize) {
+            let mut arr = [0u8; G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += G1_LEN;
+        }
+
+        // public_inputs pass-through.
+        let pi_len = (view.n_public as usize) * FR_LEN;
+        out.extend_from_slice(&canonical[o..o + pi_len]);
+        o += pi_len;
+
+        // 2 trailing G1 commits.
+        for _ in 0..2 {
+            let mut arr = [0u8; G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += G1_LEN;
+        }
+
+        debug_assert_eq!(out.len(), expected_clen);
+        Ok(out)
+    }
+}
+
 /// Nova / `HyperNova` / `ProtoStar` verifying key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NovaFoldingVerifyingKey {
@@ -372,6 +620,139 @@ impl NovaFoldingVerifyingKey {
         out.extend_from_slice(&self.c_comm);
         out.extend_from_slice(&self.cs_digest);
         out
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Session 114 — Nova VK compression utilities.
+    //
+    // VK shape (canonical):
+    //   1 (variant) + 2 (n_public) + 4 (n_constraints) = 7 byte header
+    //   + 128 (x2_g2 G2)
+    //   + 3·64 (a/b/c_comm G1)
+    //   + 32 (cs_digest)
+    //   = 7 + 128 + 192 + 32 = 359 bytes
+    //
+    // VK shape (compressed):
+    //   7 (header) + 64 (G2) + 3·32 (G1) + 32 (cs_digest)
+    //   = 7 + 64 + 96 + 32 = 199 bytes
+    // Saving: 160 bytes (44.6 %)
+    //
+    // CU cost per `from_compressed_bytes`: 3 × ~10 K (G1) + 1 × ~12 K
+    // (G2) = ~42 K CU. Cached aggressively per circuit so overhead is
+    // amortized.
+    //
+    // Wire-format layout (compressed):
+    //   |   0 |   1 | variant (u8)                   |
+    //   |   1 |   2 | n_public (u16 LE)              |
+    //   |   3 |   4 | n_constraints (u32 LE)         |
+    //   |   7 |  64 | compressed G2: x2_g2           |
+    //   |  71 |  32 | compressed G1: a_comm          |
+    //   | 103 |  32 | compressed G1: b_comm          |
+    //   | 135 |  32 | compressed G1: c_comm          |
+    //   | 167 |  32 | cs_digest                      |
+    //   = 199 bytes total
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Compressed VK byte length.
+    pub const COMPRESSED_LEN: usize = 1 + 2 + 4 + 64 + 3 * 32 + 32;
+
+    /// Decompress a compressed Nova VK byte buffer into the canonical
+    /// 359-byte uncompressed wire format.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::VerifyingKeyLengthMismatch`] — input is not
+    ///   exactly `COMPRESSED_LEN` (199) bytes.
+    /// - [`OnChainError::UnknownProofSystem`] — variant byte not in
+    ///   `{0, 1, 2}`.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any of
+    ///   the 3 G1 commits or the G2 SRS element fails decompression.
+    pub fn from_compressed_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        compressed: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        const G1_C: usize = 32;
+        const G2_C: usize = 64;
+        if compressed.len() != Self::COMPRESSED_LEN {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+        // Eagerly reject unknown variant — surface
+        // `UnknownProofSystem` rather than `VerifyingKeyLengthMismatch`
+        // for malformed bytes that happen to have the right length.
+        let _variant = FoldingVariant::from_byte(compressed[0])?;
+
+        let mut out = Vec::with_capacity(Self::SERIALIZED_LEN);
+        // 7-byte header pass-through (variant + n_public + n_constraints).
+        out.extend_from_slice(&compressed[0..7]);
+
+        // Decompress G2 (x2_g2 at offset 7..71).
+        let mut g2_arr = [0u8; G2_C];
+        g2_arr.copy_from_slice(&compressed[7..7 + G2_C]);
+        let g2_full = mosaic_zk_primitives::compression::decompress_g2(backend, &g2_arr)?;
+        out.extend_from_slice(&g2_full);
+
+        // Decompress 3 G1 commits.
+        let mut o = 7 + G2_C;
+        for _ in 0..3 {
+            let mut arr = [0u8; G1_C];
+            arr.copy_from_slice(&compressed[o..o + G1_C]);
+            let full = mosaic_zk_primitives::compression::decompress_g1(backend, &arr)?;
+            out.extend_from_slice(&full);
+            o += G1_C;
+        }
+
+        // cs_digest pass-through (last 32 bytes).
+        out.extend_from_slice(&compressed[o..o + 32]);
+        debug_assert_eq!(out.len(), Self::SERIALIZED_LEN);
+        Ok(out)
+    }
+
+    /// Compress a canonical 359-byte Nova VK byte buffer.
+    ///
+    /// ## Errors
+    ///
+    /// - [`OnChainError::VerifyingKeyLengthMismatch`] — input is not
+    ///   exactly `SERIALIZED_LEN` (359) bytes.
+    /// - [`OnChainError::UnknownProofSystem`] — variant byte not in
+    ///   `{0, 1, 2}`.
+    /// - [`OnChainError::AltBn128CompressionSyscallFailed`] — any of
+    ///   the 3 G1 commits or the G2 SRS element fails compression.
+    pub fn to_compressed_bytes<B: SyscallBackend + ?Sized>(
+        backend: &B,
+        canonical: &[u8],
+    ) -> Result<Vec<u8>, OnChainError> {
+        const G2_C: usize = 64;
+        if canonical.len() != Self::SERIALIZED_LEN {
+            return Err(OnChainError::VerifyingKeyLengthMismatch);
+        }
+        // Eagerly reject unknown variant.
+        let _variant = FoldingVariant::from_byte(canonical[0])?;
+
+        let mut out = Vec::with_capacity(Self::COMPRESSED_LEN);
+        // 7-byte header pass-through.
+        out.extend_from_slice(&canonical[0..7]);
+
+        // Compress G2 (x2_g2 starts at offset 7, 128 bytes).
+        let mut g2_arr = [0u8; sizes::G2_LEN];
+        g2_arr.copy_from_slice(&canonical[7..7 + sizes::G2_LEN]);
+        let g2_c = mosaic_zk_primitives::compression::compress_g2(backend, &g2_arr)?;
+        debug_assert_eq!(g2_c.len(), G2_C);
+        out.extend_from_slice(&g2_c);
+
+        // Compress 3 G1 commits.
+        let mut o = 7 + sizes::G2_LEN;
+        for _ in 0..3 {
+            let mut arr = [0u8; sizes::G1_LEN];
+            arr.copy_from_slice(&canonical[o..o + sizes::G1_LEN]);
+            let c = mosaic_zk_primitives::compression::compress_g1(backend, &arr)?;
+            out.extend_from_slice(&c);
+            o += sizes::G1_LEN;
+        }
+
+        // cs_digest pass-through.
+        out.extend_from_slice(&canonical[o..o + 32]);
+        debug_assert_eq!(out.len(), Self::COMPRESSED_LEN);
+        Ok(out)
     }
 }
 
@@ -755,6 +1136,287 @@ mod tests {
                 NovaFoldingVerifyingKey::from_bytes(&bytes),
                 Err(OnChainError::UnknownProofSystem),
             ));
+        }
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Session 114 — Nova compressed proof + VK round-trip tests.
+    //
+    // Nova proof shape: variable G1 count (= 9 + num_aux) + Fr regions.
+    //   Saving: (9 + num_aux) × 32 bytes per proof.
+    //   At Nova(num_aux=0, n_public=4): 288 B saved (≈36 %).
+    //
+    // Nova VK shape: 7-byte header + 1 G2 + 3 G1 + 32 byte digest.
+    //   Uncompressed: 359 B   Compressed: 199 B   Saving: 160 B (≈45 %).
+    // ───────────────────────────────────────────────────────────────────
+    mod compression {
+        use super::*;
+        use mosaic_core::syscall::host::HostBackend;
+        use mosaic_zk_primitives::g1_consts::{g1_generator_bytes, g2_generator_bytes};
+
+        /// Build a realistic proof with all G1 commits = generator,
+        /// Fr regions = 0. Decompression must succeed (generator is
+        /// on-curve).
+        fn realistic_proof(variant: FoldingVariant, num_aux: u8, n_public: u16) -> Vec<u8> {
+            let g1_gen = g1_generator_bytes();
+            let aux_len = (num_aux as usize) * G1_LEN;
+            let pi_len = (n_public as usize) * FR_LEN;
+            let total = FIXED_HEADER_LEN
+                + 3 * G1_LEN
+                + SCALAR_LEN
+                + 4 * G1_LEN
+                + HADAMARD_EVALS_LEN
+                + W_EVAL_LEN
+                + aux_len
+                + pi_len
+                + 2 * G1_LEN;
+            let mut buf = vec![0u8; total];
+            buf[0] = variant as u8;
+            buf[1] = num_aux;
+            buf[2..4].copy_from_slice(&n_public.to_le_bytes());
+
+            // Fill all G1 slots with generator bytes. Slot offsets:
+            //   E/W/T at FIXED_HEADER_LEN
+            //   base_e_1..base_w_2 after SCALAR_LEN
+            //   aux after HADAMARD_EVALS_LEN + W_EVAL_LEN
+            //   w_xi/w_xiw at end
+            let mut o = FIXED_HEADER_LEN;
+            for _ in 0..3 {
+                buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+                o += G1_LEN;
+            }
+            o += SCALAR_LEN; // u (Fr) stays zero
+            for _ in 0..4 {
+                buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+                o += G1_LEN;
+            }
+            o += HADAMARD_EVALS_LEN + W_EVAL_LEN;
+            for _ in 0..(num_aux as usize) {
+                buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+                o += G1_LEN;
+            }
+            o += pi_len;
+            for _ in 0..2 {
+                buf[o..o + G1_LEN].copy_from_slice(&g1_gen);
+                o += G1_LEN;
+            }
+            debug_assert_eq!(o, total);
+            buf
+        }
+
+        fn realistic_vk_bytes(variant: FoldingVariant) -> Vec<u8> {
+            let g1_gen = g1_generator_bytes();
+            let g2_gen = g2_generator_bytes();
+            NovaFoldingVerifyingKey {
+                variant,
+                n_public: 4,
+                n_constraints: 1024,
+                x2_g2: g2_gen,
+                a_comm: g1_gen,
+                b_comm: g1_gen,
+                c_comm: g1_gen,
+                cs_digest: [0xCD; 32],
+            }
+            .to_bytes()
+        }
+
+        // ── Proof tests ─────────────────────────────────────────────
+
+        #[test]
+        fn proof_round_trip_nova_default_shape() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof(FoldingVariant::Nova, 0, 4);
+            let compressed =
+                NovaFoldingProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .expect("compress");
+            assert_eq!(
+                compressed.len(),
+                NovaFoldingProof::compressed_len_for_shape(0, 4).unwrap()
+            );
+            let decoded =
+                NovaFoldingProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .expect("decompress");
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_round_trip_hypernova_with_aux() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof(FoldingVariant::HyperNova, 4, 2);
+            let compressed =
+                NovaFoldingProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            let decoded =
+                NovaFoldingProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_round_trip_protostar() {
+            let backend = HostBackend::new();
+            let canonical = realistic_proof(FoldingVariant::ProtoStar, 2, 1);
+            let compressed =
+                NovaFoldingProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+            let decoded =
+                NovaFoldingProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn proof_compressed_saves_proportional_to_aux_count() {
+            let backend = HostBackend::new();
+            for &num_aux in &[0u8, 1, 2, 4, 8] {
+                let canonical = realistic_proof(FoldingVariant::HyperNova, num_aux, 2);
+                let compressed = NovaFoldingProof::compress_from_canonical_bytes(
+                    &backend, &canonical,
+                )
+                .unwrap();
+                let expected_save = (9 + num_aux as usize) * (G1_LEN - 32);
+                assert_eq!(
+                    canonical.len() - compressed.len(),
+                    expected_save,
+                    "expected {expected_save} bytes saved at num_aux={num_aux}",
+                );
+            }
+        }
+
+        #[test]
+        fn proof_decompress_rejects_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; 10];
+            let r = NovaFoldingProof::decompress_to_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_decompress_rejects_unknown_variant() {
+            let backend = HostBackend::new();
+            // Build a buffer the right length for (Nova, 0, 4) shape, then
+            // overwrite variant byte to 0xFF.
+            let mut buf = vec![
+                0u8;
+                NovaFoldingProof::compressed_len_for_shape(0, 4).unwrap()
+            ];
+            buf[0] = 0xFF;
+            let r = NovaFoldingProof::decompress_to_canonical_bytes(&backend, &buf);
+            assert!(matches!(r, Err(OnChainError::UnknownProofSystem)));
+        }
+
+        #[test]
+        fn proof_decompress_rejects_oversized_aux_counter() {
+            let backend = HostBackend::new();
+            let len = NovaFoldingProof::compressed_len_for_shape(0, 4).unwrap();
+            let mut buf = vec![0u8; len];
+            buf[0] = FoldingVariant::Nova as u8;
+            // Set num_aux beyond MAX_AUX_COMMITS.
+            buf[1] = sizes::MAX_AUX_COMMITS + 1;
+            buf[2..4].copy_from_slice(&4u16.to_le_bytes());
+            let r = NovaFoldingProof::decompress_to_canonical_bytes(&backend, &buf);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        #[test]
+        fn proof_compress_rejects_canonical_with_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; 10];
+            let r = NovaFoldingProof::compress_from_canonical_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::ProofLengthMismatch)));
+        }
+
+        // ── VK tests ────────────────────────────────────────────────
+
+        #[test]
+        fn vk_round_trip_with_real_generators() {
+            let backend = HostBackend::new();
+            let canonical = realistic_vk_bytes(FoldingVariant::Nova);
+            assert_eq!(canonical.len(), NovaFoldingVerifyingKey::SERIALIZED_LEN);
+            let compressed =
+                NovaFoldingVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                    .expect("vk compress");
+            assert_eq!(compressed.len(), NovaFoldingVerifyingKey::COMPRESSED_LEN);
+            let decoded =
+                NovaFoldingVerifyingKey::from_compressed_bytes(&backend, &compressed)
+                    .expect("vk decompress");
+            assert_eq!(decoded, canonical);
+        }
+
+        #[test]
+        fn vk_compressed_saves_160_bytes() {
+            let backend = HostBackend::new();
+            for variant in [
+                FoldingVariant::Nova,
+                FoldingVariant::HyperNova,
+                FoldingVariant::ProtoStar,
+            ] {
+                let canonical = realistic_vk_bytes(variant);
+                let compressed =
+                    NovaFoldingVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                        .unwrap();
+                assert_eq!(canonical.len(), 359);
+                assert_eq!(compressed.len(), 199);
+                assert_eq!(canonical.len() - compressed.len(), 160);
+            }
+        }
+
+        #[test]
+        fn vk_compressed_preserves_non_curve_fields_byte_for_byte() {
+            let backend = HostBackend::new();
+            let canonical = realistic_vk_bytes(FoldingVariant::HyperNova);
+            let compressed =
+                NovaFoldingVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                    .unwrap();
+            // 7-byte header pass-through.
+            assert_eq!(compressed[0..7], canonical[0..7]);
+            // cs_digest: trailing 32 bytes pass-through.
+            assert_eq!(
+                compressed[compressed.len() - 32..],
+                canonical[canonical.len() - 32..],
+                "cs_digest must pass through unchanged",
+            );
+        }
+
+        #[test]
+        fn vk_decompress_rejects_wrong_length() {
+            let backend = HostBackend::new();
+            let too_short = vec![0u8; NovaFoldingVerifyingKey::COMPRESSED_LEN - 1];
+            let r =
+                NovaFoldingVerifyingKey::from_compressed_bytes(&backend, &too_short);
+            assert!(matches!(r, Err(OnChainError::VerifyingKeyLengthMismatch)));
+        }
+
+        #[test]
+        fn vk_decompress_rejects_unknown_variant() {
+            let backend = HostBackend::new();
+            let mut buf = vec![0u8; NovaFoldingVerifyingKey::COMPRESSED_LEN];
+            buf[0] = 0xFF; // unknown variant
+            let r = NovaFoldingVerifyingKey::from_compressed_bytes(&backend, &buf);
+            assert!(matches!(r, Err(OnChainError::UnknownProofSystem)));
+        }
+
+        #[test]
+        fn vk_compress_rejects_unknown_variant() {
+            let backend = HostBackend::new();
+            let mut canonical = realistic_vk_bytes(FoldingVariant::Nova);
+            canonical[0] = 0xFE; // unknown variant
+            let r = NovaFoldingVerifyingKey::to_compressed_bytes(&backend, &canonical);
+            assert!(matches!(r, Err(OnChainError::UnknownProofSystem)));
+        }
+
+        #[test]
+        fn vk_decompress_rejects_off_curve_g2() {
+            let backend = HostBackend::new();
+            let mut buf = vec![0u8; NovaFoldingVerifyingKey::COMPRESSED_LEN];
+            buf[0] = FoldingVariant::Nova as u8;
+            buf[1..3].copy_from_slice(&4u16.to_le_bytes());
+            buf[3..7].copy_from_slice(&1024u32.to_le_bytes());
+            // G2 starts at offset 7. Non-zero non-generator → off-curve.
+            buf[7] = 0xAB;
+            buf[8] = 0xCD;
+            let r = NovaFoldingVerifyingKey::from_compressed_bytes(&backend, &buf);
+            assert!(r.is_err());
         }
     }
 }

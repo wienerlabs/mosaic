@@ -10,6 +10,68 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-05-02 — v0.9.13-phase3-compression release (session 114)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.13-phase3-compression`](https://github.com/wienerlabs/labs/tag/v0.9.13-phase3-compression) |
+| Auditor | Internal (Wiener Labs) — pre-mainnet sprint, week 1/1 |
+| Scope | alt_bn128 compression API extended to HyperPlonk + Nova / HyperNova / ProtoStar verifiers. STARK family is field-only and not in scope for alt_bn128. |
+| Findings | None — clean delta from v0.9.12. |
+| Status | ✅ Every BN254 verifier now has a documented compression round-trip + 4 new fuzz harnesses + 4 new criterion benches. |
+
+### Compression infrastructure status at v0.9.13
+
+| Layer | Coverage |
+|---|---|
+| Syscall (s103-104) | Host + SBF backends ✓ |
+| Typed helpers (s104) | compress_g1/g2, decompress_g1/g2 ✓ |
+| Phase-2 verifier consumers (s106-110) | Halo2 + Groth16 + PLONK proof + VK ✓ |
+| **Phase-3 verifier consumers (s114)** | **HyperPlonk + Nova proof + VK ✓** |
+| Phase-3 STARK | N/A (field-only, no curve points) |
+| Lib tests (s106-114) | **59 round-trip + reject tests** (was 30) ✓ |
+| Fuzz (s111+s114) | **10 panic-free harnesses** (was 6), PR + nightly CI ✓ |
+| Criterion bench (s112+s114) | **14 cost-characteristic measurements** (was 10) ✓ |
+| SBF on-chain CU bench | (planned session 116) |
+| External audit | (pending) |
+
+### Lib test totals at v0.9.13
+
+683 (workspace baseline) + 14 (HyperPlonk compression) + 15 (Nova
+compression) = **712 total** lib tests.
+
+### What this milestone DOES change
+
+- 8 new public API methods (4 surfaces × 2 verifiers): `compress_*` /
+  `decompress_*` round-trips for HyperPlonk + Nova proofs and VKs.
+- 2 new `COMPRESSED_LEN` constants (424 B for HyperPlonk VK; 199 B
+  for Nova VK).
+- 2 new shape-helper functions: `compressed_len_for_rounds`
+  (HyperPlonk, dynamic on sumcheck round count) and
+  `compressed_len_for_shape` (Nova, dynamic on `(num_aux, n_public)`).
+- 4 new fuzz harnesses + CI matrix entries (PR + nightly).
+- 4 new criterion benches.
+- Cargo workspace bumped from `0.9.12-sbf-coverage` to
+  `0.9.13-phase3-compression`.
+
+### What this milestone does NOT change
+
+Verifier behavior, on-chain CU consumption, canonical wire format,
+or the public `ProofSystem::verify` signature. The compressed format
+is wire-format only; the on-chain verifier still accepts canonical
+uncompressed bytes. An `verify_compressed_proof` instruction will
+land in session 116.
+
+### STARK exclusion (audit note)
+
+The `mosaic-stark` crate is intentionally excluded from this
+milestone. STARK proofs over Goldilocks / BabyBear / Mersenne31 carry
+no BN254 curve points; alt_bn128 compression is not applicable.
+Bandwidth optimization for FRI-STARK is tracked separately under
+issue #44 (field-element packing + Merkle path digest deduplication).
+
+---
+
 ## 2026-05-02 — v0.9.12-sbf-coverage release (session 113)
 
 | Field | Value |

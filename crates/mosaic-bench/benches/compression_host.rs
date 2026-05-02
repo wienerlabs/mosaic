@@ -328,6 +328,199 @@ fn bench_halo2_proof_round_trip(c: &mut Criterion) {
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// Session 114 — Phase-3 round-trip benches.
+//
+// Mirrors the Phase-2 layout above for HyperPlonk and Nova. STARK has
+// no BN254 curve points so alt_bn128 compression is not applicable.
+// ──────────────────────────────────────────────────────────────────────
+
+fn bench_hyperplonk_proof_round_trip(c: &mut Criterion) {
+    use mosaic_hyperplonk::canonical::sizes;
+    use mosaic_hyperplonk::canonical::HyperPlonkProof;
+
+    let backend = HostBackend::new();
+    let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+
+    // Realistic HyperPlonk proof at sumcheck_rounds = 10 (= 2^10 circuit).
+    let rounds: u32 = 10;
+    let polys_len = (rounds as usize) * sizes::SUMCHECK_POLY_LEN;
+    let total = 4 * sizes::G1_LEN
+        + 4
+        + polys_len
+        + sizes::FINAL_EVALS * sizes::FR_LEN
+        + sizes::G1_LEN;
+    let mut canonical = vec![0u8; total];
+    let mut o = 0;
+    for _ in 0..4 {
+        canonical[o..o + sizes::G1_LEN].copy_from_slice(&g1_gen);
+        o += sizes::G1_LEN;
+    }
+    canonical[o..o + 4].copy_from_slice(&rounds.to_le_bytes());
+    o += 4 + polys_len + sizes::FINAL_EVALS * sizes::FR_LEN;
+    canonical[o..o + sizes::G1_LEN].copy_from_slice(&g1_gen);
+
+    c.bench_function("hyperplonk_proof_compress_host_r10", |b| {
+        b.iter(|| {
+            let _ =
+                HyperPlonkProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+        });
+    });
+
+    let compressed =
+        HyperPlonkProof::compress_from_canonical_bytes(&backend, &canonical).unwrap();
+    c.bench_function("hyperplonk_proof_decompress_host_r10", |b| {
+        b.iter(|| {
+            let _ =
+                HyperPlonkProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+        });
+    });
+}
+
+fn bench_hyperplonk_vk_round_trip(c: &mut Criterion) {
+    use mosaic_hyperplonk::canonical::HyperPlonkVerifyingKey;
+
+    let backend = HostBackend::new();
+    let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+    let g2_gen = mosaic_zk_primitives::g1_consts::g2_generator_bytes();
+
+    let canonical = HyperPlonkVerifyingKey {
+        n_public: 3,
+        num_variables: 10,
+        x2_g2: g2_gen,
+        q_m_g1: g1_gen,
+        q_l_g1: g1_gen,
+        q_r_g1: g1_gen,
+        q_o_g1: g1_gen,
+        q_c_g1: g1_gen,
+        sigma_1_g1: g1_gen,
+        sigma_2_g1: g1_gen,
+        sigma_3_g1: g1_gen,
+        k_1: HyperPlonkVerifyingKey::fr_be_from_u64(1),
+        k_2: HyperPlonkVerifyingKey::fr_be_from_u64(2),
+        k_3: HyperPlonkVerifyingKey::fr_be_from_u64(3),
+    }
+    .to_bytes();
+
+    c.bench_function("hyperplonk_vk_compress_host", |b| {
+        b.iter(|| {
+            let _ =
+                HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                    .unwrap();
+        });
+    });
+
+    let compressed =
+        HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &canonical).unwrap();
+    c.bench_function("hyperplonk_vk_decompress_host", |b| {
+        b.iter(|| {
+            let _ = HyperPlonkVerifyingKey::from_compressed_bytes(&backend, &compressed)
+                .unwrap();
+        });
+    });
+}
+
+fn bench_nova_proof_round_trip(c: &mut Criterion) {
+    use mosaic_nova::canonical::{sizes, FoldingVariant, NovaFoldingProof};
+
+    let backend = HostBackend::new();
+    let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+
+    // Realistic Nova proof: variant=Nova, num_aux=0, n_public=4.
+    let variant = FoldingVariant::Nova;
+    let num_aux: u8 = 0;
+    let n_public: u16 = 4;
+    let aux_len = (num_aux as usize) * sizes::G1_LEN;
+    let pi_len = (n_public as usize) * sizes::FR_LEN;
+    let total = sizes::FIXED_HEADER_LEN
+        + 3 * sizes::G1_LEN
+        + sizes::SCALAR_LEN
+        + 4 * sizes::G1_LEN
+        + sizes::HADAMARD_EVALS_LEN
+        + sizes::W_EVAL_LEN
+        + aux_len
+        + pi_len
+        + 2 * sizes::G1_LEN;
+    let mut canonical = vec![0u8; total];
+    canonical[0] = variant as u8;
+    canonical[1] = num_aux;
+    canonical[2..4].copy_from_slice(&n_public.to_le_bytes());
+
+    let mut o = sizes::FIXED_HEADER_LEN;
+    for _ in 0..3 {
+        canonical[o..o + sizes::G1_LEN].copy_from_slice(&g1_gen);
+        o += sizes::G1_LEN;
+    }
+    o += sizes::SCALAR_LEN;
+    for _ in 0..4 {
+        canonical[o..o + sizes::G1_LEN].copy_from_slice(&g1_gen);
+        o += sizes::G1_LEN;
+    }
+    o += sizes::HADAMARD_EVALS_LEN + sizes::W_EVAL_LEN + pi_len;
+    for _ in 0..2 {
+        canonical[o..o + sizes::G1_LEN].copy_from_slice(&g1_gen);
+        o += sizes::G1_LEN;
+    }
+
+    c.bench_function("nova_proof_compress_host_default_shape", |b| {
+        b.iter(|| {
+            let _ =
+                NovaFoldingProof::compress_from_canonical_bytes(&backend, &canonical)
+                    .unwrap();
+        });
+    });
+
+    let compressed =
+        NovaFoldingProof::compress_from_canonical_bytes(&backend, &canonical).unwrap();
+    c.bench_function("nova_proof_decompress_host_default_shape", |b| {
+        b.iter(|| {
+            let _ =
+                NovaFoldingProof::decompress_to_canonical_bytes(&backend, &compressed)
+                    .unwrap();
+        });
+    });
+}
+
+fn bench_nova_vk_round_trip(c: &mut Criterion) {
+    use mosaic_nova::canonical::{FoldingVariant, NovaFoldingVerifyingKey};
+
+    let backend = HostBackend::new();
+    let g1_gen = mosaic_zk_primitives::g1_consts::g1_generator_bytes();
+    let g2_gen = mosaic_zk_primitives::g1_consts::g2_generator_bytes();
+
+    let canonical = NovaFoldingVerifyingKey {
+        variant: FoldingVariant::Nova,
+        n_public: 4,
+        n_constraints: 1024,
+        x2_g2: g2_gen,
+        a_comm: g1_gen,
+        b_comm: g1_gen,
+        c_comm: g1_gen,
+        cs_digest: [0u8; 32],
+    }
+    .to_bytes();
+
+    c.bench_function("nova_vk_compress_host", |b| {
+        b.iter(|| {
+            let _ =
+                NovaFoldingVerifyingKey::to_compressed_bytes(&backend, &canonical)
+                    .unwrap();
+        });
+    });
+
+    let compressed =
+        NovaFoldingVerifyingKey::to_compressed_bytes(&backend, &canonical).unwrap();
+    c.bench_function("nova_vk_decompress_host", |b| {
+        b.iter(|| {
+            let _ =
+                NovaFoldingVerifyingKey::from_compressed_bytes(&backend, &compressed)
+                    .unwrap();
+        });
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // Aggregator
 // ──────────────────────────────────────────────────────────────────────
 
@@ -343,5 +536,9 @@ criterion_group!(
     bench_plonk_vk_round_trip,
     bench_halo2_proof_round_trip,
     bench_halo2_vk_round_trip,
+    bench_hyperplonk_proof_round_trip,
+    bench_hyperplonk_vk_round_trip,
+    bench_nova_proof_round_trip,
+    bench_nova_vk_round_trip,
 );
 criterion_main!(compression);

@@ -24,11 +24,12 @@ jobs:
   # system at least once and every Phase-3 audit gate + compression
   # surface directly. The full 33-target sweep runs nightly.
   #
-  # PR matrix at session 111 (18 harnesses × 5 min ≈ 90 min wall):
+  # PR matrix at session 114 (22 harnesses × 5 min ≈ 110 min wall):
   #   - 3 original Groth16 outer-surface harnesses
   #   - 5 combined-slot fuzzers (one per Phase-2/Phase-3 system)
   #   - 4 audit-gate algebraic-surface harnesses (session 95)
-  #   - 6 compressed wire-format harnesses (session 111)
+  #   - 6 compressed wire-format harnesses for Phase-2 (session 111)
+  #   - 4 compressed wire-format harnesses for Phase-3 (session 114)
   # ─────────────────────────────────────────────────────────────────
   fuzz-pr:
     name: PR fuzz (5 min per harness, representative subset)
@@ -68,6 +69,14 @@ jobs:
           - fuzz_plonk_compressed_vk
           - fuzz_halo2_compressed_proof
           - fuzz_halo2_compressed_vk
+          # Session 114 — Phase-3 compressed wire format harnesses.
+          # Mirrors session 111's Phase-2 sweep for HyperPlonk + Nova.
+          # STARK has no BN254 curve points so alt_bn128 compression
+          # is not applicable.
+          - fuzz_hyperplonk_compressed_proof
+          - fuzz_hyperplonk_compressed_vk
+          - fuzz_nova_compressed_proof
+          - fuzz_nova_compressed_vk
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -131,6 +140,11 @@ jobs:
           - fuzz_plonk_compressed_vk
           - fuzz_halo2_compressed_proof
           - fuzz_halo2_compressed_vk
+          # Session 114 — Phase-3 compressed wire format harnesses (4).
+          - fuzz_hyperplonk_compressed_proof
+          - fuzz_hyperplonk_compressed_vk
+          - fuzz_nova_compressed_proof
+          - fuzz_nova_compressed_vk
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

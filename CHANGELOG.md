@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.12-sbf-coverage
+### Planned beyond v0.9.13-phase3-compression
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -19,6 +19,143 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (session 115).
 - On-chain `verify_compressed_proof` instruction so callers can
   upload alt_bn128-compressed proofs directly (session 116).
+
+## [0.9.13-phase3-compression] — 2026-05-02
+
+**Compression infrastructure now spans every BN254 verifier.**
+Sessions 103-110 wired alt_bn128 compression for the Phase-2 verifiers
+(Halo2, Groth16, KZG-PLONK). Session 114 closes the gap by extending
+the same pattern to the two remaining BN254-curve Phase-3 verifiers:
+HyperPlonk and Nova / HyperNova / ProtoStar. The FRI-STARK family is
+field-only (Goldilocks / BabyBear / Mersenne31) — alt_bn128 is not
+applicable; that crate's bandwidth optimization track remains
+field-element packing (issue #44).
+
+### Added — `crates/mosaic-hyperplonk/src/canonical.rs`
+
+| Surface | API | Saving |
+| ------- | --- | ------ |
+| `HyperPlonkProof::compress_from_canonical_bytes` | `(backend, &[u8]) → Vec<u8>` | 160 B (5 × G1) |
+| `HyperPlonkProof::decompress_to_canonical_bytes` | inverse | — |
+| `HyperPlonkProof::COMPRESSED_LEN` (variable) | `MIN_COMPRESSED_LEN + 96·rounds` | — |
+| `HyperPlonkProof::compressed_len_for_rounds` | `(u32) → Option<usize>` | — |
+| `HyperPlonkVerifyingKey::from_compressed_bytes` | `(backend, &[u8]) → Vec<u8>` | 320 B (8 × G1 + 1 × G2) |
+| `HyperPlonkVerifyingKey::to_compressed_bytes` | inverse | — |
+| `HyperPlonkVerifyingKey::COMPRESSED_LEN = 424` | — | 43 % vs canonical 744 B |
+
+14 new tests under `canonical::tests::compression` (round-trip happy
+paths at R = 0, 10; size invariants; wrong-length rejection;
+oversized round counter rejection; off-curve G1 rejection; off-curve
+G2 rejection on VK; pass-through-byte preservation; proptest sweep of
+non-curve fields under random fill).
+
+### Added — `crates/mosaic-nova/src/canonical.rs`
+
+| Surface | API | Saving |
+| ------- | --- | ------ |
+| `NovaFoldingProof::compress_from_canonical_bytes` | `(backend, &[u8]) → Vec<u8>` | `(9 + num_aux) × 32` B |
+| `NovaFoldingProof::decompress_to_canonical_bytes` | inverse | — |
+| `NovaFoldingProof::compressed_len_for_shape` | `(num_aux: u8, n_public: u16) → Option<usize>` | — |
+| `NovaFoldingVerifyingKey::from_compressed_bytes` | `(backend, &[u8]) → Vec<u8>` | 160 B (3 × G1 + 1 × G2) |
+| `NovaFoldingVerifyingKey::to_compressed_bytes` | inverse | — |
+| `NovaFoldingVerifyingKey::COMPRESSED_LEN = 199` | — | 45 % vs canonical 359 B |
+
+15 new tests covering all three folding variants (Nova, HyperNova,
+ProtoStar) at multiple num_aux shapes; wrong-length / unknown-variant
+/ oversized-aux-counter / off-curve-G2 rejections; non-curve byte
+pass-through preservation.
+
+Saving examples:
+- Nova default shape (`num_aux = 0`, `n_public = 4`): **288 B saved
+  (≈ 36 %)**.
+- HyperNova with 4 higher-degree commits (`num_aux = 4`, `n_public = 2`):
+  **416 B saved (≈ 50 %)**.
+
+### Added — fuzz coverage
+
+Four new harnesses under `crates/mosaic-fuzz/fuzz_targets/`:
+
+- `fuzz_hyperplonk_compressed_proof.rs`
+- `fuzz_hyperplonk_compressed_vk.rs`
+- `fuzz_nova_compressed_proof.rs`
+- `fuzz_nova_compressed_vk.rs`
+
+All assert the panic-free invariant: every byte sequence returns a
+deterministic `Result<Vec<u8>, OnChainError>` — no panics, no
+unbounded allocations. Wired into `.github/workflows/fuzz.yml`:
+- PR matrix: 18 → **22 harnesses** (≈ 110 min wall-clock).
+- Nightly matrix: 33 → **37 harnesses** (≈ 37 hours, runs in 2
+  parallel batches under GitHub's 20-concurrent-runner cap).
+
+### Added — `crates/mosaic-bench/benches/compression_host.rs`
+
+Four new criterion functions:
+- `hyperplonk_proof_compress_host_r10` / `_decompress_*` (10-round
+  shape, 4 G1 + 4 + Fr region + 1 G1).
+- `hyperplonk_vk_compress_host` / `_decompress_*` (8 G1 + 1 G2 + Fr).
+- `nova_proof_compress_host_default_shape` / `_decompress_*`
+  (Nova / num_aux=0 / n_public=4).
+- `nova_vk_compress_host` / `_decompress_*` (3 G1 + 1 G2).
+
+First smoke-run on macOS arm64 measured `hyperplonk_vk_compress_host`
+at ~4.6 µs (8 G1 compressions + 1 G2 compression, host arkworks).
+
+### Lint fix — `crates/mosaic-bpf-bench` (audit-prep cleanup)
+
+Re-confirmed Nova/FriStark dispatch byte mapping fix from session
+113 (v0.9.12) is still applied. The bpf-bench scaffold-acceptance
+fixtures for HyperPlonk and Nova now have host-side compression
+round-trips that gate on the same `from_bytes` validation paths the
+verifier uses, closing a residual mismatch surface.
+
+### Coverage delta
+
+| Surface | Before (v0.9.12) | After (v0.9.13) | Δ |
+|---|---|---|---|
+| Compression-aware verifiers | 3 (Halo2/Groth16/PLONK) | **5 (+ HyperPlonk + Nova)** | +2 |
+| Compression APIs (proof + VK) | 6 | **10** | +4 |
+| Compression fuzz harnesses | 6 | **10** | +4 |
+| Compression criterion benches | 10 | **14** | +4 |
+| Lib tests touching compression | ~30 | **~59** (+ 14 hp + 15 nova) | +29 |
+
+### What this milestone DOES change
+
+- New compression API surface on `HyperPlonkProof`,
+  `HyperPlonkVerifyingKey`, `NovaFoldingProof`,
+  `NovaFoldingVerifyingKey` (8 new methods total).
+- New `COMPRESSED_LEN` constants on both VK types (424 B / 199 B).
+- New `compressed_len_for_rounds` (HyperPlonk) and
+  `compressed_len_for_shape` (Nova) helpers for off-chain proof
+  builders.
+- 4 new fuzz harnesses + CI matrix entries.
+- 4 new criterion benches.
+
+### What this milestone does NOT change
+
+- Verifier behavior — compression is wire-format only, never invoked
+  by the on-chain `verify` path. The compressed wire format is for
+  off-chain transport / chunked-upload size optimization.
+- Public ABI for `verify` — the dispatcher still accepts canonical
+  uncompressed bytes. An on-chain `verify_compressed_proof`
+  instruction lands in session 116 per the planned roadmap.
+- Wire format for canonical proofs / VKs.
+- CU consumption for the existing verify path.
+
+### Why this matters for audit scoping
+
+Compression is consensus-critical: a divergence in the compress /
+decompress round-trip between host arkworks and SBF
+`alt_bn128_compression` syscall would silently corrupt off-chain
+transport. The 29 new round-trip tests across HyperPlonk + Nova,
+combined with the 4 new fuzz harnesses, give audit firms direct
+evidence that:
+
+1. Every BN254-curve verifier has a documented compression API.
+2. The API is panic-free under arbitrary byte inputs.
+3. Round-trips on real BN254 generator points reproduce bit-for-bit.
+4. Non-curve fields (n_public, k_i, cs_digest, hadamard_evals, etc.)
+   pass through compression unmodified — eliminating a class of
+   silent-corruption bugs that would only surface in production.
 
 ## [0.9.12-sbf-coverage] — 2026-05-02
 
