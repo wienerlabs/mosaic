@@ -10,6 +10,75 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-05-02 — v0.9.14-audit-checklist release (session 115)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.14-audit-checklist`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.14-audit-checklist) |
+| Auditor | Internal (Wiener Labs) — pre-mainnet sprint, audit-handoff packaging |
+| Scope | New `AUDIT-CHECKLIST.md` (crate-by-crate scope handoff for external audit firms) + T-11 / T-12 threat-model expansion + `SECURITY.md` refresh to v0.9.13 reality. |
+| Findings | None — documentation-only milestone. |
+| Status | ✅ Audit-firm handoff package ready. Scope, non-scope, reproducibility recipe, and open-questions list pre-specified. |
+
+### What changed at the documentation layer
+
+| Document | Before | After |
+|---|---|---|
+| `AUDIT-CHECKLIST.md` | (didn't exist) | **NEW**, ~500 lines, 12 crate sections + cross-cutting deliverables + reproducibility recipe + open-questions list |
+| `docs/threat-model.md` | T-1..T-10 (10 threats) | T-1..T-12 (+2) |
+| `SECURITY.md` | Stale (Phase 1 / v0.1.0) | Fresh (v0.9.13 implementation + 12-crate inventory) |
+| `SECURITY.md` threat table | 10 entries | 12 entries (T-11 + T-12) |
+| `SECURITY.md` "Known unaudited components" | 6 stub entries | 12 entries with per-session evolution annotations |
+
+### Why this milestone exists
+
+A well-scoped audit costs roughly half what a poorly-scoped one does
+— because the firm's protocol-design phase compresses dramatically
+when deliverable boundaries are pre-specified. Sessions 86-114
+delivered the implementation, fuzz coverage, and SBF runtime
+evidence; session 115 packages all of it into a single document
+(`AUDIT-CHECKLIST.md`) that audit firms can grep through to
+understand exactly what's in scope (and what isn't) before sending
+a quote.
+
+### What this milestone DOES change
+
+- Adds `AUDIT-CHECKLIST.md` (new file, ~500 lines).
+- Adds T-11 (compression round-trip divergence) + T-12
+  (chunked-STARK CU exhaustion) to `docs/threat-model.md`.
+- Refreshes `SECURITY.md` status header, scope, threat table, and
+  known-unaudited-components matrix to v0.9.13 implementation
+  reality.
+- Cargo workspace bumped from `0.9.13-phase3-compression` to
+  `0.9.14-audit-checklist`.
+
+### What this milestone does NOT change
+
+Verifier behavior, public API, wire format, on-chain CU consumption,
+test counts, fuzz coverage, criterion benches, or any cryptographic
+surface. This is a pure documentation milestone — its sole
+deliverable is making the audit handoff unambiguous.
+
+### Pre-audit pipeline status at v0.9.14
+
+| Gate | Status |
+|---|---|
+| Implementation freeze | ✅ All 6 verifiers wired, 5 with compression |
+| Test coverage | ✅ 712 lib + 37 fuzz + 14 criterion + 10 SBF integration |
+| Differential parity | ✅ Phase-2 (Groth16/PLONK); Phase-3 pending session 118 |
+| Audit-coverage runbook | ✅ `docs/audit-coverage-runbook.md` |
+| Per-gate isolation benches | ✅ `audit_gates_host.rs` |
+| **Audit-firm handoff doc** | **✅ `AUDIT-CHECKLIST.md` (this release)** |
+| Threat model expansion | ✅ T-11 + T-12 |
+| External audit commission | 🔴 Not yet sent for quote |
+
+The next gate is sending `AUDIT-CHECKLIST.md` to 2-3 audit firms
+for scoping quotes. Recommended firms (informed by the Solana
+ecosystem's audit history): Trail of Bits, OtterSec, Zellic, Halborn,
+ChainSecurity. Each has prior Solana-program engagement.
+
+---
+
 ## 2026-05-02 — v0.9.13-phase3-compression release (session 114)
 
 | Field | Value |

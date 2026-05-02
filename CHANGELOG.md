@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.13-phase3-compression
+### Planned beyond v0.9.14-audit-checklist
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,10 +15,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission (target: post-v0.9.20 freeze).
-- SECURITY.md + AUDIT-CHECKLIST.md + responsible-disclosure timeline
-  (session 115).
 - On-chain `verify_compressed_proof` instruction so callers can
   upload alt_bn128-compressed proofs directly (session 116).
+- HyperPlonk Zeromorph partial reduction (session 117).
+
+## [0.9.14-audit-checklist] — 2026-05-02
+
+**Audit-firm scope handoff complete.** Sessions 86-114 delivered the
+implementation, fuzz coverage, and SBF runtime evidence external
+auditors will need to scope an engagement. Session 115 packages it
+into a single document — `AUDIT-CHECKLIST.md` — that audit firms can
+grep through to understand the deliverable boundaries before sending
+a quote. Plus T-11 / T-12 added to the threat model for compression
+round-trip divergence + chunked-STARK CU exhaustion.
+
+### Added — `AUDIT-CHECKLIST.md`
+
+12-section crate-by-crate matrix covering:
+
+- Repository at-a-glance (test counts, languages, MSRV, fixture
+  origins, reproducibility recipe).
+- Crate inventory: per-crate **In scope** / **Out of scope** /
+  **Known limitations** / **Reproduce** sections for every workspace
+  member (`mosaic-core`, `mosaic-zk-primitives`, all six verifiers,
+  `mosaic-serde`, `mosaic-chunked`, `mosaic-program`, `mosaic-sdk`).
+- Cross-cutting deliverables: compression infrastructure (sessions
+  103-114), SBF integration tests (session 113), lint policy,
+  differential testing.
+- Reproducibility recipe: 7-step end-to-end run that exercises lib
+  tests + SBF artifact build + integration tests + bpf-bench +
+  criterion benches + differential harness + 5-min fuzz.
+- Open questions deferred to external audit (6 items).
+
+### Added — `docs/threat-model.md`
+
+Two new threat sections:
+
+- **T-11 Compression-syscall round-trip divergence**: documents the
+  consensus-critical surface where host arkworks compress/decompress
+  must match SBF `sol_alt_bn128_compression`. Mitigation: 59
+  round-trip tests + 10 fuzz harnesses + STARK exclusion-by-design.
+  Residual risk: host-vs-SBF cost ratio is inferred from arkworks
+  wall-clock until session 116 lands the on-chain
+  `verify_compressed_proof` instruction.
+- **T-12 Chunked-STARK CU exhaustion / single-tx infeasibility**:
+  documents the production-shape STARK proof's ~7.8 M CU consumption
+  vs Solana's 1.4 M `MAX_COMPUTE_UNIT_LIMIT`. Mitigation: SDK
+  defaults to chunked mode for STARK proofs; the SBF integration
+  test uses the smallest passing depth-zero shape that fits in a
+  single tx. Residual risk: direct on-chain callers (bypassing SDK)
+  get `ComputationalBudgetExceeded` from the runtime, not a
+  Mosaic-level "use chunked execution" hint.
+
+### Updated — `SECURITY.md`
+
+- Status header refreshed from `v0.1.0-phase1` to
+  `v0.9.13-phase3-compression` with the actual implementation state.
+- "In scope" crate list expanded from 8 entries (mostly stubs) to
+  the full 12-crate workspace inventory.
+- "Known unaudited components" table refreshed with v0.9.13 reality:
+  per-crate session-evolution annotations + Phase-3 scaffold caveats
+  + the new compression-infra audit surface.
+- "Threat model" table expanded to T-1..T-12 (was T-1..T-10).
+- "Our security posture" updated:
+  - Fuzzing: `3 → 37 harnesses` with PR/nightly matrix counts.
+  - Compression round-trip safety: per-verifier coverage line.
+  - SBF runtime evidence: session 113 reference.
+
+### Coverage delta
+
+| Surface | Before (v0.9.13) | After (v0.9.14) | Δ |
+|---|---|---|---|
+| External audit handoff doc | None | **AUDIT-CHECKLIST.md** | +1 |
+| Threat-model entries | T-1..T-10 | **T-1..T-12** | +2 |
+| `SECURITY.md` accuracy vs reality | stale (Phase 1) | **fresh (v0.9.13/.14)** | — |
+
+### What this milestone DOES change
+
+- Adds `AUDIT-CHECKLIST.md` (new, ~500 lines).
+- Adds two new threat sections to `docs/threat-model.md`.
+- Refreshes `SECURITY.md` to reflect v0.9.13 implementation reality.
+- Adds T-11 + T-12 to the SECURITY.md threat table.
+
+### What this milestone does NOT change
+
+Verifier behavior, public API, wire format, on-chain CU consumption,
+test counts, or any cryptographic surface. This is a documentation
+milestone — its sole deliverable is making the audit handoff
+unambiguous.
+
+### Why this matters for audit scoping
+
+A well-scoped audit costs roughly half what a poorly-scoped one does
+because the firm's protocol-design phase compresses dramatically
+when the deliverable boundaries are pre-specified. The `AUDIT-CHECKLIST.md`
+document gives audit firms:
+
+1. **Per-crate scope/non-scope** so they don't waste cycles on
+   upstream dependencies (arkworks correctness, Solana runtime
+   correctness, snarkjs prover-side details).
+2. **Reproducibility recipe** so the audit-firm engineer can
+   reproduce the test surface in under an hour.
+3. **Open-questions list** so the audit's design phase starts from
+   the 6 known-unknowns rather than from scratch.
+4. **Concrete known-limitations annotations** so phase-3 scaffold
+   caveats don't surface as findings during audit; they're already
+   acknowledged.
 
 ## [0.9.13-phase3-compression] — 2026-05-02
 

@@ -170,6 +170,82 @@ and offset calculations use `checked_add` / `try_from`. `dev` profile has
 `overflow-checks = true`; `release` has it off but the patterns are
 checked-arithmetic regardless.
 
+### T-11 Compression-syscall round-trip divergence (sessions 103-114)
+
+**Risk**: alt_bn128 compression / decompression diverges between the
+host arkworks `serialize_compressed` / `deserialize_with_mode` path and
+the Solana SBF `sol_alt_bn128_compression` syscall. A divergence would
+silently corrupt off-chain transport: a prover-emitted compressed
+proof that round-trips correctly on the prover's host could fail to
+verify on chain after decompression, or — worse — decompress to a
+*different* curve point than the prover intended.
+
+**Mitigation**:
+
+1. **Surface compression APIs are wire-format only.** The on-chain
+   `verify` path never invokes compression / decompression. A proof
+   uploaded as canonical bytes verifies identically on host and SBF;
+   compression is opt-in at the SDK / chunked-upload layer.
+2. **Round-trip tests on real BN254 generators across all five
+   BN254-curve verifiers** (Halo2, Groth16, KZG-PLONK, HyperPlonk,
+   Nova). 59 lib tests exercise:
+   - happy path (compress → decompress → equal canonical bytes);
+   - non-curve byte pass-through preservation;
+   - off-curve rejection;
+   - length / shape-counter rejection;
+   - proptest sweep of non-curve fields under random fill.
+3. **Fuzz coverage on the decompression entry points** (10 harnesses).
+   The panic-free invariant catches any byte-sequence-induced panic
+   that would diverge between host and SBF behavior.
+4. **STARK family is excluded by design** — Plonky3 STARK proofs
+   carry no BN254 curve points; alt_bn128 is N/A. Bandwidth
+   optimization there stays on the field-element-packing track.
+
+Residual risk: until the on-chain `verify_compressed_proof` instruction
+lands (planned session 116) and bpf-bench measures the SBF syscall side
+directly, the host-vs-SBF cost ratio for compression is inferred from
+arkworks wall-clock, not measured directly. Any drift in the syscall's
+per-op CU schedule (Solana protocol upgrade) would not surface in our
+host bench until SBF measurements land.
+
+### T-12 Chunked-STARK CU exhaustion / single-tx infeasibility
+
+**Risk**: A FRI-STARK proof at production shape (8 queries × 4 FRI
+layers × `log_h = 10`, the `bpf-bench` reference) consumes ~7.8 M CU
+per the verifier's `estimated_compute_units` shape-aware estimate.
+Solana's per-transaction cap is `MAX_COMPUTE_UNIT_LIMIT = 1_400_000`
+CU. A naïve client submitting a STARK proof as a single
+`VerifyProof` transaction will hit this cap and the program will
+abort with `ProgramError::ComputationalBudgetExceeded` — burning the
+caller's prioritization fee and leaving them confused about whether
+the proof was malformed.
+
+**Mitigation**:
+
+1. **Steer callers into chunked execution.** The `mosaic-chunked`
+   crate exists exactly for this: it splits the verifier's body
+   across multiple instructions in the same atomic-bundle envelope,
+   maintaining the per-tx CU cap. STARK callers MUST use the
+   chunked-upload pattern; the SDK's helper builders default to
+   chunked mode for STARK proofs.
+2. **SBF integration test caveat.** Session 113's
+   `sbf_dispatches_fri_stark_scaffold` uses the smallest passing
+   shape (`num_q=4, num_fri=0, log_h=0, log_blowup=0`) — depth-zero
+   Merkle, ~150 K CU — explicitly to fit in a single tx for
+   regression-tracking purposes. This is documented in the test
+   file as the "chunking constraint" audit note. Production STARK
+   verification uses the chunked path.
+3. **bpf-bench scaffold sizing intentional.** The bench targets
+   the production shape (~7.8 M CU) so regression alarms surface
+   before the chunked-path runtime cost drifts.
+
+Residual risk: a caller submitting a STARK proof via the single-tx
+`VerifyProof` instruction (rather than the chunked path) will not
+get a *user-friendly* error today — they'll get
+`ComputationalBudgetExceeded` from the runtime, not a Mosaic-level
+"use chunked execution" hint. The SDK guards against this; direct
+on-chain callers might not.
+
 ## Scope boundaries and application responsibilities
 
 The T-N threats above cover adversarial inputs to Mosaic's byte-level

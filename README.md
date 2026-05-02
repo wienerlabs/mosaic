@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.9.13-phase3-compression](https://img.shields.io/badge/release-v0.9.13--phase3--compression-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.13-phase3-compression)
+[![Release: v0.9.14-audit-checklist](https://img.shields.io/badge/release-v0.9.14--audit--checklist-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.14-audit-checklist)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -61,9 +61,10 @@ frozen CU budgets.
 | BPF CU regression bench (`bpf-bench`) | ✅ 7 systems: Groth16 (single + batch), KZG-PLONK, HyperPlonk, Halo2, Nova, FRI-STARK; Nova/FriStark dispatch byte mismatch fixed in v0.9.12 | — |
 | Host criterion bench (wall-clock baseline) | ✅ 5 systems: Groth16, HyperPlonk, Halo2, Nova, FRI-STARK | — |
 | Fuzz harnesses (sessions 54-59 / 109-114) | ✅ 37 targets including 10 compression harnesses (Phase-2: Halo2/Groth16/PLONK; Phase-3: HyperPlonk/Nova) | — |
-| **Compression infrastructure (session 114)** | **✅ Every BN254 verifier (5/5): proof + VK round-trip APIs, 59 round-trip tests, 4 fuzz + 4 criterion benches added in this release** | — |
+| Compression infrastructure (session 114) | ✅ Every BN254 verifier (5/5): proof + VK round-trip APIs, 59 round-trip tests, 4 fuzz + 4 criterion benches | — |
 | SBF integration tests (session 113) | ✅ 10 tests across all 8 declared `ProofSystemId` bytes + 1 alias + 1 unknown-byte negative | — |
-| External audit | 🔴 Not yet commissioned (target: post-v0.9.20 freeze) | — |
+| **Audit-firm handoff doc (session 115)** | **✅ [`AUDIT-CHECKLIST.md`](AUDIT-CHECKLIST.md) — crate-by-crate scope/non-scope + reproducibility recipe + open-questions list** | — |
+| External audit | 🔴 Not yet commissioned (`AUDIT-CHECKLIST.md` ready to send for scoping quote) | — |
 
 See [`AUDIT.md`](AUDIT.md) for audit history and [`SECURITY.md`](SECURITY.md)
 for the responsible-disclosure policy.
