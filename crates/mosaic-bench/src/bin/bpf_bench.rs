@@ -428,15 +428,24 @@ async fn bench_plonk_mul_circuit(target: &SystemTarget) -> Result<MeasurementRep
 //   0x02 = PlonkKzgBn254         (already covered above)
 //   0x03 = HyperPlonkKzgBn254
 //   0x04 = Halo2KzgBn254
-//   0x05 = NovaFolding
-//   0x06 = ProtoStarFolding      (shares verifier with NovaFolding)
-//   0x07 = FriStark
+//   0x05 = FriStark
+//   0x06 = Risc0Stark            (returns UnimplementedProofSystem)
+//   0x07 = NovaFolding
+//   0x08 = ProtoStarFolding      (shares verifier with NovaFolding)
+//
+// Session 113 — pre-audit correction. Earlier sessions (47/49) used the
+// wrong byte mapping for NovaFolding/FriStark (swap of 0x05 ↔ 0x07).
+// Because the on-chain dispatcher routes by the canonical
+// `ProofSystemId` enum, the previous constants would have routed Nova
+// fixtures through the FriStark verifier (and vice versa) — a latent
+// dispatch-mismatch that audit firms would flag immediately. The values
+// below now match `mosaic_core::proof_system::ProofSystemId` exactly.
 // ─────────────────────────────────────────────────────────────────────────
 
 const PROOF_SYSTEM_ID_HYPERPLONK: u8 = 0x03;
 const PROOF_SYSTEM_ID_HALO2: u8 = 0x04;
-const PROOF_SYSTEM_ID_NOVA: u8 = 0x05;
-const PROOF_SYSTEM_ID_FRI_STARK: u8 = 0x07;
+const PROOF_SYSTEM_ID_FRI_STARK: u8 = 0x05;
+const PROOF_SYSTEM_ID_NOVA: u8 = 0x07;
 
 /// Build the HyperPlonk scaffold-acceptance fixture used by
 /// `mosaic_hyperplonk::verifier::tests::full_pipeline_zero_proof_accepts`:

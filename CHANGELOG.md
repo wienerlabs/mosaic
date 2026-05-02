@@ -7,14 +7,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.11-compression-bench
+### Planned beyond v0.9.12-sbf-coverage
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
   has multi-column lookup wired end-to-end + KZG-bound at v0.9.1.
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
-- External security audit commission.
+- External security audit commission (target: post-v0.9.20 freeze).
+- SECURITY.md + AUDIT-CHECKLIST.md + responsible-disclosure timeline
+  (session 115).
+- On-chain `verify_compressed_proof` instruction so callers can
+  upload alt_bn128-compressed proofs directly (session 116).
+
+## [0.9.12-sbf-coverage] — 2026-05-02
+
+**Every dispatch arm now has SBF runtime evidence.** Sessions 86-112
+shipped six production verifier bodies, but the only end-to-end test
+that loaded `mosaic_program.so` and exercised it via the real Solana
+runtime was the Groth16 happy-path. Audit firms scoping the on-chain
+program asked an obvious question: "what proves PLONK / HyperPlonk /
+Halo2 / Nova / FRI-STARK actually dispatch and accept under SBF?"
+Session 113 closes that gap.
+
+### Added — `crates/mosaic-program/tests/verify_proof_sbf.rs`
+
+Ten SBF integration tests (was 2), one per dispatch path:
+
+| # | Test | Discriminant | Fixture source |
+| - | ---- | ------------ | -------------- |
+| 1 | `sbf_verify_proof_succeeds_on_valid_groth16` | `0x01` | snarkjs CIRCOM `mul` (real proof) |
+| 2 | `sbf_rejects_tampered_groth16_proof` | `0x01` | tampered (1-bit flip) |
+| 3 | `sbf_verify_proof_succeeds_on_valid_plonk` | `0x02` | snarkjs PLONK 0.7.6 (real proof) |
+| 4 | `sbf_dispatches_hyperplonk_kzg_scaffold` | `0x03` | scaffold-acceptance |
+| 5 | `sbf_dispatches_halo2_kzg_scaffold` | `0x04` | scaffold-acceptance |
+| 6 | `sbf_dispatches_fri_stark_scaffold` | `0x05` | scaffold-acceptance (depth-0) |
+| 7 | `sbf_risc0_returns_unimplemented_proof_system` | `0x06` | rejection path |
+| 8 | `sbf_dispatches_nova_folding_scaffold` | `0x07` | scaffold-acceptance |
+| 9 | `sbf_dispatches_protostar_via_nova_verifier` | `0x08` | scaffold-acceptance (alias) |
+| 10 | `sbf_unknown_proof_system_rejected` | `0xFE` | rejection path |
+
+Each acceptance test asserts:
+1. The transaction succeeds.
+2. The dispatcher emits the expected `mosaic: dispatch <slug>` log
+   line (audit attribution evidence).
+3. (Groth16 + PLONK only) CU consumption falls within ±10% / ±15%
+   of the `bpf-bench` baseline pinned in
+   `mosaic-bench::bpf_bench::TARGETS`.
+
+Each rejection test asserts the dispatcher returns the expected
+`ProgramError::Custom(code)` deterministically:
+- `0x0010` `UnknownProofSystem` for unrecognized bytes.
+- `0x0011` `UnimplementedProofSystem` for declared-but-unimplemented
+  (Risc0).
+- `0x06` / `0x20` / `0x40` for tampered proofs (PointNotOnCurve /
+  PairingCheckFailed / AltBn128SyscallFailed — all valid rejections
+  depending on whether the syscall classifies the point as off-curve
+  before pairing).
+
+### Fixed — `crates/mosaic-bench/src/bin/bpf_bench.rs`
+
+**Audit-blocking dispatch-byte swap.** Sessions 47/49 introduced
+`PROOF_SYSTEM_ID_NOVA = 0x05` and `PROOF_SYSTEM_ID_FRI_STARK = 0x07`,
+which contradict the canonical `mosaic_core::proof_system::ProofSystemId`
+enum (`FriStark = 0x05`, `NovaFolding = 0x07`). The on-chain
+dispatcher routes by the canonical enum, so bpf-bench's "Nova"
+scaffold has been routed through the FRI-STARK verifier (and vice
+versa) since session 47. The discrepancy never surfaced because:
+
+1. The Phase-3 scaffold targets carry `baseline_cu = 0` (never
+   measured against a passing run).
+2. CI's `cargo run -p mosaic-bench --bin bpf-bench` invocation early-
+   exits on the FRI-STARK 8.5 M CU request (exceeds `MAX_COMPUTE_UNIT
+   _LIMIT` = 1.4 M).
+
+The constants now match `ProofSystemId` byte-for-byte, the
+documentation block above the constants explicitly cites the enum,
+and the new SBF integration tests in this release independently
+verify each dispatch arm against the canonical bytes. **Pre-mainnet
+remediation**: an audit firm checking the dispatcher byte mapping
+against the bench harness would have flagged this as a `MEDIUM`
+finding (silent dispatch mismatch in a regression-tracking tool) —
+the fix lands here ahead of external review.
+
+### Added — `crates/mosaic-program/Cargo.toml`
+
+Phase-3 verifier crates added as `[dev-dependencies]` with the
+`std` feature so the SBF integration test can construct
+scaffold-acceptance fixtures byte-for-byte:
+
+```toml
+mosaic-zk-primitives = { workspace = true, features = ["std"] }
+mosaic-hyperplonk    = { workspace = true, features = ["std"] }
+mosaic-halo2         = { workspace = true, features = ["std"] }
+mosaic-nova          = { workspace = true, features = ["std"] }
+mosaic-stark         = { workspace = true, features = ["std"] }
+```
+
+The cdylib SBF build is unaffected (dev-deps don't propagate to
+`cargo build-sbf`); only the host-side test binary picks them up.
+
+### Coverage delta
+
+- **Before**: 2 SBF integration tests, both Groth16. The other 7
+  dispatch arms had only host-side coverage.
+- **After**: 10 SBF integration tests across all 9 declared bytes
+  (1 unknown-byte negative + 8 known arms) + 1 alias (ProtoStar →
+  Nova). Every byte the dispatcher will see from a mainnet caller
+  is exercised against the real SBF runtime.
+
+### Why this matters for audit scoping
+
+The `dispatch_verify` arm-by-arm match is exercised by ~150 host
+tests already, but those run against arkworks-on-x86_64. SBF
+integration tests cover what host tests cannot:
+
+1. **Borsh decoder under SBF**: the `BorshDeserialize` derive on
+   `VerifyProofData` runs through the rbpf VM, not native code.
+   Misaligned reads or panic paths would surface here, not on the
+   host.
+2. **Solana syscall ABI**: `alt_bn128_pairing`, `keccak256`,
+   `sha256`, `poseidon` all behave subtly differently between the
+   host mock (`SyscallBackend::host`) and the real SBF runtime.
+3. **CU regression**: every test that asserts a baseline catches
+   silent codegen drift. The PLONK test at ±15% tolerance is the
+   tightest CU smoke gate the audit-prep harness has.
+4. **Dispatch-byte stability**: the fixed bpf-bench byte swap above
+   is exactly the kind of bug only a runtime-level test can catch.
 
 ## [0.9.11-compression-bench] — 2026-04-30
 

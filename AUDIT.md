@@ -10,6 +10,91 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-05-02 — v0.9.12-sbf-coverage release (session 113)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.12-sbf-coverage`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.12-sbf-coverage) |
+| Auditor | Internal (Wiener Labs) — pre-mainnet sprint, week 1/1 |
+| Scope | SBF integration tests for every `ProofSystemId` dispatch arm + audit-blocking dispatch-byte fix in `bpf-bench`. |
+| Findings | Pre-existing `bpf-bench` constants for `PROOF_SYSTEM_ID_NOVA` / `PROOF_SYSTEM_ID_FRI_STARK` (sessions 47/49) contradicted the canonical `ProofSystemId` enum (`Nova=0x07`, `FriStark=0x05`); fixed in this release with full audit trail. |
+| Status | ✅ Every declared dispatch byte now has SBF runtime evidence. The 1.4 M `MAX_COMPUTE_UNIT_LIMIT` constraint is documented for FRI-STARK chunked-execution requirement. |
+
+### What changed at the runtime layer
+
+Before: 2 SBF integration tests, both Groth16. The other 7 dispatch
+arms (PLONK, HyperPlonk, Halo2, FriStark, Risc0Stark, NovaFolding,
+ProtoStarFolding) had only host-side coverage (~150 tests via
+`HostBackend`).
+
+After: **10 SBF integration tests**, one per dispatch byte plus an
+unknown-byte negative case. Every byte the on-chain dispatcher will
+ever see from a mainnet caller is now exercised against
+`solana-program-test`'s real rbpf VM, not against the host arkworks
+mock. See `crates/mosaic-program/tests/verify_proof_sbf.rs` —
+discriminant table in CHANGELOG v0.9.12 entry.
+
+### Audit-blocking bug found and fixed
+
+The `bpf-bench` harness (sessions 47/49) used:
+
+```text
+PROOF_SYSTEM_ID_NOVA      = 0x05  // ❌ wrong — should be 0x07
+PROOF_SYSTEM_ID_FRI_STARK = 0x07  // ❌ wrong — should be 0x05
+```
+
+The on-chain dispatcher routes by the canonical
+`mosaic_core::proof_system::ProofSystemId` enum, where Nova=0x07 and
+FriStark=0x05. Bench fixtures intended for Nova would have been
+routed through the FRI-STARK verifier (and vice versa). The
+discrepancy never surfaced because:
+
+1. Phase-3 scaffold targets carried `baseline_cu = 0` (never
+   measured against a passing run).
+2. The FRI-STARK 8.5 M CU request exceeded `MAX_COMPUTE_UNIT_LIMIT`
+   (1.4 M), so the bench early-exited before any verifier ran.
+
+A scoping audit firm would have flagged this as a `MEDIUM` finding
+(silent dispatch mismatch in regression-tracking tooling). The fix
+in this release lands ahead of external review and is independently
+verified by the new SBF integration tests against the canonical bytes.
+
+### Test totals at v0.9.12
+
+| Surface | Before (s112) | After (s113) | Δ |
+|---|---|---|---|
+| `mosaic-program` SBF integration | 2 | 10 | +8 |
+| Lib tests | 683 | 683 | 0 |
+| Fuzz harnesses | 33 | 33 | 0 |
+| Criterion benches | 5 | 5 | 0 |
+
+### What this milestone DOES change
+
+- 8 new SBF integration tests (now covers every dispatch arm + 1
+  alias + 2 negative paths).
+- Phase-3 verifier crates added as `mosaic-program` dev-dependencies
+  with `std` feature for fixture construction.
+- `bpf-bench` Nova/FriStark constant swap fixed with audit trail.
+
+### What this milestone does NOT change
+
+Verifier behavior, wire format, public API. The dispatcher byte
+mapping is unchanged — only the bench harness's stale mirror of it.
+
+### FRI-STARK chunking constraint (audit note)
+
+Solana's per-transaction CU cap is 1.4 M. The current Plonky3 STARK
+verifier scaffold at `(num_q=8, num_fri=4, log_h=10)` consumes ~7.8 M
+CU per `bpf-bench` estimate. A production-shape STARK proof MUST be
+split across `mosaic-chunked` sessions; the SBF integration test
+above uses the smaller `(num_q=4, num_fri=0, log_h=0)` shape that
+fits in a single tx. Audit firms should treat any single-tx STARK
+verification submission as a documented user error — the SDK and
+on-chain dispatcher MUST steer callers into chunked mode for
+non-trivial trace heights.
+
+---
+
 ## 2026-04-30 — v0.9.11-compression-bench release (session 112)
 
 | Field | Value |

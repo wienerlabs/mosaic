@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.9.11-compression-bench](https://img.shields.io/badge/release-v0.9.11--compression--bench-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.11-compression-bench)
+[![Release: v0.9.12-sbf-coverage](https://img.shields.io/badge/release-v0.9.12--sbf--coverage-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.12-sbf-coverage)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -58,10 +58,11 @@ frozen CU budgets.
 | Differential test harness (arkworks + snarkjs fixture) | ✅ Production (Groth16 + PLONK; Phase-3 extension tracked) | — |
 | Property-test coverage (proptest, sessions 36-72) | ✅ 549 lib tests across 12 crates (+152 proptest + 9 shared primitives lifted in audit-coverage sweep) | — |
 | Audit runbook | ✅ [`docs/audit-coverage-runbook.md`](docs/audit-coverage-runbook.md) — reproduce + extend recipes for external review firms | — |
-| BPF CU regression bench (`bpf-bench`) | ✅ 7 systems: Groth16 (single + batch), KZG-PLONK, HyperPlonk, Halo2, Nova, FRI-STARK | — |
+| BPF CU regression bench (`bpf-bench`) | ✅ 7 systems: Groth16 (single + batch), KZG-PLONK, HyperPlonk, Halo2, Nova, FRI-STARK; Nova/FriStark dispatch byte mismatch fixed in v0.9.12 | — |
 | Host criterion bench (wall-clock baseline) | ✅ 5 systems: Groth16, HyperPlonk, Halo2, Nova, FRI-STARK | — |
-| Fuzz harnesses (sessions 54-59) | ✅ 23 targets across all 6 production verifiers (5 proof-bytes + 5 vk-bytes + 5 public-inputs + 5 combined-slot for PLONK + 4 Phase-3, plus 3 original Groth16) | — |
-| External audit | 🔴 Not yet commissioned | — |
+| Fuzz harnesses (sessions 54-59) | ✅ 33 targets including the 6 compression harnesses (sessions 109-111) | — |
+| **SBF integration tests (session 113)** | **✅ 10 tests across all 8 declared `ProofSystemId` bytes + 1 alias + 1 unknown-byte negative** | — |
+| External audit | 🔴 Not yet commissioned (target: post-v0.9.20 freeze) | — |
 
 See [`AUDIT.md`](AUDIT.md) for audit history and [`SECURITY.md`](SECURITY.md)
 for the responsible-disclosure policy.
