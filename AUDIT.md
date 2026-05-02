@@ -10,6 +10,67 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-04-30 — v0.9.10-compression-fuzz release (session 111)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.10-compression-fuzz`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.10-compression-fuzz) |
+| Auditor | Internal (Wiener Labs) |
+| Scope | 6 new fuzz harnesses targeting the compressed wire-format decompression entry points (Halo2 / Groth16 / PLONK proof + VK). Wired into PR + nightly CI matrices. |
+| Findings | Zero soundness regressions. All 6 harnesses run cargo-check clean; `mosaic-zk-primitives` compression syscall surface is now fuzzed at every consumer. |
+| Status | ✅ Fuzz inventory grows 27 → 33 harnesses. Compression syscall (sessions 103-104) is now fuzz-protected at every verifier-side consumer (sessions 106-110). |
+
+### Why this matters at the audit boundary
+
+Sessions 106-110 introduced 6 new public functions that consume
+hostile bytes:
+
+- `Halo2KzgVerifyingKey::from_compressed_bytes` (s106)
+- `Halo2KzgProof::decompress_to_canonical_bytes` (s108)
+- `Groth16VerifyingKey::from_compressed_bytes` (s109)
+- `Groth16Proof::decompress_to_canonical_bytes` (s109)
+- `PlonkVerifyingKey::from_compressed_bytes` (s110)
+- `PlonkProof::decompress_to_canonical_bytes` (s110)
+
+Each of these calls into `mosaic-zk-primitives::compression`,
+which calls into `solana_bn254::compression::prelude::alt_bn128_g1/g2_*`,
+which on host evaluates with arkworks `CanonicalDeserialize` and
+on SBF dispatches to the `sol_alt_bn128_compression` syscall. That's
+a consensus-critical path; a panic anywhere in this chain would
+break validator quorum if a malicious proof submitter triggered it.
+
+Session 111 closes this fuzz coverage gap. Each of the 6 harnesses
+takes arbitrary bytes, calls the entry point, and asserts the
+function returns `Ok(_)` or `Err(_)` — never panics.
+
+### Fuzz coverage matrix at v0.9.10
+
+| Verifier | Outer (proof + VK + PI + combined) | Audit gate | Compressed proof | Compressed VK |
+|---|---|---|---|---|
+| Groth16 | 4 (s≤59) | n/a (Phase-2 syscall-bound) | s111 ✓ | s111 ✓ |
+| KZG-PLONK | 4 (s54-59) | n/a (Phase-2 syscall-bound) | s111 ✓ | s111 ✓ |
+| HyperPlonk-KZG | 4 (s54-59) | s95 ✓ | (planned with compression) | (planned with compression) |
+| Halo2-KZG | 4 (s54-59) | s95 ✓ | s111 ✓ | s111 ✓ |
+| Nova family | 4 (s54-59) | s95 ✓ | (planned with compression) | (planned with compression) |
+| FRI-STARK | 4 (s54-59) | s95 ✓ | n/a (Goldilocks) | n/a |
+
+### Lib test totals at v0.9.10
+
+Unchanged (683). Pure fuzz-coverage release.
+
+### What this milestone DOES change
+
+- 6 new fuzz harnesses + Cargo.toml [[bin]] entries.
+- CI matrix grows 27 → 33 (PR mode 12 → 18 harnesses).
+- mosaic-fuzz lib.rs docstring updated with session-111 inventory.
+
+### What this milestone does NOT change
+
+Verifier behavior, wire format, public API. No new lib tests; the
+fuzz inventory tracks separately in `crates/mosaic-fuzz/Cargo.toml`.
+
+---
+
 ## 2026-04-30 — v0.9.9-plonk-compressed release (session 110)
 
 | Field | Value |

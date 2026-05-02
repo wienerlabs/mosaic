@@ -220,5 +220,49 @@ path = "fuzz_targets/fuzz_hyperplonk_claim_reduction_gate.rs"
 test = false
 doc = false
 
+# ───────────────────────────────────────────────────────────────────────
+# Session 111 — compressed wire format fuzz harnesses (3 verifiers ×
+# 2 surfaces). Sessions 106-110 added compressed proof + VK forms via
+# the alt_bn128 compression syscall (sessions 103-104). These harnesses
+# fuzz the decompression entry points to catch panics on hostile
+# compressed-byte inputs.
+# ───────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "fuzz_groth16_compressed_proof"
+path = "fuzz_targets/fuzz_groth16_compressed_proof.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_groth16_compressed_vk"
+path = "fuzz_targets/fuzz_groth16_compressed_vk.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_plonk_compressed_proof"
+path = "fuzz_targets/fuzz_plonk_compressed_proof.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_plonk_compressed_vk"
+path = "fuzz_targets/fuzz_plonk_compressed_vk.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_halo2_compressed_proof"
+path = "fuzz_targets/fuzz_halo2_compressed_proof.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_halo2_compressed_vk"
+path = "fuzz_targets/fuzz_halo2_compressed_vk.rs"
+test = false
+doc = false
+
 [lints]
 workspace = true

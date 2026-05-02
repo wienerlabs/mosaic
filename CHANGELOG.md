@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.9-plonk-compressed
+### Planned beyond v0.9.10-compression-fuzz
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
@@ -15,6 +15,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
   layout breaking change).
 - External security audit commission.
+
+## [0.9.10-compression-fuzz] — 2026-04-30
+
+**Compression wire-format fuzz coverage.** Sessions 106-110 added
+compressed proof + VK forms for Halo2, Groth16, and PLONK via the
+alt_bn128 compression syscall (sessions 103-104). Session 111 fuzzes
+the decompression entry points to catch panics on hostile compressed
+bytes.
+
+### Added — session 111 (6 fuzz harnesses)
+
+| Harness | Target | Surface |
+|---|---|---|
+| `fuzz_groth16_compressed_proof` | `Groth16Proof::decompress_to_canonical_bytes` | 128 B fixed-length |
+| `fuzz_groth16_compressed_vk` | `Groth16VerifyingKey::from_compressed_bytes` | variable IC tail |
+| `fuzz_plonk_compressed_proof` | `PlonkProof::decompress_to_canonical_bytes` | 480 B fixed-length |
+| `fuzz_plonk_compressed_vk` | `PlonkVerifyingKey::from_compressed_bytes` | 424 B fixed-length |
+| `fuzz_halo2_compressed_proof` | `Halo2KzgProof::decompress_to_canonical_bytes` | header-driven variable |
+| `fuzz_halo2_compressed_vk` | `Halo2KzgVerifyingKey::from_compressed_bytes` | header-driven variable |
+
+Each harness asserts the same panic-free invariant: the decompression
+function must return `Ok(Vec<u8>)` or `Err(OnChainError::*)` for every
+byte sequence — any panic is a fuzzer-found bug.
+
+### Catches
+
+- **Off-curve compressed points**: alt_bn128 syscall must reject;
+  decompression must propagate as
+  `AltBn128CompressionSyscallFailed`.
+- **Wrong-length payloads**: short / long buffers must reject as
+  `ProofLengthMismatch` or `VerifyingKeyLengthMismatch` upfront.
+- **Header counter mismatches** (Halo2 + Groth16 IC tail): declared
+  vs actual count divergence must reject pre-syscall.
+- **Sign-bit edge cases**: alt_bn128 G1/G2 compression encodes y's
+  parity in the MSB of the first byte; fuzzers exercise both
+  parities + invalid sign combinations.
+- **Usize arithmetic overflow**: large header counters that pass
+  individual MAX_* bounds but cause `checked_mul` to overflow in
+  total-length computations must reject (not panic).
+- **DEFAULT_LOOKUP_ARITY reinterpretation** (Halo2): `lookup_arity = 0`
+  in the header is reinterpreted as 1 for forward-compat; fuzzers
+  ensure this path doesn't have edge cases.
+
+### CI integration
+
+The 6 new harnesses are wired into both PR and nightly fuzz
+matrices in `.github/workflows/fuzz.yml`:
+
+- **PR mode**: 18 harnesses × 5 min ≈ 90 min wall-clock.
+- **Nightly mode**: 33 harnesses × 60 min ≈ 33 h (2 batches under
+  GitHub free-tier 20-runner concurrency).
+
+Compression wire-format harnesses run on every PR (not nightly-only)
+because the syscall surface is consensus-critical: a panic in
+decompression would silently break Solana validator quorum if
+exposed to a malicious proof submitter.
+
+### Total fuzz inventory at v0.9.10
+
+- 3 original Groth16 outer-surface harnesses (sessions ≤ 54)
+- 20 Phase-2 + Phase-3 outer-surface harnesses (sessions 54-59)
+- 4 audit-gate algebraic-surface harnesses (session 95)
+- **6 compressed wire-format harnesses (session 111)**
+- **Total: 33 harnesses** (was 27)
+
+### Lib test totals at v0.9.10
+
+Unchanged from v0.9.9 (683). Pure fuzz-coverage release —
+no new lib tests, no new verifier behavior, no new public API.
+
+### Migration notes
+
+Pure additive: new fuzz harnesses + Cargo.toml [[bin]] entries +
+CI matrix expansion. No behavioral or wire-format changes.
 
 ## [0.9.9-plonk-compressed] — 2026-04-30
 

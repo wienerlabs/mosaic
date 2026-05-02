@@ -20,14 +20,15 @@ on:
 jobs:
   # ─────────────────────────────────────────────────────────────────
   # PR mode — runs a representative subset for ~5 minutes each. Keeps
-  # PR CI under ~60 minutes wall-clock while still exercising every
-  # system at least once and every Phase-3 audit gate directly. The
-  # full 27-target sweep runs nightly.
+  # PR CI under ~90 minutes wall-clock while still exercising every
+  # system at least once and every Phase-3 audit gate + compression
+  # surface directly. The full 33-target sweep runs nightly.
   #
-  # PR matrix at session 95 (12 harnesses × 5 min ≈ 60 min wall):
+  # PR matrix at session 111 (18 harnesses × 5 min ≈ 90 min wall):
   #   - 3 original Groth16 outer-surface harnesses
   #   - 5 combined-slot fuzzers (one per Phase-2/Phase-3 system)
   #   - 4 audit-gate algebraic-surface harnesses (session 95)
+  #   - 6 compressed wire-format harnesses (session 111)
   # ─────────────────────────────────────────────────────────────────
   fuzz-pr:
     name: PR fuzz (5 min per harness, representative subset)
@@ -57,6 +58,16 @@ jobs:
           - fuzz_halo2_lookup_gate
           - fuzz_stark_fri_query_gate
           - fuzz_hyperplonk_claim_reduction_gate
+          # Session 111 — compressed wire format harnesses
+          # (sessions 106-110 added Halo2/Groth16/PLONK compressed
+          # proof + VK paths). Fuzzing the decompression entry
+          # points catches panics on hostile compressed bytes.
+          - fuzz_groth16_compressed_proof
+          - fuzz_groth16_compressed_vk
+          - fuzz_plonk_compressed_proof
+          - fuzz_plonk_compressed_vk
+          - fuzz_halo2_compressed_proof
+          - fuzz_halo2_compressed_vk
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -66,10 +77,10 @@ jobs:
         working-directory: crates/mosaic-fuzz
 
   # ─────────────────────────────────────────────────────────────────
-  # Nightly mode — full 27-target sweep, 1 hour per harness. Total
-  # wall-clock ≈ 27 hours across the matrix (parallel runners cap
+  # Nightly mode — full 33-target sweep, 1 hour per harness. Total
+  # wall-clock ≈ 33 hours across the matrix (parallel runners cap
   # at GitHub's free-tier limit of 20 concurrent jobs, so the matrix
-  # finishes in ~1-2 batches).
+  # finishes in ~2 batches).
   # ─────────────────────────────────────────────────────────────────
   fuzz-nightly:
     name: Nightly fuzz (60 min per harness, full inventory)
@@ -113,6 +124,13 @@ jobs:
           - fuzz_halo2_lookup_gate
           - fuzz_stark_fri_query_gate
           - fuzz_hyperplonk_claim_reduction_gate
+          # Session 111 — compressed wire format harnesses (6).
+          - fuzz_groth16_compressed_proof
+          - fuzz_groth16_compressed_vk
+          - fuzz_plonk_compressed_proof
+          - fuzz_plonk_compressed_vk
+          - fuzz_halo2_compressed_proof
+          - fuzz_halo2_compressed_vk
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

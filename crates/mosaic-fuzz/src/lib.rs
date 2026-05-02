@@ -44,9 +44,28 @@
 //! their algebraic surface reduces to the syscall verdict byte, which
 //! has zero useful fuzz-discoverable space.
 //!
-//! ## Total inventory at session 95
+//! ## Session 111 expansion (compressed wire format surfaces)
 //!
-//! 23 outer-surface harnesses + 4 audit-gate harnesses = **27 harnesses**.
+//! Sessions 106-110 added compressed proof + VK forms via the
+//! alt_bn128 compression syscall (sessions 103-104). These six
+//! harnesses fuzz the decompression entry points to catch panics
+//! on hostile compressed-byte inputs:
+//!
+//! - `fuzz_groth16_compressed_proof` — `Groth16Proof::decompress_to_canonical_bytes`
+//! - `fuzz_groth16_compressed_vk`    — `Groth16VerifyingKey::from_compressed_bytes`
+//! - `fuzz_plonk_compressed_proof`   — `PlonkProof::decompress_to_canonical_bytes`
+//! - `fuzz_plonk_compressed_vk`      — `PlonkVerifyingKey::from_compressed_bytes`
+//! - `fuzz_halo2_compressed_proof`   — `Halo2KzgProof::decompress_to_canonical_bytes`
+//! - `fuzz_halo2_compressed_vk`      — `Halo2KzgVerifyingKey::from_compressed_bytes`
+//!
+//! Catches: off-curve compressed points, wrong-length payloads,
+//! header counter mismatches, sign-bit edge cases, and usize
+//! arithmetic overflow in compression-driven slice computations.
+//!
+//! ## Total inventory at session 111
+//!
+//! 23 outer-surface harnesses + 4 audit-gate harnesses + 6 compression
+//! harnesses = **33 harnesses**.
 //!
 //! ## Panic-free invariant
 //!
