@@ -11,12 +11,15 @@ const items: Item[] = [
   { num: "04", label: "Decision matrix", target: "page-04" },
   { num: "05", label: "Soundness gates", target: "page-05" },
   { num: "06", label: "Compute budgets", target: "page-06" },
-  { num: "07", label: "Quick start", target: "page-07" },
-  { num: "08", label: "Architecture", target: "page-08" },
-  { num: "09", label: "Release lineage", target: "page-09" },
-  { num: "10", label: "Documentation", target: "page-10" },
-  { num: "11", label: "Constraints", target: "page-11" },
-  { num: "12", label: "Built by Wiener Labs", target: "page-12" },
+  // Session 117 — runtime evidence section inserted between
+  // CU budgets and quick start. Subsequent indices shifted +1.
+  { num: "07", label: "Runtime evidence", target: "page-07" },
+  { num: "08", label: "Quick start", target: "page-08" },
+  { num: "09", label: "Architecture", target: "page-09" },
+  { num: "10", label: "Release lineage", target: "page-10" },
+  { num: "11", label: "Documentation", target: "page-11" },
+  { num: "12", label: "Constraints", target: "page-12" },
+  { num: "13", label: "Built by Wiener Labs", target: "page-13" },
 ];
 
 export function NavMenu() {
