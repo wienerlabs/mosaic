@@ -283,6 +283,8 @@ interface TerminalProps {
   generation?: number;
   /** Optional title text rendered in the chrome. No emojis. */
   chromeLabel?: string;
+  /** Optional right-aligned chrome text (e.g. schema version). */
+  chromeRight?: string;
   /** Optional metadata bar shown under the chrome (provenance line). */
   metadata?: ReactNode;
   /** Slot for action buttons rendered above the typed area. */
@@ -298,6 +300,7 @@ export const Terminal = ({
   startOnView = true,
   generation = 0,
   chromeLabel,
+  chromeRight,
   metadata,
   toolbar,
   footer,
@@ -347,6 +350,9 @@ export const Terminal = ({
     >
       <header className="mtm-chrome">
         <span className="mtm-chrome-label">{chromeLabel ?? "MOSAIC // TERMINAL"}</span>
+        {chromeRight ? (
+          <span className="mtm-chrome-right">{chromeRight}</span>
+        ) : null}
       </header>
       {metadata ? <div className="mtm-meta">{metadata}</div> : null}
       {toolbar ? <div className="mtm-toolbar">{toolbar}</div> : null}

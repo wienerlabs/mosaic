@@ -6,7 +6,6 @@ import { GsapAnimations } from "./components/GsapAnimations";
 // without crossing the SSR boundary. The wrapper renders the
 // Mosaic-palette AILoadingState while the three.js chunk loads.
 import LazyPixelTrail from "./components/LazyPixelTrail";
-import MosaicActivityCard from "./components/MosaicActivityCard";
 import { NavMenu } from "./components/NavMenu";
 import RuntimeEvidenceTerminal from "./components/RuntimeEvidenceTerminal";
 import { ThemeToggle } from "./components/ThemeToggle";
@@ -235,11 +234,6 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Visual project-completion summary — three rings render
-         * the same numbers the prose status snapshot lists, with a
-         * detail column on the right. Powered by the
-         * Mosaic-palette port of @kokonutui's Apple Activity Card. */}
-        <MosaicActivityCard title="Project Completion" />
       </Page>
 
       {/* PAGE 03 — VERIFIER MATRIX */}
@@ -840,9 +834,16 @@ export default function HomePage() {
         color="navy"
       >
         <div className="studio-monogram-row">
-          <div className="studio-monogram" aria-hidden="true">
-            <span>W</span>
-            <span>L</span>
+          <div className="studio-monogram studio-monogram-logo">
+            {/* Real WIENER wordmark from the studio brand kit, copied
+             * to public/wiener-logo.png. Inverted on the navy page-13
+             * background so the black wordmark resolves to cream. */}
+            <img
+              src="/wiener-logo.png"
+              alt="Wiener Labs"
+              width={1000}
+              height={1000}
+            />
           </div>
           <div className="studio-monogram-meta">
             <span className="tag">STUDIO MARK // SINCE 2026</span>
