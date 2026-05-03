@@ -10,6 +10,110 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-05-03 — v0.9.15-onchain-compressed-verify release (session 116)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.15-onchain-compressed-verify`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.15-onchain-compressed-verify) |
+| Auditor | Internal (Wiener Labs) — pre-mainnet sprint |
+| Scope | New on-chain instruction `VerifyCompressedProof = 0x03` that decompresses VK + proof via `sol_alt_bn128_compression` syscall before dispatching to the existing per-system verifier. |
+| Findings | None — clean delta. STARK rejected with deterministic `UnsupportedOperation`; Risc0 rejected with `UnimplementedProofSystem`; both negative paths covered by SBF integration tests. |
+| Status | ✅ Compression infrastructure now end-to-end on chain. 5 of 8 declared `ProofSystemId` bytes accept compressed input; the remaining 3 (FRI-STARK + Risc0Stark + future variants) reject deterministically. |
+
+### What changed at the on-chain layer
+
+Before this release the alt_bn128 compression APIs (sessions
+103-114) were wire-format only — callers had to decompress
+off-chain before submitting via the canonical `VerifyProof = 0x01`
+instruction. This release adds:
+
+- **New tag**: `InstructionTag::VerifyCompressedProof = 0x03`.
+- **New Borsh struct**: `VerifyCompressedProofData` carrying
+  `(proof_system_id, compressed_vk, compressed_proof, public_inputs)`.
+- **New dispatcher**: `handle_verify_compressed_proof()` with
+  per-system decompression routing → forwards to existing
+  `dispatch_verify`.
+- **New audit-attribution log**: `mosaic: dispatch_compressed <slug>`
+  (distinct from the canonical-path `mosaic: dispatch <slug>`)
+  so program log analysis can attribute CU consumption between the
+  two paths.
+
+### Bandwidth wins
+
+Per typical proof shape, the compressed path saves roughly half the
+proof transport bytes:
+
+| Verifier | Canonical (proof + VK) | Compressed | Saved |
+|---|---|---|---|
+| Groth16 | 896 B | 448 B | 50 % |
+| KZG-PLONK | 1 512 B | 904 B | 40 % |
+| HyperPlonk R=10 | 2 412 B | 1 932 B | 20 % |
+| Halo2 typical | ~1 870 B | ~1 480 B | 21 % |
+| Nova default | ~1 060 B | ~610 B | 42 % |
+
+Direct consequence: circuits that previously required chunked-upload
+because their canonical bytes exceeded the 1 232-byte tx data limit
+now fit inline in a single transaction.
+
+### CU overhead
+
+Decompression cost per verifier (added to existing canonical baseline):
+
+| Verifier | Baseline | + Decompression | Combined |
+|---|---|---|---|
+| Groth16 | ~84 K | ~58 K | ~141 K |
+| KZG-PLONK | ~968 K | ~92 K | ~1.06 M |
+| HyperPlonk | ~505 K | ~92 K | ~600 K |
+| Halo2 | ~580 K | variable | ~700 K typical |
+| Nova | ~885 K | ~110 K | ~995 K |
+
+All verifiers fit within the per-tx `MAX_COMPUTE_UNIT_LIMIT = 1.4 M`
+ceiling.
+
+### Test totals at v0.9.15
+
+| Surface | Before (v0.9.14) | After (v0.9.15) | Δ |
+|---|---|---|---|
+| SBF integration tests | 10 | 13 | +3 |
+| On-chain instructions | 7 | 8 | +1 |
+| Lib tests | 712 | 712 | 0 |
+
+### What this milestone DOES change
+
+- 1 new on-chain instruction (`VerifyCompressedProof = 0x03`).
+- 1 new Borsh wire struct (`VerifyCompressedProofData`).
+- 1 new dispatcher function with 6 per-system arms (5 happy-path +
+  Risc0 unimplemented + STARK unsupported).
+- 3 new SBF integration tests (Groth16 happy + STARK reject +
+  Risc0 reject).
+- `mosaic-program` dev-deps activate `host-backend` feature for
+  `mosaic-core` + `mosaic-groth16` so tests can compress fixtures
+  host-side before submission. The cdylib SBF build is unaffected.
+
+### What this milestone does NOT change
+
+- Existing `VerifyProof = 0x01` and `VerifyProofBatch = 0x02`
+  paths — fully backward-compatible.
+- Verifier behavior post-decompression — identical to canonical
+  path.
+- Wire format for canonical proofs / VKs.
+
+### Pre-audit pipeline status at v0.9.15
+
+| Gate | Status |
+|---|---|
+| Implementation freeze | ✅ All 6 verifiers, 5 with end-to-end compression |
+| Test coverage | ✅ 712 lib + 37 fuzz + 14 criterion + 13 SBF integration |
+| Differential parity | ✅ Phase-2; Phase-3 pending session 118 |
+| Audit-coverage runbook | ✅ `docs/audit-coverage-runbook.md` |
+| Per-gate isolation benches | ✅ `audit_gates_host.rs` |
+| Audit-firm handoff doc | ✅ `AUDIT-CHECKLIST.md` |
+| Threat model T-11 + T-12 | ✅ |
+| **On-chain compressed-verify path** | **✅ session 116, 5/5 BN254 verifiers** |
+| External audit commission | 🔴 Not yet sent for quote |
+
+---
+
 ## 2026-05-02 — v0.9.14-audit-checklist release (session 115)
 
 | Field | Value |

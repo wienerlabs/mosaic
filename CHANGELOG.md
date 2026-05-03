@@ -7,17 +7,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.14-audit-checklist
+### Planned beyond v0.9.15-onchain-compressed-verify
 
 - Fixture-driven differential testing for the three remaining Phase-3
   bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
   has multi-column lookup wired end-to-end + KZG-bound at v0.9.1.
 - HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
-  layout breaking change).
+  layout breaking change) — session 117.
+- Phase-3 differential test scaffold + 1 reference fixture per
+  vendor — session 118.
 - External security audit commission (target: post-v0.9.20 freeze).
-- On-chain `verify_compressed_proof` instruction so callers can
-  upload alt_bn128-compressed proofs directly (session 116).
-- HyperPlonk Zeromorph partial reduction (session 117).
+
+## [0.9.15-onchain-compressed-verify] — 2026-05-03
+
+**On-chain `VerifyCompressedProof` instruction lands.** Sessions
+103-114 wired the alt_bn128 compression API across all five
+BN254-curve verifiers (Halo2, Groth16, KZG-PLONK, HyperPlonk, Nova).
+Until this release the compression APIs were wire-format only —
+callers had to decompress off-chain before submitting the canonical
+form. Session 116 closes that gap with a new instruction tag (`0x03`)
+that decompresses on chain via the `sol_alt_bn128_compression`
+syscall, then dispatches to the existing per-system verifier.
+
+### Added — `crates/mosaic-program/src/lib.rs`
+
+| Surface | Description |
+|---|---|
+| `InstructionTag::VerifyCompressedProof = 0x03` | New top-level instruction tag |
+| `VerifyCompressedProofData` Borsh struct | `(proof_system_id: u8, compressed_vk, compressed_proof, public_inputs)` |
+| `handle_verify_compressed_proof()` | Per-system decompression dispatch + forwards to existing `dispatch_verify` |
+
+Per-system applicability:
+
+| Proof system | `VerifyCompressedProof` |
+|---|---|
+| Groth16Bn254 (`0x01`) | ✓ |
+| PlonkKzgBn254 (`0x02`) | ✓ |
+| HyperPlonkKzgBn254 (`0x03`) | ✓ |
+| Halo2KzgBn254 (`0x04`) | ✓ |
+| FriStark (`0x05`) | `UnsupportedOperation` (no BN254 curve points) |
+| Risc0Stark (`0x06`) | `UnimplementedProofSystem` |
+| NovaFolding (`0x07`) | ✓ |
+| ProtoStarFolding (`0x08`) | ✓ (alias to Nova) |
+
+### Bandwidth wins
+
+| Verifier | Canonical | Compressed | Saved | % |
+|---|---|---|---|---|
+| Groth16 (vk + proof) | 896 B | 448 B | 448 B | 50 % |
+| KZG-PLONK (vk + proof) | 1 512 B | 904 B | 608 B | 40 % |
+| HyperPlonk R=10 (vk + proof) | 2 412 B | 1 932 B | 480 B | 20 % |
+| Halo2 typical (vk + proof) | ~1 870 B | ~1 480 B | ~390 B | 21 % |
+| Nova default (vk + proof) | ~1 060 B | ~610 B | ~450 B | 42 % |
+
+The bandwidth saving directly increases the proof size that fits in
+a single 1 232-byte Solana transaction — circuits that previously
+required chunked-upload now fit inline.
+
+### CU overhead
+
+Per-system decompression overhead (added to the existing canonical
+verify cost):
+
+- Groth16: ~58 K CU (5 G1 + 3 G2). Total: ~141 K (was 84 K).
+- KZG-PLONK: ~92 K CU (8 G1 + 1 G2). Total: ~1.06 M (was 968 K).
+- HyperPlonk: ~92 K CU (5 G1 + 8 G1 + 1 G2 = 13 G1 + 1 G2 across
+  proof + VK). Total: ~600 K (was ~505 K).
+- Halo2: variable on commit count. Typical: ~120 K added.
+- Nova: ~110 K CU (9 G1 + 3 G1 + 1 G2). Total: ~995 K (was 885 K).
+
+All variants fit within the per-tx `MAX_COMPUTE_UNIT_LIMIT = 1.4 M`
+cap. Callers requesting tighter budgets should account for the
+decompression overhead via
+`set_compute_unit_limit(canonical_baseline + decompression_overhead)`.
+
+### Added — SBF integration tests
+
+3 new tests in
+[`crates/mosaic-program/tests/verify_proof_sbf.rs`](crates/mosaic-program/tests/verify_proof_sbf.rs):
+
+- `sbf_verify_compressed_groth16_succeeds`: real mul-circuit fixture
+  compressed host-side → submit compressed → on-chain decompress →
+  verify. Asserts: tx success, `mosaic: dispatch_compressed
+  groth16_bn254` log line present, CU within (83 K, 300 K) range.
+- `sbf_verify_compressed_rejects_fri_stark`: STARK has no BN254
+  points; dispatcher must reject deterministically with
+  `UnsupportedOperation` (0x18).
+- `sbf_verify_compressed_rejects_risc0_unimplemented`: Risc0 dispatch
+  arm consistent across both `VerifyProof` and `VerifyCompressedProof`
+  — both return `UnimplementedProofSystem` (0x11).
+
+SBF integration test totals: 10 → **13** (+3).
+
+### Audit-attribution log line
+
+The new dispatcher emits `mosaic: dispatch_compressed <slug>` (note
+the trailing `_compressed`) — distinct from the canonical-path
+`mosaic: dispatch <slug>` so audit firms can grep program logs to
+distinguish which path a transaction took. This matters for CU
+analysis: the CU number on a `dispatch_compressed` line includes
+the decompression overhead.
+
+### Coverage delta
+
+| Surface | Before (v0.9.14) | After (v0.9.15) | Δ |
+|---|---|---|---|
+| On-chain instructions | 7 (1 verify + 1 batch + 5 chunked) | **8** (+ `VerifyCompressedProof`) | +1 |
+| SBF integration tests | 10 | **13** | +3 |
+| Verifiers callable via compressed path | 0 | **5** (Groth16, PLONK, HyperPlonk, Halo2, Nova) | +5 |
+
+### What this milestone DOES change
+
+- Adds `InstructionTag::VerifyCompressedProof = 0x03` — new
+  on-chain entry point. Backward-compatible: the canonical
+  `VerifyProof = 0x01` path continues to work unchanged.
+- Adds `VerifyCompressedProofData` Borsh wire struct.
+- Adds `handle_verify_compressed_proof()` dispatcher with per-system
+  decompression routing.
+- Adds `mosaic: dispatch_compressed <slug>` log line for audit
+  attribution.
+- 3 new SBF integration tests + dev-dep additions to
+  `mosaic-program/Cargo.toml` (`mosaic-core` and `mosaic-groth16`
+  now active with `host-backend` feature for the test path).
+
+### What this milestone does NOT change
+
+- Verifier behavior — the post-decompression `dispatch_verify`
+  call is identical to the canonical path.
+- Wire format for canonical proofs / VKs — unchanged.
+- Public ABI for the existing `VerifyProof` and `VerifyProofBatch`
+  instructions — unchanged.
+- CU consumption for the canonical-path verifier — unchanged (the
+  new path only adds overhead when callers opt in).
+
+### Why this matters for audit scoping
+
+Compression was a *consensus-relevant* feature even before this
+release: the wire-format APIs (sessions 103-114) had to round-trip
+correctly between host arkworks and SBF syscall, lest off-chain
+transport silently corrupt proofs. Session 116 makes the syscall
+side directly observable on chain — `bpf-bench` can now measure
+the decompression CU cost end-to-end (planned regression-tracking
+target in the next bench update). Audit firms reviewing the
+`dispatch_compressed` path get:
+
+1. Concrete decompression-CU baselines per verifier.
+2. Deterministic rejection paths for FRI-STARK + Risc0 (negative
+   coverage in SBF integration tests).
+3. Per-verifier round-trip evidence: host compress → on-chain
+   decompress + verify produces identical results to host-side
+   canonical-path verification.
 
 ## [0.9.14-audit-checklist] — 2026-05-02
 

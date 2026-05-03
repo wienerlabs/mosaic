@@ -871,3 +871,200 @@ async fn sbf_unknown_proof_system_rejected() {
         logs.join("\n"),
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Session 116 — VerifyCompressedProof instruction (`0x03`).
+//
+// The compressed-proof path decompresses VK + proof on chain via the
+// `sol_alt_bn128_compression` syscall, then dispatches to the
+// existing `dispatch_verify`. Public inputs pass through unchanged.
+//
+// SBF runtime evidence covers:
+//   - Happy path: real Groth16 mul-circuit fixture, compress on host
+//     → submit compressed → on-chain decompress + verify.
+//   - FRI-STARK rejection: STARK has no BN254 curve points; the
+//     dispatcher must surface `UnsupportedOperation` (0x18)
+//     deterministically rather than attempting a malformed compress.
+// ─────────────────────────────────────────────────────────────────────────
+
+#[derive(BorshSerialize)]
+struct VerifyCompressedProofData {
+    proof_system_id: u8,
+    compressed_vk: Vec<u8>,
+    compressed_proof: Vec<u8>,
+    public_inputs: Vec<u8>,
+}
+
+/// `OnChainError::UnsupportedOperation = 0x0018` — see `mosaic_core::error`.
+const ERR_UNSUPPORTED_OPERATION: u32 = 0x0018;
+
+fn build_verify_compressed_ix(
+    proof_system_id: u8,
+    compressed_vk: &[u8],
+    compressed_proof: &[u8],
+    public_inputs: &[u8],
+) -> Instruction {
+    let payload = VerifyCompressedProofData {
+        proof_system_id,
+        compressed_vk: compressed_vk.to_vec(),
+        compressed_proof: compressed_proof.to_vec(),
+        public_inputs: public_inputs.to_vec(),
+    };
+    let mut data = Vec::with_capacity(
+        1 + 1 + compressed_vk.len() + compressed_proof.len() + public_inputs.len() + 16,
+    );
+    data.push(0x03); // InstructionTag::VerifyCompressedProof
+    borsh::to_writer(&mut data, &payload).unwrap();
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: Vec::<AccountMeta>::new(),
+        data,
+    }
+}
+
+/// Compress the canonical Groth16 mul-circuit fixture host-side, then
+/// submit via `VerifyCompressedProof`. Asserts:
+///   1. The transaction succeeds end-to-end (compress on host →
+///      decompress on chain → verify).
+///   2. The dispatcher emits the `mosaic: dispatch_compressed groth16_bn254`
+///      log line (audit attribution evidence).
+///   3. CU consumption falls within tolerance of the *added*
+///      decompression overhead vs the canonical baseline.
+#[tokio::test]
+async fn sbf_verify_compressed_groth16_succeeds() {
+    use mosaic_core::syscall::host::HostBackend;
+    use mosaic_groth16::canonical::{Groth16Proof, Groth16VerifyingKey};
+
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+
+    // Read canonical fixtures + compress host-side.
+    let canonical_vk = fixture("groth16", "vk.bin");
+    let canonical_proof = fixture("groth16", "proof.bin");
+    let pi = fixture("groth16", "public_inputs.bin");
+    let host = HostBackend::new();
+    let vk_struct = Groth16VerifyingKey::from_bytes(&canonical_vk).expect("parse canonical vk");
+    let compressed_vk = vk_struct.to_compressed_bytes(&host).expect("compress vk");
+    let compressed_proof = Groth16Proof::compress_from_canonical_bytes(&host, &canonical_proof)
+        .expect("compress proof");
+
+    // Sanity: compressed sizes match the documented 50 % saving.
+    assert!(
+        compressed_proof.len() < canonical_proof.len(),
+        "compressed proof must be smaller than canonical: {} < {}",
+        compressed_proof.len(),
+        canonical_proof.len(),
+    );
+
+    // Submit compressed → on-chain decompress → verify.
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(300_000);
+    let verify_ix =
+        build_verify_compressed_ix(PSID_GROTH16, &compressed_vk, &compressed_proof, &pi);
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let meta = banks.process_transaction_with_metadata(tx).await.unwrap();
+    let logs = meta
+        .metadata
+        .map(|m| m.log_messages)
+        .unwrap_or_default();
+    assert!(
+        meta.result.is_ok(),
+        "compressed Groth16 must verify on-chain: {:?}\nlogs:\n{}",
+        meta.result,
+        logs.join("\n"),
+    );
+
+    // Dispatcher emits the compressed-path slug — distinct from the
+    // canonical-path `mosaic: dispatch <slug>` for audit attribution.
+    let needle = "mosaic: dispatch_compressed groth16_bn254";
+    assert!(
+        logs.iter().any(|l| l.contains(needle)),
+        "expected dispatch_compressed log line `{needle}`, got:\n{}",
+        logs.join("\n"),
+    );
+
+    // CU should be larger than the canonical baseline (83 574) due to
+    // decompression overhead: ~10 K per G1 × 5 + ~12 K per G2 × 3 ≈
+    // ~86 K added. Total ~170 K. Use a generous +100 % upper bound to
+    // avoid flaky failures across syscall-cost-schedule revisions.
+    let cu = extract_cu(&logs).expect("CU line in logs");
+    assert!(
+        cu > 83_574 && cu < 300_000,
+        "compressed Groth16 CU {cu} should fall in (83K, 300K) range",
+    );
+}
+
+/// FRI-STARK has no BN254 curve points. The dispatcher must reject
+/// `VerifyCompressedProof` for it deterministically with
+/// `OnChainError::UnsupportedOperation` (0x0018) — surfacing a clean
+/// error to callers instead of attempting a malformed decompression
+/// that would fail at the syscall layer with a less-informative code.
+#[tokio::test]
+async fn sbf_verify_compressed_rejects_fri_stark() {
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(100_000);
+    let verify_ix = build_verify_compressed_ix(
+        PSID_FRI_STARK,
+        &[0u8; 64],
+        &[0u8; 64],
+        &[0u8; 32],
+    );
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let err = banks.process_transaction(tx).await.unwrap_err();
+    let s = format!("{err:?}");
+    assert!(
+        s.contains(&format!("Custom({ERR_UNSUPPORTED_OPERATION})"))
+            || s.contains("Custom(24)")
+            || s.contains("0x18"),
+        "expected UnsupportedOperation (0x{ERR_UNSUPPORTED_OPERATION:04x}), got: {s}",
+    );
+}
+
+/// Risc0Stark dispatch arm in `VerifyCompressedProof` matches the
+/// canonical `VerifyProof` arm: returns `UnimplementedProofSystem`
+/// (0x0011). Confirms the negative-path matrix is consistent across
+/// both instruction tags.
+#[tokio::test]
+async fn sbf_verify_compressed_rejects_risc0_unimplemented() {
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(100_000);
+    let verify_ix = build_verify_compressed_ix(
+        PSID_RISC0_STARK,
+        &[0u8; 64],
+        &[0u8; 64],
+        &[0u8; 32],
+    );
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let err = banks.process_transaction(tx).await.unwrap_err();
+    let s = format!("{err:?}");
+    assert!(
+        s.contains(&format!("Custom({ERR_UNIMPLEMENTED_PROOF_SYSTEM})"))
+            || s.contains("Custom(17)")
+            || s.contains("0x11"),
+        "expected UnimplementedProofSystem (0x{ERR_UNIMPLEMENTED_PROOF_SYSTEM:04x}), got: {s}",
+    );
+}

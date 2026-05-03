@@ -34,6 +34,14 @@ mosaic-chunked = { workspace = true, features = ["std"] }
 # real SBF ELF and dispatches every `ProofSystemId` arm; building the
 # input bytes host-side keeps the .so binary free of fixture-construction
 # code that doesn't belong on chain.
+#
+# Session 116 — `host-backend` feature added to `mosaic-core` and
+# `mosaic-groth16` so the new compressed-proof SBF integration tests
+# can compress the canonical fixtures host-side via `HostBackend::new()`
+# before submitting them to the on-chain decompressor. The cdylib SBF
+# build is unaffected — dev-deps don't propagate to `cargo build-sbf`.
+mosaic-core = { workspace = true, features = ["solana", "host-backend"] }
+mosaic-groth16 = { workspace = true, features = ["solana", "host-backend"] }
 mosaic-zk-primitives = { workspace = true, features = ["std"] }
 mosaic-hyperplonk = { workspace = true, features = ["std"] }
 mosaic-halo2 = { workspace = true, features = ["std"] }

@@ -6,7 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wienerlabs/mosaic/ci.yml?branch=main)](.github/workflows/ci.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE-APACHE)
 [![MSRV: 1.85.0](https://img.shields.io/badge/MSRV-1.85.0-orange.svg)](rust-toolchain.toml)
-[![Release: v0.9.14-audit-checklist](https://img.shields.io/badge/release-v0.9.14--audit--checklist-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.14-audit-checklist)
+[![Release: v0.9.15-onchain-compressed-verify](https://img.shields.io/badge/release-v0.9.15--onchain--compressed--verify-green.svg)](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.15-onchain-compressed-verify)
 [![Audit: ready for review](https://img.shields.io/badge/audit-ready%20for%20review-yellow.svg)](AUDIT.md)
 
 The Solana ecosystem has exactly one production-grade ZK verifier today
@@ -62,8 +62,9 @@ frozen CU budgets.
 | Host criterion bench (wall-clock baseline) | ✅ 5 systems: Groth16, HyperPlonk, Halo2, Nova, FRI-STARK | — |
 | Fuzz harnesses (sessions 54-59 / 109-114) | ✅ 37 targets including 10 compression harnesses (Phase-2: Halo2/Groth16/PLONK; Phase-3: HyperPlonk/Nova) | — |
 | Compression infrastructure (session 114) | ✅ Every BN254 verifier (5/5): proof + VK round-trip APIs, 59 round-trip tests, 4 fuzz + 4 criterion benches | — |
-| SBF integration tests (session 113) | ✅ 10 tests across all 8 declared `ProofSystemId` bytes + 1 alias + 1 unknown-byte negative | — |
-| **Audit-firm handoff doc (session 115)** | **✅ [`AUDIT-CHECKLIST.md`](AUDIT-CHECKLIST.md) — crate-by-crate scope/non-scope + reproducibility recipe + open-questions list** | — |
+| **On-chain compressed-verify (session 116)** | **✅ `VerifyCompressedProof = 0x03` instruction — 5/5 BN254 verifiers callable via compressed wire format; 50 % bandwidth saving for Groth16, 40-42 % for PLONK/Nova** | — |
+| SBF integration tests (sessions 113 + 116) | ✅ 13 tests across all 8 declared `ProofSystemId` bytes + 1 alias + 1 unknown-byte negative + 3 compressed-path tests | — |
+| Audit-firm handoff doc (session 115) | ✅ [`AUDIT-CHECKLIST.md`](AUDIT-CHECKLIST.md) — crate-by-crate scope/non-scope + reproducibility recipe + open-questions list | — |
 | External audit | 🔴 Not yet commissioned (`AUDIT-CHECKLIST.md` ready to send for scoping quote) | — |
 
 See [`AUDIT.md`](AUDIT.md) for audit history and [`SECURITY.md`](SECURITY.md)

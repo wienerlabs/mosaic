@@ -6,7 +6,9 @@
 //!
 //! | Tag      | Operation |
 //! |---|---|
-//! | `0x01`   | `VerifyProof` (single transaction, ≤1232 B payload) |
+//! | `0x01`   | `VerifyProof` (single transaction, ≤1232 B payload, canonical bytes) |
+//! | `0x02`   | `VerifyProofBatch` (Bowe-Gabizon aggregation for Groth16; loop fallback otherwise) |
+//! | `0x03`   | `VerifyCompressedProof` (session 116 — alt_bn128-compressed VK + proof) |
 //! | `0x10`   | `InitializeSession` (chunked upload) |
 //! | `0x11`   | `AppendChunk` (chunked upload) |
 //! | `0x12`   | `CommitAndVerify` (chunked upload) |
@@ -71,6 +73,23 @@ pub enum InstructionTag {
     /// Bowe-Gabizon aggregation when the proof system supports it
     /// (Groth16); falls back to looped single-verify otherwise.
     VerifyProofBatch = 0x02,
+    /// **Session 116** — verify a compressed proof.
+    ///
+    /// Borsh payload: `VerifyCompressedProofData`. The VK and proof
+    /// arrive in their alt_bn128-compressed wire format (sessions
+    /// 105-114) — this instruction decompresses them on chain via the
+    /// `sol_alt_bn128_compression` syscall and dispatches to the
+    /// existing `dispatch_verify` path.
+    ///
+    /// Public inputs are NOT compressed (they're Fr-only, no curve
+    /// points), so they pass through as canonical bytes.
+    ///
+    /// **Per-system applicability**:
+    /// - Groth16 / KZG-PLONK / Halo2 / HyperPlonk / Nova: ✓
+    /// - FRI-STARK: returns `OnChainError::UnsupportedOperation`
+    ///   (no BN254 curve points; alt_bn128 compression is N/A).
+    /// - Risc0Stark: returns `UnimplementedProofSystem`.
+    VerifyCompressedProof = 0x03,
 }
 
 /// Decoded `VerifyProof` payload.
@@ -103,6 +122,38 @@ pub struct VerifyProofBatchData {
     pub public_inputs: Vec<Vec<u8>>,
 }
 
+/// **Session 116** — decoded `VerifyCompressedProof` payload.
+///
+/// The on-chain dispatcher decompresses `compressed_vk` and
+/// `compressed_proof` via the `sol_alt_bn128_compression` syscall,
+/// then forwards the canonical bytes to the existing per-system
+/// verifier. `public_inputs` are NOT compressed (Fr-only, no curve
+/// points) and pass through as canonical bytes.
+///
+/// Wire-format size win at typical shapes:
+/// - Groth16: VK 320 B (was 640) + proof 128 B (was 256) = **448 B
+///   saved (~50 %)**.
+/// - KZG-PLONK: VK 424 B + proof 480 B = **608 B saved**.
+/// - HyperPlonk (R=10): VK 424 B + proof 1508 B = **480 B saved**.
+/// - Nova (default shape): VK 199 B + proof ~700 B = **448 B saved**.
+/// - Halo2 (5 advice / 3 quotient): variable; ~384 B saved typical.
+///
+/// CU cost: per-system decompression overhead added to the
+/// existing verify cost. Groth16: ~58 K + ~83 K = ~141 K total.
+/// PLONK: ~92 K + ~968 K = ~1.06 M total. Phase-3 verifiers add
+/// proportional overhead per their commit count.
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct VerifyCompressedProofData {
+    /// Proof system selector. Same byte mapping as `VerifyProofData`.
+    pub proof_system_id: u8,
+    /// Verifying key in alt_bn128-compressed wire format.
+    pub compressed_vk: Vec<u8>,
+    /// Proof in alt_bn128-compressed wire format.
+    pub compressed_proof: Vec<u8>,
+    /// Public inputs in canonical (uncompressed) Fr-byte form.
+    pub public_inputs: Vec<u8>,
+}
+
 /// Top-level entrypoint.
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -119,6 +170,9 @@ pub fn process_instruction(
     match *tag {
         x if x == InstructionTag::VerifyProof as u8 => handle_verify_proof(rest),
         x if x == InstructionTag::VerifyProofBatch as u8 => handle_verify_proof_batch(rest),
+        x if x == InstructionTag::VerifyCompressedProof as u8 => {
+            handle_verify_compressed_proof(rest)
+        },
         // Chunked-upload instructions: 0x10..=0x1F is reserved for this group.
         // Re-prepend the tag because the sub-dispatcher reads it again.
         x if (0x10..=0x1F).contains(&x) => {
@@ -148,6 +202,107 @@ fn handle_verify_proof_batch(data: &[u8]) -> ProgramResult {
     let pi_refs: Vec<&[u8]> = payload.public_inputs.iter().map(|v| v.as_slice()).collect();
     msg!("mosaic: batch {} n={}", id.slug(), payload.proofs.len());
     dispatch_verify_batch(id, &payload.vk, &proof_refs, &pi_refs).map_err(ProgramError::from)
+}
+
+/// **Session 116** — handle `VerifyCompressedProof` instruction.
+///
+/// Decompresses the VK and proof via the `sol_alt_bn128_compression`
+/// syscall, then dispatches to the existing per-system verifier.
+fn handle_verify_compressed_proof(data: &[u8]) -> ProgramResult {
+    let payload = VerifyCompressedProofData::try_from_slice(data)
+        .map_err(|_| ProgramError::InvalidInstructionData)?;
+    let id = ProofSystemId::from_byte(payload.proof_system_id).map_err(ProgramError::from)?;
+    msg!("mosaic: dispatch_compressed {}", id.slug());
+
+    // Per-system decompression. Each verifier crate's canonical module
+    // owns its compressed wire format (see sessions 105-114). The
+    // dispatcher routes by `ProofSystemId` and forwards canonical
+    // bytes to the existing `dispatch_verify` path.
+    let backend = SolanaSyscallBackend::new();
+    let (canonical_vk, canonical_proof) = match id {
+        ProofSystemId::Groth16Bn254 => {
+            use mosaic_groth16::canonical::{Groth16Proof, Groth16VerifyingKey};
+            // Groth16's `from_compressed_bytes` returns the typed
+            // struct; serialize back to canonical bytes for the
+            // dispatcher. The other verifiers return `Vec<u8>`
+            // directly — API consistency cleanup tracked by issue #66.
+            let vk_struct =
+                Groth16VerifyingKey::from_compressed_bytes(&backend, &payload.compressed_vk)
+                    .map_err(ProgramError::from)?;
+            let vk = vk_struct.to_bytes();
+            let proof = Groth16Proof::decompress_to_canonical_bytes(
+                &backend,
+                &payload.compressed_proof,
+            )
+            .map_err(ProgramError::from)?;
+            (vk, proof)
+        },
+        ProofSystemId::PlonkKzgBn254 => {
+            use mosaic_plonk::canonical::{PlonkProof, PlonkVerifyingKey};
+            let vk_struct =
+                PlonkVerifyingKey::from_compressed_bytes(&backend, &payload.compressed_vk)
+                    .map_err(ProgramError::from)?;
+            let vk = vk_struct.to_bytes();
+            let proof =
+                PlonkProof::decompress_to_canonical_bytes(&backend, &payload.compressed_proof)
+                    .map_err(ProgramError::from)?;
+            (vk, proof)
+        },
+        ProofSystemId::HyperPlonkKzgBn254 => {
+            use mosaic_hyperplonk::canonical::{HyperPlonkProof, HyperPlonkVerifyingKey};
+            let vk =
+                HyperPlonkVerifyingKey::from_compressed_bytes(&backend, &payload.compressed_vk)
+                    .map_err(ProgramError::from)?;
+            let proof = HyperPlonkProof::decompress_to_canonical_bytes(
+                &backend,
+                &payload.compressed_proof,
+            )
+            .map_err(ProgramError::from)?;
+            (vk, proof)
+        },
+        ProofSystemId::Halo2KzgBn254 => {
+            use mosaic_halo2::canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
+            let vk_struct =
+                Halo2KzgVerifyingKey::from_compressed_bytes(&backend, &payload.compressed_vk)
+                    .map_err(ProgramError::from)?;
+            let vk = vk_struct.to_bytes();
+            let proof = Halo2KzgProof::decompress_to_canonical_bytes(
+                &backend,
+                &payload.compressed_proof,
+            )
+            .map_err(ProgramError::from)?;
+            (vk, proof)
+        },
+        ProofSystemId::NovaFolding | ProofSystemId::ProtoStarFolding => {
+            use mosaic_nova::canonical::{NovaFoldingProof, NovaFoldingVerifyingKey};
+            let vk =
+                NovaFoldingVerifyingKey::from_compressed_bytes(&backend, &payload.compressed_vk)
+                    .map_err(ProgramError::from)?;
+            let proof = NovaFoldingProof::decompress_to_canonical_bytes(
+                &backend,
+                &payload.compressed_proof,
+            )
+            .map_err(ProgramError::from)?;
+            (vk, proof)
+        },
+        ProofSystemId::FriStark => {
+            // STARK has no BN254 curve points; alt_bn128 compression
+            // is N/A. Surface a deterministic rejection so callers
+            // route through the canonical `VerifyProof` instruction
+            // (or chunked-upload path) instead.
+            return Err(OnChainError::UnsupportedOperation.into());
+        },
+        ProofSystemId::Risc0Stark => {
+            return Err(OnChainError::UnimplementedProofSystem.into());
+        },
+        // `ProofSystemId` is `#[non_exhaustive]`; a future variant
+        // without a compression API lands here until its `match` arm
+        // is added explicitly.
+        _ => return Err(OnChainError::UnsupportedOperation.into()),
+    };
+
+    dispatch_verify(id, &canonical_vk, &canonical_proof, &payload.public_inputs)
+        .map_err(ProgramError::from)
 }
 
 /// Shared verifier-dispatch helper used by both `handle_verify_proof` and
@@ -347,7 +502,7 @@ mod proptest_coverage {
         /// `InstructionTag` discriminants are pinned at the
         /// declared values. A future re-ordering of the enum
         /// variants would silently shift the byte mapping and
-        /// break every deployed client that hard-codes 0x01 / 0x02.
+        /// break every deployed client that hard-codes 0x01 / 0x02 / 0x03.
         #[test]
         fn proptest_instruction_tag_discriminants_stable(_seed in any::<u8>()) {
             // The argument is unused; we just want proptest to assert
@@ -356,6 +511,8 @@ mod proptest_coverage {
             // hiding inside a `const` test.
             prop_assert_eq!(InstructionTag::VerifyProof as u8, 0x01);
             prop_assert_eq!(InstructionTag::VerifyProofBatch as u8, 0x02);
+            // Session 116 — pin the new compressed-verify discriminant.
+            prop_assert_eq!(InstructionTag::VerifyCompressedProof as u8, 0x03);
         }
 
         /// `process_instruction` rejects a wrong program id with
