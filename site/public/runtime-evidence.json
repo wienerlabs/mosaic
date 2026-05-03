@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-05-03T13:52:45.427Z",
+  "commit_sha": "3e70960",
+  "commit_date": "2026-05-03T16:04:27+03:00",
+  "release_tag": "v0.8.5-msm-helper-coverage",
+  "workspace_version": "0.9.15-onchain-compressed-verify",
+  "machine_node": "darwin-arm64",
+  "captures": [
+    {
+      "id": "git-log",
+      "label": "Release lineage",
+      "description": "Last 12 commits on the audit-prep sprint branch. Each release tag is a CHANGELOG/AUDIT/README quartet.",
+      "command": "git log --oneline -12",
+      "captured_at": "2026-05-03T13:52:35.949Z",
+      "duration_ms": 14,
+      "exit_code": 0,
+      "stdout": "3e70960 feat(site): runtime-evidence section + v0.9.15 stat refresh (s117)\n664ae5a feat(program): VerifyCompressedProof = 0x03 instruction (s116)\nd90850b docs(audit): AUDIT-CHECKLIST.md + T-11/T-12 threat model + SECURITY.md refresh (s115)\n20ebe73 feat(compression): Phase-3 alt_bn128 compression for HyperPlonk + Nova (s114)\n70845ea test(program): SBF integration tests for every dispatch arm + bpf-bench byte-fix (s113)\nd7b8b2e feat(bench): compression cost characteristics (criterion host bench)\nfb24100 feat(fuzz): compression wire-format harnesses (sessions 106-110 surfaces)\n62e303e feat(plonk): compressed proof + VK wire format (40% combined saving)\n91d1958 feat(groth16): compressed proof + VK wire format (50% saving)\nb647522 feat(halo2): compressed proof wire format (sister to compressed VK)\n09eae5f feat(halo2): multiple lookup arguments support (n_lookups > 1)\nbf3aa68 feat(halo2): compressed VK wire format (first consumer of compression syscall)\n",
+      "stderr": "",
+      "required": true
+    },
+    {
+      "id": "sbf-integration",
+      "label": "SBF integration tests",
+      "description": "Loads target/deploy/mosaic_program.so and dispatches every ProofSystemId byte through solana-program-test (the same rbpf VM mainnet validators run). 13 tests cover all 8 declared bytes + 1 alias + 1 unknown-byte negative + 3 compressed-path tests. Skips gracefully if the SBF artifact is missing.",
+      "command": "cargo test -p mosaic-program --test verify_proof_sbf",
+      "captured_at": "2026-05-03T13:52:43.538Z",
+      "duration_ms": 7588,
+      "exit_code": 0,
+      "stdout": "running 13 tests\ntest sbf_verify_proof_succeeds_on_valid_plonk ... ok\ntest sbf_unknown_proof_system_rejected ... ok\ntest sbf_dispatches_halo2_kzg_scaffold ... ok\ntest sbf_dispatches_hyperplonk_kzg_scaffold ... ok\ntest sbf_dispatches_fri_stark_scaffold ... ok\ntest sbf_dispatches_protostar_via_nova_verifier ... ok\ntest sbf_dispatches_nova_folding_scaffold ... ok\ntest sbf_verify_compressed_groth16_succeeds ... ok\ntest sbf_verify_compressed_rejects_fri_stark ... ok\ntest sbf_risc0_returns_unimplemented_proof_system ... ok\ntest sbf_verify_proof_succeeds_on_valid_groth16 ... ok\ntest sbf_rejects_tampered_groth16_proof ... ok\ntest sbf_verify_compressed_rejects_risc0_unimplemented ... ok\ntest result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "stderr": "warning: missing documentation for a function\nwarning: `mosaic-zk-primitives` (lib) generated 1 warning\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unused import: `alloc::vec::Vec`\n    ... [21 lines collapsed for terminal display]\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unused import: `ark_ff::One`\nwarning: `mosaic-halo2` (lib) generated 12 warnings (run `cargo fix --lib -p mosaic-halo2` to apply 10 suggestions)\nwarning: `mosaic-plonk` (lib) generated 10 warnings (run `cargo fix --lib -p mosaic-plonk` to apply 2 suggestions)\nwarning: `mosaic-nova` (lib) generated 2 warnings (run `cargo fix --lib -p mosaic-nova` to apply 2 suggestions)\nwarning: `mosaic-hyperplonk` (lib) generated 6 warnings (run `cargo fix --lib -p mosaic-hyperplonk` to apply 5 suggestions)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.35s",
+      "required": false
+    },
+    {
+      "id": "groth16-lib",
+      "label": "Groth16 verifier lib tests",
+      "description": "Real arkworks differential parity for the Groth16 verifier — single + Bowe-Gabizon batched. The mosaic-groth16 crate's full lib test suite, run against the host backend via solana-bn254 fallback through arkworks.",
+      "command": "cargo test -p mosaic-groth16 --lib",
+      "captured_at": "2026-05-03T13:52:44.363Z",
+      "duration_ms": 825,
+      "exit_code": 0,
+      "stdout": "running 31 tests\ntest canonical::tests::proof_length_check ... ok\ntest canonical::tests::fr_modulus_bound ... ok\ntest canonical::tests::proof_view ... ok\ntest canonical::tests::vk_roundtrip ... ok\ntest fr_arith::tests::add_wraps_mod_r ... ok\ntest fr_arith::tests::add_small_values ... ok\ntest fr_arith::tests::add_rm1_plus_rm1_is_rm2 ... ok\ntest fr_arith::tests::add_zero_is_identity ... ok\ntest fr_arith::tests::reduce_mod_r_handles_max_u256 ... ok\ntest fr_arith::tests::reduce_mod_r_handles_r_itself ... ok\ntest verifier::tests::audit_gate_accepts_when_pairing_returns_success_byte ... ok\n    ... [9 lines collapsed for terminal display]\ntest canonical::tests::proptest_vk_roundtrip ... ok\ntest fr_arith::tests::proptest_reduce_mod_r_identity_on_in_range ... ok\ntest canonical::tests::proptest_vk_rejects_empty_ic ... ok\ntest fr_arith::tests::proptest_add_mod_r_identity ... ok\ntest fr_arith::tests::proptest_reduce_mod_r_idempotent ... ok\ntest canonical::tests::proptest_lt_be_anti_reflexive ... ok\ntest fr_arith::tests::proptest_reduce_mod_r_lands_in_range ... ok\ntest canonical::tests::proptest_lt_be_asymmetric ... ok\ntest fr_arith::tests::proptest_add_mod_r_preserves_range ... ok\ntest fr_arith::tests::proptest_add_mod_r_is_commutative ... ok\ntest canonical::tests::proptest_proof_view_parses_and_round_trips ... ok\ntest result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+      "stderr": "warning: missing documentation for a function\nwarning: `mosaic-zk-primitives` (lib) generated 1 warning\nwarning: unused doc comment\nwarning: `mosaic-groth16` (lib test) generated 1 warning\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.56s",
+      "required": false
+    },
+    {
+      "id": "compression-tests",
+      "label": "Compression round-trip tests",
+      "description": "Sessions 103-114 wired alt_bn128 compression across all 5 BN254 verifiers (Halo2 / Groth16 / KZG-PLONK / HyperPlonk / Nova). 59 round-trip tests assert: real BN254 generators reproduce bit-for-bit; non-curve fields pass through unchanged; off-curve points reject deterministically.",
+      "command": "cargo test -p mosaic-hyperplonk -p mosaic-nova --lib compression",
+      "captured_at": "2026-05-03T13:52:45.427Z",
+      "duration_ms": 1064,
+      "exit_code": 0,
+      "stdout": "running 14 tests\ntest canonical::tests::compression::proof_compress_rejects_canonical_with_wrong_length ... ok\ntest canonical::tests::compression::proof_decompress_rejects_wrong_length ... ok\ntest canonical::tests::compression::proof_decompress_rejects_oversized_rounds_counter ... ok\ntest canonical::tests::compression::vk_compress_rejects_wrong_length ... ok\ntest canonical::tests::compression::vk_decompress_rejects_wrong_length ... ok\ntest canonical::tests::compression::vk_compressed_preserves_non_curve_fields_byte_for_byte ... ok\ntest canonical::tests::compression::proof_decompress_rejects_off_curve_g1 ... ok\ntest canonical::tests::compression::vk_decompress_rejects_off_curve_g2 ... ok\ntest canonical::tests::compression::vk_compressed_saves_320_bytes ... ok\ntest canonical::tests::compression::proof_compressed_saves_160_bytes_per_proof ... ok\ntest canonical::tests::compression::proof_round_trip_at_r10 ... ok\ntest canonical::tests::compression::proof_round_trip_at_r0_edge_case ... ok\ntest canonical::tests::compression::vk_round_trip_with_real_generators ... ok\ntest canonical::tests::compression::proptest_vk_pass_through_bits_survive_compression ... ok\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.28s\nrunning 15 tests\ntest canonical::tests::compression::proof_decompress_rejects_unknown_variant ... ok\ntest canonical::tests::compression::proof_decompress_rejects_wrong_length ... ok\ntest canonical::tests::compression::proof_compress_rejects_canonical_with_wrong_length ... ok\ntest canonical::tests::compression::proof_decompress_rejects_oversized_aux_counter ... ok\ntest canonical::tests::compression::vk_decompress_rejects_unknown_variant ... ok\ntest canonical::tests::compression::vk_decompress_rejects_wrong_length ... ok\ntest canonical::tests::compression::vk_compress_rejects_unknown_variant ... ok\ntest canonical::tests::compression::vk_decompress_rejects_off_curve_g2 ... ok\ntest canonical::tests::compression::vk_compressed_preserves_non_curve_fields_byte_for_byte ... ok\ntest canonical::tests::compression::vk_compressed_saves_160_bytes ... ok\ntest canonical::tests::compression::proof_compressed_saves_proportional_to_aux_count ... ok\ntest canonical::tests::compression::vk_round_trip_with_real_generators ... ok\ntest canonical::tests::compression::proof_round_trip_protostar ... ok\ntest canonical::tests::compression::proof_round_trip_nova_default_shape ... ok\ntest canonical::tests::compression::proof_round_trip_hypernova_with_aux ... ok\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.01s",
+      "stderr": "warning: missing documentation for a function\nwarning: `mosaic-zk-primitives` (lib) generated 1 warning\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\n    ... [26 lines collapsed for terminal display]\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unnecessary qualification\nwarning: unused import: `proptest::prelude::*`\nwarning: `mosaic-nova` (lib test) generated 20 warnings (run `cargo fix --lib -p mosaic-nova --tests` to apply 20 suggestions)\nwarning: `mosaic-hyperplonk` (lib test) generated 19 warnings (run `cargo fix --lib -p mosaic-hyperplonk --tests` to apply 18 suggestions)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s",
+      "required": false
+    }
+  ]
+}

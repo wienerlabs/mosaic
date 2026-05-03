@@ -8,6 +8,7 @@ import { GsapAnimations } from "./components/GsapAnimations";
 import LazyPixelTrail from "./components/LazyPixelTrail";
 import MosaicActivityCard from "./components/MosaicActivityCard";
 import { NavMenu } from "./components/NavMenu";
+import RuntimeEvidenceTerminal from "./components/RuntimeEvidenceTerminal";
 import { ThemeToggle } from "./components/ThemeToggle";
 
 const cargoSnippet = `[dependencies]
@@ -39,27 +40,6 @@ const clientSnippet = `let cu_ix = ComputeBudgetInstruction::set_compute_unit_li
 transaction.add(&cu_ix);
 transaction.add(&mosaic_sdk::build_verify_proof_ix(&request)?);`;
 
-// Session 117 — Runtime evidence reproducibility snippet for the
-// onepager. Every command lands under one minute on a recent laptop;
-// the bpf-bench step is the only one that takes >10 s (rebuilds the
-// SBF artifact + boots solana-program-test for each target).
-const runtimeEvidenceSnippet = `# 1. Build the SBF artifact (the same binary mainnet validators load).
-cargo build-sbf --tools-version v1.52 \\
-  --manifest-path crates/mosaic-program/Cargo.toml
-
-# 2. Run the 13 SBF integration tests against the real rbpf VM.
-BPF_OUT_DIR=target/deploy \\
-  cargo test -p mosaic-program --test verify_proof_sbf
-
-# 3. Run the on-chain CU regression bench (per-system CU baselines).
-cargo run --release -p mosaic-bench --bin bpf-bench
-
-# 4. Run the differential test harness vs arkworks + snarkjs.
-cargo test -p tests-differential
-
-# 5. (Optional) Fuzz any of the 37 harnesses for 5 minutes.
-cd crates/mosaic-fuzz
-cargo +nightly fuzz run fuzz_groth16_proof_bytes -- -max_total_time=300`;
 
 const architectureTree = ` mosaic-program
        │
@@ -609,10 +589,14 @@ export default function HomePage() {
         </table>
 
         <p className="mag-lead">
-          Reproduce locally — every number on this page lands under one
-          minute on a recent laptop:
+          Live evidence — actual workspace command output from the
+          machine that built this site, captured byte-for-byte at the
+          commit shown in the chrome. Pick a capture; the terminal
+          replays the recorded bytes deterministically. Visitors can
+          reproduce identical output locally with the documented
+          commands.
         </p>
-        <MagCodeBlock lang="bash">{runtimeEvidenceSnippet}</MagCodeBlock>
+        <RuntimeEvidenceTerminal />
 
         <p className="mag-lead">
           Deployment ladder — what blocks each rung:
@@ -620,24 +604,27 @@ export default function HomePage() {
         <dl className="mag-kv">
           <dt>SBF runtime evidence</dt>
           <dd>
-            ✅ Today (v0.9.15). 13 integration tests load
-            mosaic_program.so and execute it under the real rbpf VM.
+            <strong>Live</strong> at v0.9.15 — 13 integration tests
+            load mosaic_program.so and execute it under the real
+            rbpf VM. Output captured above.
           </dd>
           <dt>Devnet pilot</dt>
           <dd>
-            🔵 Pending session 119 — declare PROGRAM_ID on devnet,
-            deploy from cargo-build-sbf artifact, run a soak harness
-            that submits one Groth16 verify per slot for 24 hours.
+            <strong>Pending session 119</strong> — declare PROGRAM_ID
+            on devnet, deploy from cargo-build-sbf artifact, run a
+            soak harness that submits one Groth16 verify per slot for
+            24 hours.
           </dd>
           <dt>External audit</dt>
           <dd>
-            🔵 Pending — AUDIT-CHECKLIST.md ready for scoping quote.
-            Target firms: Trail of Bits, OtterSec, Zellic, Halborn.
+            <strong>Pending</strong> — AUDIT-CHECKLIST.md ready for
+            scoping quote. Target firms: Trail of Bits, OtterSec,
+            Zellic, Halborn, ChainSecurity.
           </dd>
           <dt>Mainnet deployment</dt>
           <dd>
-            🔴 Gated on completed external audit + devnet pilot
-            success metrics.
+            <strong>Gated</strong> on completed external audit +
+            devnet pilot success metrics.
           </dd>
         </dl>
       </Page>
