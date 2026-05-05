@@ -1,0 +1,12 @@
+[default.extend-words]
+arkworks = "arkworks"
+bn254 = "bn254"
+groth16 = "groth16"
+halo2 = "halo2"
+kzg = "kzg"
+plonky3 = "plonky3"
+snarkjs = "snarkjs"
+subgroup = "subgroup"
+
+[default.extend-identifiers]
+alt_bn128 = "alt_bn128"
