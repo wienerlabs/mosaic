@@ -1,12 +1,52 @@
+# typos config — wienerlabs/mosaic
+#
+# This allow-list keeps `typos` (https://github.com/crate-ci/typos)
+# quiet on terms that are correct in this codebase but flagged by
+# the default English dictionary. Each entry below is justified by
+# real workspace usage, captured by running typos v1.46.0 against
+# the workspace at v0.9.15.
+#
+# How `typos` matches: it splits identifiers at digit boundaries and
+# CamelCase boundaries, then dictionary-looks-up each fragment. So
+# `Groth16Verifier` is tokenized as `Groth` + `16` + `Verifier`, and
+# the lookup matches `Groth ≈ Growth`. Allow-listing requires the
+# token at the same granularity, hence separate entries for each
+# case-form (`groth`, `Groth`, `GROTH`).
+
 [default.extend-words]
+# Brand and algorithm names. Lowercase + capitalized + uppercase
+# variants are needed because typos is case-sensitive on these.
+groth = "groth"
+Groth = "Groth"
+GROTH = "GROTH"
 arkworks = "arkworks"
 bn254 = "bn254"
-groth16 = "groth16"
 halo2 = "halo2"
 kzg = "kzg"
 plonky3 = "plonky3"
 snarkjs = "snarkjs"
 subgroup = "subgroup"
 
+# Internal abbreviations and style choices that fire false positives.
+clen = "clen"             # `expected_clen` (compressed length) in
+                          # mosaic-{hyperplonk,nova}/src/canonical.rs
+mis = "mis"               # `mis-index` / `mis-assembly` compounds
+unparseable = "unparseable"  # existing test name convention
+flate = "flate"           # `flate2` crate name in supply-chain/audits.toml
+writeable = "writeable"   # `writeable` crate name in supply-chain/audits.toml
+CNA = "CNA"               # CVE Numbering Authority in SECURITY.md
+Favorit = "Favorit"       # font name "ABC Favorit Mono" in site CSS
+ba = "ba"                 # falsely matches inside git SHA fragments
+                          # like `2bf8ba2` in CHANGELOG.md prose tables
+
 [default.extend-identifiers]
 alt_bn128 = "alt_bn128"
+
+[files]
+# Skip directories that aren't tracked content or contain binary
+# fixtures (typos can't validate non-prose payloads).
+extend-exclude = [
+  "site-static-backup/",
+  "tests/fixtures/",
+  "*.bin",
+]

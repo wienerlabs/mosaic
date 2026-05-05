@@ -7,6 +7,12 @@ on:
     branches: [main]
   merge_group:
 
+# Lock the workflow to read-only by default. Individual jobs can
+# escalate via their own `permissions:` block when they actually need
+# write access — none of the current jobs do.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -20,7 +26,11 @@ jobs:
       typo-check: ${{ steps.filter.outputs.typo-check }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      # Pinned to v3.0.2 commit (SHA verified via
+      # `gh api repos/dorny/paths-filter/git/ref/tags/v3.0.2`).
+      # Audit firms expect SHA pins for every third-party action
+      # under the `audit-first` posture documented in SECURITY.md.
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: filter
         with:
           filters: |
@@ -37,7 +47,9 @@ jobs:
     if: github.event_name != 'pull_request' || needs.docs-changes.outputs.typo-check == 'true'
     steps:
       - uses: actions/checkout@v4
-      - uses: crate-ci/typos@master
+      # Pinned to v1.46.0 commit (SHA verified via
+      # `gh api repos/crate-ci/typos/git/ref/tags/v1.46.0`).
+      - uses: crate-ci/typos@6ac2ebd1b93eade61faf7e12688ad87a073fea59 # v1.46.0
 
   fmt:
     name: rustfmt
