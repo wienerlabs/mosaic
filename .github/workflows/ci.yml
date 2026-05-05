@@ -13,6 +13,32 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  docs-changes:
+    name: docs changes
+    runs-on: ubuntu-latest
+    outputs:
+      typo-check: ${{ steps.filter.outputs.typo-check }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            typo-check:
+              - "**/*.md"
+              - "docs/**"
+              - "typos.toml"
+              - ".github/workflows/ci.yml"
+
+  typo-check:
+    name: typos
+    runs-on: ubuntu-latest
+    needs: docs-changes
+    if: github.event_name != 'pull_request' || needs.docs-changes.outputs.typo-check == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@master
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
