@@ -36,6 +36,17 @@ use sha2::{Digest, Sha256};
 /// Where the demo site reads the artifacts from.
 const OUTPUT_DIR: &str = "site/public/demo/sudoku";
 
+/// Source path of the existing snarkjs-emitted PLONK mul-circuit
+/// fixture. The bins are committed at this path because they
+/// double as the differential-test fixture for `mosaic-plonk`
+/// (see `tests/fixtures/plonk/mul-circuit/canonical/`).
+const PLONK_FIXTURE_DIR: &str = "tests/fixtures/plonk/mul-circuit/canonical";
+
+/// Where we copy the PLONK fixture for the demo page to read.
+/// Same artifacts, just in a public-served path so a static deploy
+/// can fetch them.
+const PLONK_PUBLIC_DIR: &str = "site/public/demo/sudoku/plonk-mul";
+
 #[derive(Serialize)]
 struct Evidence {
     schema_version: u32,
@@ -70,6 +81,39 @@ struct Evidence {
     digests_sha256: Digests,
     /// Outcomes from both verifiers.
     verifier_outcomes: VerifierOutcomes,
+    /// Sister demo data: the existing snarkjs-emitted PLONK fixture
+    /// (mul-circuit, 1 R1CS constraint) re-verified by `mosaic-plonk`
+    /// at the same commit. Answers the user-facing question "could
+    /// you use PLONK instead of Groth16?" — yes, the library accepts
+    /// both, and the answer panel on /demo/sudoku shows the trade-offs
+    /// in side-by-side form.
+    plonk_comparison: Option<PlonkComparison>,
+}
+
+#[derive(Serialize)]
+struct PlonkComparison {
+    /// Where the .bin artifacts ended up under public/.
+    artifact_root: &'static str,
+    /// Provenance — the snarkjs version that produced this fixture.
+    prover_source: &'static str,
+    /// Circuit description.
+    circuit: &'static str,
+    /// Time it took mosaic-plonk to verify, on the build machine.
+    verify_ms: u128,
+    /// Result token: "accept" or "reject:<error>".
+    outcome: String,
+    sizes_bytes: Sizes,
+    digests_sha256: PlonkDigests,
+    /// Re-measured on-chain CU budget for this verifier (from the
+    /// runtime-evidence terminal's pinned baseline at v0.9.15).
+    onchain_cu_baseline: u64,
+}
+
+#[derive(Serialize)]
+struct PlonkDigests {
+    vk: String,
+    proof: String,
+    public_inputs: String,
 }
 
 #[derive(Serialize)]
@@ -286,6 +330,7 @@ fn main() -> Result<()> {
             mosaic_valid: result_to_token(&mosaic_valid_result),
             mosaic_tampered: result_to_token(&mosaic_tampered_result),
         },
+        plonk_comparison: maybe_run_plonk_comparison(),
     };
 
     let evidence_json = serde_json::to_string_pretty(&evidence)?;
@@ -310,6 +355,80 @@ fn result_to_token(r: &Result<(), mosaic_core::OnChainError>) -> String {
         Ok(()) => "accept".to_string(),
         Err(e) => format!("reject:{e:?}"),
     }
+}
+
+/// Verify the committed snarkjs PLONK mul-circuit fixture through
+/// `mosaic-plonk`. Copy the .bin files into a public-served path so
+/// the demo page can fetch them at runtime. Returns `None` if the
+/// fixture files are missing (e.g. the generator is being run from
+/// a sparse-checkout); the demo page treats `None` as "comparison
+/// data unavailable for this build".
+fn maybe_run_plonk_comparison() -> Option<PlonkComparison> {
+    use mosaic_core::{proof_system::ProofSystem, syscall::host::HostBackend};
+    use mosaic_plonk::PlonkKzgBn254;
+
+    let src = Path::new(PLONK_FIXTURE_DIR);
+    let vk_path = src.join("vk.bin");
+    let proof_path = src.join("proof.bin");
+    let pi_path = src.join("public_inputs.bin");
+
+    let vk = fs::read(&vk_path).ok()?;
+    let proof = fs::read(&proof_path).ok()?;
+    let pi = fs::read(&pi_path).ok()?;
+
+    let backend = HostBackend::new();
+    let verifier = PlonkKzgBn254::new(&backend);
+    let t = Instant::now();
+    let outcome = ProofSystem::verify(&verifier, &vk, &proof, &pi);
+    let verify_ms = t.elapsed().as_millis();
+    eprintln!(
+        "mosaic-sudoku: PLONK comparison — verify ({verify_ms} ms) → {outcome:?}",
+    );
+
+    // Copy the .bin files into the public-served path.
+    let dst = Path::new(PLONK_PUBLIC_DIR);
+    if let Err(e) = fs::create_dir_all(dst) {
+        eprintln!("  WARN: could not create {PLONK_PUBLIC_DIR}: {e}");
+        return None;
+    }
+    if let Err(e) = fs::write(dst.join("vk.bin"), &vk) {
+        eprintln!("  WARN: could not copy plonk vk.bin: {e}");
+        return None;
+    }
+    if let Err(e) = fs::write(dst.join("proof.bin"), &proof) {
+        eprintln!("  WARN: could not copy plonk proof.bin: {e}");
+        return None;
+    }
+    if let Err(e) = fs::write(dst.join("public_inputs.bin"), &pi) {
+        eprintln!("  WARN: could not copy plonk public_inputs.bin: {e}");
+        return None;
+    }
+
+    Some(PlonkComparison {
+        artifact_root: "/demo/sudoku/plonk-mul",
+        prover_source: "snarkjs PLONK 0.7.6 (mul-circuit, a · b = c)",
+        circuit: "1 R1CS constraint · 1 public input · universal trusted setup",
+        verify_ms,
+        outcome: match &outcome {
+            Ok(()) => "accept".to_string(),
+            Err(e) => format!("reject:{e:?}"),
+        },
+        sizes_bytes: Sizes {
+            vk: vk.len(),
+            proof: proof.len(),
+            public_inputs: pi.len(),
+        },
+        digests_sha256: PlonkDigests {
+            vk: sha256_hex(&vk),
+            proof: sha256_hex(&proof),
+            public_inputs: sha256_hex(&pi),
+        },
+        // Pinned baseline from `mosaic-bench::bpf_bench::TARGETS` —
+        // measured on real SBF, 2026-04-23 re-measurement under
+        // opt-level=z. See CHANGELOG.md entry v0.5.0 "Re-measurement"
+        // for the methodology + drift note.
+        onchain_cu_baseline: 968_457,
+    })
 }
 
 /// Hand-rolled ISO-8601 timestamp without pulling chrono into the

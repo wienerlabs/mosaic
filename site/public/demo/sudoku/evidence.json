@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-11T18:50:14Z",
+  "generated_at": "2026-05-11T19:10:12Z",
   "workspace_version": "0.9.15-onchain-compressed-verify",
-  "repo_commit_sha": "2980f9b",
+  "repo_commit_sha": "473841b",
   "puzzle_source": "Inkala 2010 (21-clue hardest-class)",
   "puzzle": [
     8,
@@ -186,7 +186,7 @@
   "setup_seed": "0xc0ffeedead42beef",
   "prove_seed": "0xb16b00b5deadc0de",
   "timings": {
-    "setup_ms": 78,
+    "setup_ms": 77,
     "prove_ms": 22,
     "verify_arkworks_ms": 1,
     "verify_mosaic_valid_ms": 2,
@@ -208,5 +208,23 @@
     "arkworks_valid": "accept",
     "mosaic_valid": "accept",
     "mosaic_tampered": "reject:PointNotOnCurve"
+  },
+  "plonk_comparison": {
+    "artifact_root": "/demo/sudoku/plonk-mul",
+    "prover_source": "snarkjs PLONK 0.7.6 (mul-circuit, a · b = c)",
+    "circuit": "1 R1CS constraint · 1 public input · universal trusted setup",
+    "verify_ms": 2,
+    "outcome": "accept",
+    "sizes_bytes": {
+      "vk": 744,
+      "proof": 768,
+      "public_inputs": 32
+    },
+    "digests_sha256": {
+      "vk": "51668de2bc7d2c4c06318bd841e880bbab71564919d897ee7337064406ae52d9",
+      "proof": "211053cc9ef864bf31888ed00cceb092fd2e6d66f13b4382499495e14f3baede",
+      "public_inputs": "0a28e9ffef0073f9a6a674cf57ee77307f38f0f1bebb087888d9011ed0eeefdf"
+    },
+    "onchain_cu_baseline": 968457
   }
 }

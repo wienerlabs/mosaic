@@ -2505,3 +2505,504 @@ a {
     font-size: 14px;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * /demo/sudoku — interactive extensions (session 119)
+ *
+ * Adds row/col labels, hover highlight (row + col + 3×3 box), the
+ * focus-readout strip, the proof-anatomy chunk grid, and the
+ * multi-system comparison panel. Continues the angular instrumentation
+ * grammar — all radii ≤ 2 px, all type tabular.
+ * ───────────────────────────────────────────────────────────────────── */
+
+.demo-grid-labels {
+  display: grid;
+  grid-template-columns: 28px repeat(9, 1fr);
+  gap: 0;
+  font-family: var(--mtm-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(17, 45, 78, 0.5);
+  margin-bottom: 4px;
+}
+
+.demo-grid-corner {
+  width: 28px;
+  height: 18px;
+}
+
+.demo-grid-label {
+  text-align: center;
+  font-weight: 600;
+  align-self: center;
+}
+
+.demo-grid-row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 0;
+  align-items: stretch;
+}
+
+.demo-grid-rows {
+  display: grid;
+  grid-template-rows: repeat(9, 1fr);
+  align-items: center;
+  font-family: var(--mtm-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  color: rgba(17, 45, 78, 0.5);
+}
+
+.demo-grid-rows .demo-grid-label {
+  font-weight: 600;
+}
+
+/* Hover state: a row/col/box where the focused cell lives gets a
+ * thin accent tint; the focused cell itself gets a stronger ring. */
+.demo-cell {
+  transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+  cursor: default;
+}
+
+.demo-cell:focus {
+  outline: none;
+}
+
+.demo-cell-in-group {
+  background: rgba(63, 114, 175, 0.16);
+}
+
+.demo-cell-clue.demo-cell-in-group {
+  background: rgba(63, 114, 175, 0.66);
+}
+
+.demo-cell-focus {
+  outline: 2px solid var(--demo-witness-fg);
+  outline-offset: -2px;
+  z-index: 2;
+  position: relative;
+}
+
+.demo-cell-clue.demo-cell-focus {
+  outline-color: #dbe2ef;
+}
+
+/* Focus readout strip — below the grid, shows what circuit roles
+ * the hovered cell plays. */
+.demo-grid-readout {
+  background: var(--demo-stripe);
+  border: 1px solid var(--demo-line);
+  border-radius: 2px;
+  padding: 14px 18px;
+  min-height: 102px;
+  font-family: var(--mtm-mono);
+  font-size: 12px;
+  color: var(--demo-fg);
+}
+
+.demo-grid-readout-empty {
+  color: rgba(17, 45, 78, 0.55);
+  font-style: italic;
+  margin: 0;
+  font-size: 12px;
+}
+
+.demo-grid-readout-dl {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 6px 18px;
+  margin: 0;
+}
+
+.demo-grid-readout-dl > div {
+  display: contents;
+}
+
+.demo-grid-readout-dl dt {
+  font-family: var(--mtm-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  font-weight: 700;
+  margin: 0;
+  padding-top: 1px;
+}
+
+.demo-grid-readout-dl dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--demo-fg);
+  line-height: 1.45;
+}
+
+/* ── Proof anatomy ───────────────────────────────────────────────── */
+
+.demo-anatomy {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.demo-anatomy-header .mag-lead {
+  max-width: 78ch;
+  font-size: 14.5px;
+  color: rgba(17, 45, 78, 0.78);
+}
+
+.demo-anatomy-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.demo-chunk {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--demo-stripe);
+  border: 1px solid var(--demo-line);
+  border-left: 2px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: var(--mtm-mono);
+  text-align: left;
+  color: var(--demo-fg);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.demo-chunk-A {
+  border-left-color: rgba(63, 114, 175, 0.55);
+}
+
+.demo-chunk-B {
+  border-left-color: rgba(17, 45, 78, 0.65);
+}
+
+.demo-chunk-C {
+  border-left-color: rgba(110, 156, 238, 0.7);
+}
+
+.demo-chunk:hover {
+  background: var(--demo-witness-bg);
+  border-color: var(--demo-witness-fg);
+}
+
+.demo-chunk:focus-visible {
+  outline: 2px solid var(--demo-witness-fg);
+  outline-offset: -2px;
+}
+
+.demo-chunk-focus {
+  background: var(--demo-clue-bg) !important;
+  color: var(--demo-clue-fg);
+  border-color: var(--demo-clue-bg);
+}
+
+.demo-chunk-focus .demo-chunk-range,
+.demo-chunk-focus .demo-chunk-ellipsis {
+  color: rgba(249, 247, 247, 0.6);
+}
+
+.demo-chunk-focus .demo-chunk-hex {
+  color: var(--demo-clue-fg);
+}
+
+.demo-chunk-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.demo-chunk-label {
+  font-family: var(--font-display, system-ui, sans-serif);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.demo-chunk-range {
+  font-family: var(--mtm-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(17, 45, 78, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-chunk-hex {
+  font-family: var(--mtm-mono);
+  font-size: 11.5px;
+  color: rgba(17, 45, 78, 0.78);
+  letter-spacing: 0.02em;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.demo-chunk-ellipsis {
+  color: rgba(17, 45, 78, 0.4);
+  padding: 0 4px;
+}
+
+.demo-anatomy-detail {
+  background: var(--mtm-bg);
+  color: var(--mtm-fg);
+  border-radius: 2px;
+  padding: 22px 26px;
+  border-left: 2px solid var(--mtm-accent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 132px;
+}
+
+.demo-anatomy-detail .tag {
+  font-family: var(--mtm-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--mtm-accent);
+  font-weight: 700;
+  margin: 0;
+}
+
+.demo-anatomy-detail h3 {
+  font-family: var(--font-display, system-ui, sans-serif);
+  font-size: 18px;
+  margin: 0;
+  letter-spacing: -0.01em;
+  color: var(--mtm-fg);
+}
+
+.demo-anatomy-detail p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--mtm-muted);
+  font-family: var(--mtm-mono);
+  letter-spacing: 0.01em;
+}
+
+.demo-anatomy-detail-empty {
+  color: var(--mtm-faint);
+  font-style: italic;
+}
+
+/* ── Multi-system comparison ─────────────────────────────────────── */
+
+.demo-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.demo-compare-header .mag-lead,
+.demo-compare-header .body-copy {
+  max-width: 80ch;
+  font-size: 14.5px;
+  color: rgba(17, 45, 78, 0.78);
+}
+
+.demo-compare-header .body-copy {
+  font-size: 14px;
+}
+
+.demo-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border: 1px solid var(--demo-line-strong);
+  border-radius: 2px;
+}
+
+.demo-compare-col {
+  padding: 22px 24px;
+}
+
+.demo-compare-col:first-child {
+  border-right: 1px solid var(--demo-line);
+  background: var(--demo-stripe);
+}
+
+.demo-compare-col h3 {
+  font-family: var(--font-display, system-ui, sans-serif);
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--demo-line);
+  font-weight: 700;
+}
+
+.demo-compare-col dl {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.demo-compare-col dl > div {
+  display: contents;
+}
+
+.demo-compare-col dt {
+  font-family: var(--mtm-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  font-weight: 700;
+  align-self: start;
+  padding-top: 2px;
+}
+
+.demo-compare-col dd {
+  font-family: var(--mtm-mono);
+  font-size: 12.5px;
+  color: var(--demo-fg);
+  margin: 0;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-compare-col dd code {
+  font-family: inherit;
+  background: var(--demo-witness-bg);
+  padding: 1px 6px;
+  font-size: 0.95em;
+  border-radius: 2px;
+  border: 1px solid var(--demo-line);
+}
+
+.demo-compare-footer {
+  background: var(--mtm-bg);
+  color: var(--mtm-fg);
+  padding: 22px 26px;
+  border-radius: 2px;
+  border-left: 2px solid var(--mtm-accent);
+}
+
+.demo-compare-footer p {
+  margin: 0 0 18px;
+  font-family: var(--mtm-mono);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--mtm-fg);
+  max-width: 86ch;
+}
+
+.demo-compare-footer code {
+  font-family: var(--mtm-mono);
+  background: var(--mtm-chrome);
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 0.95em;
+  color: var(--mtm-accent);
+}
+
+.demo-compare-digest {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  border-top: 1px solid var(--mtm-border);
+  padding-top: 16px;
+}
+
+.demo-compare-digest > div {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 16px;
+  align-items: baseline;
+}
+
+.demo-compare-digest-label {
+  font-family: var(--mtm-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--mtm-faint);
+  font-weight: 700;
+}
+
+.demo-compare-digest code {
+  font-family: var(--mtm-mono);
+  font-size: 11.5px;
+  color: var(--mtm-accent);
+  letter-spacing: 0.02em;
+  word-break: break-all;
+  background: transparent;
+  padding: 0;
+  border: 0;
+}
+
+.demo-compare-digest-links {
+  display: inline-flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.demo-compare-digest-links a {
+  font-family: var(--mtm-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mtm-fg);
+  text-decoration: none;
+  border: 1px solid var(--mtm-border-strong);
+  padding: 6px 12px;
+  border-radius: 2px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.demo-compare-digest-links a:hover {
+  background: var(--mtm-accent-soft);
+  border-color: var(--mtm-accent);
+}
+
+/* ── Responsive for the new bits ─────────────────────────────────── */
+
+@media (max-width: 980px) {
+  .demo-anatomy-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .demo-compare-grid {
+    grid-template-columns: 1fr;
+  }
+  .demo-compare-col:first-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--demo-line);
+  }
+}
+
+@media (max-width: 720px) {
+  .demo-anatomy-grid {
+    grid-template-columns: 1fr;
+  }
+  .demo-grid-readout-dl {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .demo-grid-readout-dl dt {
+    margin-top: 6px;
+  }
+  .demo-grid-labels,
+  .demo-grid-row {
+    grid-template-columns: 18px repeat(9, 1fr);
+  }
+  .demo-grid-row {
+    grid-template-columns: 18px 1fr;
+  }
+  .demo-compare-col dl {
+    grid-template-columns: 110px 1fr;
+  }
+  .demo-compare-digest > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
