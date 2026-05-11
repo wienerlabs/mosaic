@@ -1,0 +1,42 @@
+[package]
+name = "mosaic-demo-sudoku"
+description = "ZK-Sudoku demo — real Groth16 sudoku circuit, proved with arkworks, verified by mosaic-groth16. Shipped as a marketing-site demo so visitors can see Mosaic's verifier loop run against a non-trivial circuit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# Mosaic side — host-backend so we can verify proofs without an SBF
+# runtime. The on-chain verifier byte format is identical to the
+# host-backend's.
+mosaic-core = { workspace = true, features = ["std", "host-backend"] }
+mosaic-groth16 = { workspace = true, features = ["std", "host-backend"] }
+mosaic-serde = { workspace = true, features = ["std", "host-backend"] }
+
+# arkworks prover side — same versions as `tests/differential/`.
+ark-bn254 = { workspace = true, features = ["std"] }
+ark-ec = { workspace = true, features = ["std"] }
+ark-ff = { workspace = true, features = ["std"] }
+ark-groth16 = { workspace = true, features = ["std"] }
+ark-relations = { workspace = true, features = ["std"] }
+ark-serialize = { workspace = true, features = ["std"] }
+ark-std = { workspace = true, features = ["std"] }
+ark-snark = "0.5"
+
+# JSON output for the generator binary — the demo site loads the
+# artifacts at page-mount time.
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+hex = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["std"] }
+anyhow = { workspace = true }
+
+[[bin]]
+name = "generate-fixtures"
+path = "src/bin/generate_fixtures.rs"
+
+[lints]
+workspace = true

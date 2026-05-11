@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 
-type Item = { num: string; label: string; target: string };
+type Item = { num: string; label: string; target: string; href?: string };
 
 const items: Item[] = [
   { num: "01", label: "Splash", target: "magazine" },
@@ -20,6 +20,9 @@ const items: Item[] = [
   { num: "11", label: "Documentation", target: "page-11" },
   { num: "12", label: "Constraints", target: "page-12" },
   { num: "13", label: "Built by Wiener Labs", target: "page-13" },
+  // Session 118 — ZK-Sudoku demo on its own /demo/sudoku route.
+  // Uses href so the menu navigates instead of scrolling.
+  { num: "D1", label: "Demo · ZK-Sudoku", target: "demo-sudoku", href: "/demo/sudoku" },
 ];
 
 export function NavMenu() {
@@ -40,12 +43,20 @@ export function NavMenu() {
     };
   }, [open]);
 
-  const go = (target: string) => {
-    const el =
-      target === "magazine"
-        ? document.querySelector<HTMLElement>("main.magazine")
-        : document.getElementById(target);
+  const go = (item: Item) => {
     setOpen(false);
+    if (item.href) {
+      // Cross-page navigation (demo route etc.) — let the browser
+      // handle it after the panel-close animation finishes.
+      setTimeout(() => {
+        window.location.assign(item.href!);
+      }, 300);
+      return;
+    }
+    const el =
+      item.target === "magazine"
+        ? document.querySelector<HTMLElement>("main.magazine")
+        : document.getElementById(item.target);
     setTimeout(() => {
       el?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 300);
@@ -93,7 +104,7 @@ export function NavMenu() {
                   <button
                     className="nav-link"
                     type="button"
-                    onClick={() => go(item.target)}
+                    onClick={() => go(item)}
                   >
                     <span className="nav-num">{item.num}</span>
                     <span className="nav-label">{item.label}</span>

@@ -1870,3 +1870,638 @@ a {
     text-align: center;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * /demo/sudoku — ZK-Sudoku demo page
+ *
+ * Reuses the mtm-* terminal grammar and the mag-* magazine grammar.
+ * New tokens here are scoped to .demo-* and only style the new
+ * surfaces (puzzle grid, digest grid, hero strip).
+ *
+ * All radii ≤ 2px to match the angular instrumentation aesthetic of
+ * the rest of the site.
+ * ───────────────────────────────────────────────────────────────────── */
+
+.demo-root {
+  --demo-bg: #f9f7f7;
+  --demo-fg: #112d4e;
+  --demo-stripe: #f3f1f1;
+  --demo-line: rgba(17, 45, 78, 0.14);
+  --demo-line-strong: rgba(17, 45, 78, 0.32);
+  --demo-clue-bg: #112d4e;
+  --demo-clue-fg: #f9f7f7;
+  --demo-witness-bg: #f9f7f7;
+  --demo-witness-fg: #3f72af;
+  --demo-mono: var(--mtm-mono);
+
+  min-height: 100vh;
+  background: var(--demo-bg);
+  color: var(--demo-fg);
+  padding: 48px 32px 96px;
+}
+
+.demo-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* ── Hero ─────────────────────────────────────────────────────────── */
+
+.demo-hero {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 32px;
+  padding-bottom: 32px;
+  border-bottom: 1px solid var(--demo-line);
+}
+
+.demo-hero-mark {
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  overflow: hidden;
+  /* No background — the Mosaic mark is a navy-on-cream tessellation
+   * pattern that already carries its own surround. Frame it with a
+   * thin keyline to anchor the square. */
+  border: 1px solid var(--demo-line-strong);
+}
+
+.demo-hero-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.demo-hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.demo-hero-text .tag {
+  font-family: var(--demo-mono);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  font-weight: 700;
+}
+
+.demo-hero-text .display {
+  font-family: var(--font-display, "IBM Plex Sans", system-ui, sans-serif);
+  font-size: clamp(40px, 8vw, 96px);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  margin: 4px 0 8px;
+}
+
+.demo-hero-text .hero-sub {
+  font-size: 16px;
+  line-height: 1.5;
+  max-width: 64ch;
+  margin: 0;
+}
+
+.demo-hero-text .body-copy {
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 70ch;
+  margin: 8px 0 0;
+  color: rgba(17, 45, 78, 0.78);
+}
+
+.inline-code,
+.demo-hero-text code {
+  font-family: var(--demo-mono);
+  font-size: 0.9em;
+  background: var(--demo-stripe);
+  padding: 1px 6px;
+  border-radius: 2px;
+  letter-spacing: 0;
+}
+
+.demo-repro {
+  background: var(--mtm-bg);
+  color: var(--mtm-fg);
+  font-family: var(--demo-mono);
+  font-size: 12px;
+  padding: 12px 16px;
+  margin: 8px 0 0;
+  border-radius: 2px;
+  border-left: 2px solid var(--mtm-accent);
+  overflow-x: auto;
+  max-width: 720px;
+}
+
+.demo-repro code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+.demo-back {
+  font-family: var(--demo-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  text-decoration: none;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--demo-line-strong);
+  align-self: flex-start;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.demo-back:hover {
+  background: var(--demo-stripe);
+  border-color: var(--demo-witness-fg);
+}
+
+/* ── Stage: puzzle + circuit instrumentation side-by-side ────────── */
+
+.demo-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 480px) 1fr;
+  gap: 40px;
+  align-items: start;
+}
+
+.demo-stage-header,
+.demo-aside-header,
+.demo-provenance-header,
+.demo-verify-header,
+.demo-runtime-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.demo-stage-header .tag,
+.demo-aside-header .tag,
+.demo-provenance-header .tag,
+.demo-verify-header .tag,
+.demo-runtime-header .tag {
+  font-family: var(--demo-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  font-weight: 700;
+}
+
+.demo-stage-header .sub-display,
+.demo-aside-header .sub-display,
+.demo-provenance-header .sub-display,
+.demo-verify-header .sub-display,
+.demo-runtime-header .sub-display {
+  font-family: var(--font-display, "IBM Plex Sans", system-ui, sans-serif);
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.demo-stage-header .body-copy {
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 0;
+  color: rgba(17, 45, 78, 0.78);
+}
+
+.demo-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 0;
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  border: 2px solid var(--demo-fg);
+  border-radius: 2px;
+  background: var(--demo-fg);
+}
+
+.demo-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--demo-witness-bg);
+  color: var(--demo-witness-fg);
+  font-family: var(--font-display, "IBM Plex Sans", system-ui, sans-serif);
+  font-size: clamp(16px, 2.6vw, 26px);
+  font-weight: 600;
+  border: 1px solid rgba(17, 45, 78, 0.12);
+  aspect-ratio: 1 / 1;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-cell-clue {
+  background: var(--demo-clue-bg);
+  color: var(--demo-clue-fg);
+  font-weight: 700;
+}
+
+.demo-cell-witness:not(:empty) {
+  color: var(--demo-witness-fg);
+  background: var(--demo-stripe);
+  font-weight: 600;
+  font-style: italic;
+}
+
+.demo-cell-top {
+  border-top: 2px solid var(--demo-fg);
+}
+
+.demo-cell-left {
+  border-left: 2px solid var(--demo-fg);
+}
+
+.demo-cell-bottom {
+  border-bottom: 2px solid var(--demo-fg);
+}
+
+.demo-cell-right {
+  border-right: 2px solid var(--demo-fg);
+}
+
+.demo-grid-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.demo-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--demo-line-strong);
+  background: var(--demo-witness-bg);
+  color: var(--demo-fg);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 2px;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.demo-toggle:hover {
+  border-color: var(--demo-witness-fg);
+}
+
+.demo-toggle-active {
+  background: var(--demo-clue-bg);
+  color: var(--demo-clue-fg);
+  border-color: var(--demo-clue-bg);
+}
+
+.demo-toggle-active .demo-toggle-sub {
+  color: rgba(249, 247, 247, 0.7);
+}
+
+.demo-toggle-label {
+  font-family: var(--font-display, system-ui, sans-serif);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.005em;
+}
+
+.demo-toggle-sub {
+  font-family: var(--demo-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(17, 45, 78, 0.6);
+}
+
+/* Circuit instrumentation table. */
+.demo-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--demo-mono);
+  font-size: 12px;
+  border: 1px solid var(--demo-line);
+}
+
+.demo-table thead th {
+  font-family: var(--demo-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--demo-line-strong);
+  background: var(--demo-stripe);
+}
+
+.demo-table tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--demo-line);
+  vertical-align: middle;
+}
+
+.demo-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.demo-table-mono {
+  font-family: var(--demo-mono);
+  font-size: 11.5px;
+  color: rgba(17, 45, 78, 0.7);
+}
+
+.demo-table-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.demo-table-total td {
+  background: var(--demo-stripe);
+  font-weight: 700;
+  border-top: 1px solid var(--demo-line-strong);
+}
+
+/* ── Provenance ───────────────────────────────────────────────────── */
+
+.demo-provenance {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.demo-provenance-header .mag-lead {
+  font-size: 14.5px;
+  max-width: 78ch;
+  color: rgba(17, 45, 78, 0.78);
+}
+
+.demo-digest-grid {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--demo-line-strong);
+  border-radius: 2px;
+}
+
+.demo-digest-row {
+  display: grid;
+  grid-template-columns: 220px 120px 1fr;
+  gap: 0;
+  text-decoration: none;
+  color: var(--demo-fg);
+  border-bottom: 1px solid var(--demo-line);
+  transition: background 0.15s ease;
+}
+
+.demo-digest-row:last-child {
+  border-bottom: 0;
+}
+
+.demo-digest-row:hover {
+  background: var(--demo-stripe);
+}
+
+.demo-digest-row dt {
+  padding: 14px 16px;
+  font-family: var(--demo-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  font-weight: 700;
+  border-right: 1px solid var(--demo-line);
+  margin: 0;
+  background: var(--demo-stripe);
+}
+
+.demo-digest-row .demo-digest-meta {
+  padding: 14px 16px;
+  font-family: var(--demo-mono);
+  font-size: 11.5px;
+  color: rgba(17, 45, 78, 0.72);
+  border-right: 1px solid var(--demo-line);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.demo-digest-row .demo-digest-hash {
+  padding: 14px 18px;
+  font-family: var(--demo-mono);
+  font-size: 11.5px;
+  color: var(--demo-fg);
+  margin: 0;
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+
+.demo-timings {
+  background: var(--demo-stripe);
+  padding: 18px 22px;
+  border: 1px solid var(--demo-line);
+  border-radius: 2px;
+}
+
+.demo-timings dl {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0;
+  margin: 0;
+}
+
+.demo-timings dl > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px;
+  border-right: 1px solid var(--demo-line);
+}
+
+.demo-timings dl > div:first-child {
+  padding-left: 0;
+}
+
+.demo-timings dl > div:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+
+.demo-timings dt {
+  font-family: var(--demo-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--demo-witness-fg);
+  font-weight: 700;
+}
+
+.demo-timings dd {
+  font-family: var(--demo-mono);
+  font-size: 14px;
+  color: var(--demo-fg);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* ── Verify panel ─────────────────────────────────────────────────── */
+
+.demo-verify {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.demo-verify-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.demo-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--demo-witness-bg);
+  color: var(--demo-fg);
+  border: 1px solid var(--demo-line-strong);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 2px;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.demo-tab:hover {
+  border-color: var(--demo-witness-fg);
+}
+
+.demo-tab-active {
+  background: var(--demo-clue-bg);
+  color: var(--demo-clue-fg);
+  border-color: var(--demo-clue-bg);
+}
+
+.demo-tab-active .demo-tab-sub {
+  color: rgba(249, 247, 247, 0.72);
+}
+
+.demo-tab-label {
+  font-family: var(--font-display, system-ui, sans-serif);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.005em;
+}
+
+.demo-tab-sub {
+  font-family: var(--demo-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(17, 45, 78, 0.6);
+}
+
+/* ── Runtime evidence (page 07 reuse) ─────────────────────────────── */
+
+.demo-runtime {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-top: 32px;
+  border-top: 1px solid var(--demo-line);
+}
+
+/* ── Loading / error states ───────────────────────────────────────── */
+
+.demo-loading,
+.demo-error {
+  font-family: var(--demo-mono);
+  font-size: 13px;
+  color: rgba(17, 45, 78, 0.7);
+  padding: 24px;
+  border: 1px solid var(--demo-line);
+  border-radius: 2px;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.demo-error code {
+  background: var(--demo-stripe);
+  padding: 1px 6px;
+  font-size: 0.9em;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+
+@media (max-width: 980px) {
+  .demo-stage {
+    grid-template-columns: 1fr;
+  }
+  .demo-timings dl {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+  }
+  .demo-timings dl > div {
+    padding: 0;
+    border-right: 0;
+  }
+  .demo-digest-row {
+    grid-template-columns: 1fr;
+  }
+  .demo-digest-row dt {
+    border-right: 0;
+    border-bottom: 1px solid var(--demo-line);
+  }
+  .demo-digest-row .demo-digest-meta {
+    border-right: 0;
+    border-bottom: 1px solid var(--demo-line);
+  }
+}
+
+@media (max-width: 720px) {
+  .demo-root {
+    padding: 32px 18px 64px;
+  }
+  .demo-hero {
+    grid-template-columns: 80px 1fr;
+    gap: 20px;
+  }
+  .demo-hero-mark {
+    width: 72px;
+    height: 72px;
+    padding: 10px;
+  }
+  .demo-grid-controls,
+  .demo-verify-tabs {
+    grid-template-columns: 1fr;
+  }
+  .demo-cell {
+    font-size: 14px;
+  }
+}

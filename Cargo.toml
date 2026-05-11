@@ -15,6 +15,7 @@ members = [
     "crates/mosaic-sdk",
     "crates/mosaic-bench",
     "crates/mosaic-fuzz",
+    "crates/mosaic-demo-sudoku",
     "tests/differential",
 ]
 default-members = [
