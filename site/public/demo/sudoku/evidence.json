@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-11T19:10:12Z",
+  "generated_at": "2026-05-11T19:20:06Z",
   "workspace_version": "0.9.15-onchain-compressed-verify",
-  "repo_commit_sha": "473841b",
+  "repo_commit_sha": "ea5353b",
   "puzzle_source": "Inkala 2010 (21-clue hardest-class)",
   "puzzle": [
     8,
@@ -186,7 +186,7 @@
   "setup_seed": "0xc0ffeedead42beef",
   "prove_seed": "0xb16b00b5deadc0de",
   "timings": {
-    "setup_ms": 77,
+    "setup_ms": 83,
     "prove_ms": 22,
     "verify_arkworks_ms": 1,
     "verify_mosaic_valid_ms": 2,

@@ -561,7 +561,7 @@ export function SudokuDemo() {
           <header className="demo-aside-header">
             <span className="tag">CIRCUIT</span>
             <h2 className="sub-display">
-              {evidence.constraint_count.toLocaleString()} R1CS constraints
+              {formatNumber(evidence.constraint_count)} R1CS constraints
             </h2>
           </header>
           <table className="demo-table">
@@ -582,7 +582,7 @@ export function SudokuDemo() {
               ))}
               <tr className="demo-table-total">
                 <td colSpan={2}>Total</td>
-                <td className="demo-table-num">{cb.total.toLocaleString()}</td>
+                <td className="demo-table-num">{formatNumber(cb.total)}</td>
               </tr>
             </tbody>
           </table>
@@ -847,7 +847,7 @@ export function SudokuDemo() {
                 <div>
                   <dt>Circuit</dt>
                   <dd>
-                    Sudoku 9×9, {evidence.constraint_count.toLocaleString()} R1CS, {evidence.public_input_count}{" "}
+                    Sudoku 9×9, {formatNumber(evidence.constraint_count)} R1CS, {evidence.public_input_count}{" "}
                     public inputs
                   </dd>
                 </div>
