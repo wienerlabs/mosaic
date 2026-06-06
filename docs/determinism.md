@@ -136,38 +136,46 @@ only the host guard runs — identical contract to
 `verify_proof_sbf.rs`, so `cargo test --workspace` stays green on any
 machine.
 
-## Toolchain note — sBPF version must match the VM
+## Toolchain note — the SBF dependency tree has drifted; tracked in #88
 
-> This is the single operational gotcha and a hard requirement for
-> reproducing the on-chain evidence. Tracked separately in the
-> SBF-toolchain issue.
+> This is the single operational gotcha for reproducing the on-chain
+> evidence. Full diagnosis + the coordinated fix live in issue
+> [#88](https://github.com/wienerlabs/mosaic/issues/88).
 
-`solana-program-test 2.3.13` embeds `solana-sbpf 0.11.1`. The platform
-tools used by `cargo build-sbf` must emit sBPF bytecode that this VM
-version executes correctly. Building with a **newer** platform-tools
-release (e.g. v1.54, which bundles rust 1.89) produces bytecode for a
-newer sBPF revision; the 0.11.1 VM mis-executes it, which manifests as
-spurious deserialisation panics (`panicked at src/de/mod.rs` with the
-program consuming only ~1 900 CU — far below any real verification).
+Reproducing the on-chain matrix currently requires the dependency-tree
+fix from #88. The short version: the lockfile has drifted forward into
+a state the `solana-program-test 2.3.13` VM (embedding
+`solana-sbpf 0.11.1`) cannot run. Two compounding causes, both rooted
+in `blake3 1.8.4` (pulled at runtime via
+`solana-program -> solana-blake3-hasher -> blake3`, floored at
+`^1.8.2` by `solana-accounts-db` from the program-test dev-dep):
 
-The build-tools matrix is itself constrained: the sBPF-0.11-matched
-platform-tools (v1.50 / v1.51 era) ship cargo 1.84, which cannot parse
-the `edition2024` manifest that `constant_time_eq 0.4.2` (pulled
-transitively via `blake3 1.8.4`) declares. Resolving this requires
-either:
+1. **Manifest parse.** The sBPF-0.11-matched older platform-tools ship
+   cargo 1.84, which cannot parse the `edition2024` manifests that
+   `constant_time_eq 0.4.2` and the `digest 0.11` line declare. Newer
+   tools (v1.52 / v1.54) parse them fine, so this alone is surmountable.
 
-- moving the whole `solana-program-test` / `solana-sbpf` dev-dependency
-  stack forward to a release whose VM matches the newer platform-tools,
-  or
-- pinning `blake3 < 1.8` in the program's build graph so the
-  edition2024 dependency drops out and the sBPF-0.11-matched tools can
-  build.
+2. **Runtime panic.** Even with a successfully built `.so`, the program
+   panics at `borsh 1.6.1`'s `vec_from_reader` (`src/de/mod.rs:164`) on
+   every input — the program consumes only ~1 900 CU, far below any
+   real verification. This reproduces under both v1.52 and v1.54 tools,
+   so it is a `borsh 1.6.1` / SBF-runtime interaction, not an
+   sBPF-version artifact. Confirmed not an encoding bug: the host-only
+   `host_borsh_roundtrip_sanity` test decodes the identical instruction
+   bytes correctly. `crypto-common 0.2.1` additionally emits SBF
+   stack-offset errors for its `SerializableState` impls.
 
-Until that is pinned, the harness runs in skip mode in CI (host guard
-only). The on-chain matrix is reproduced manually with a matched
-toolchain. This is a CI-infrastructure gap, not a determinism gap: the
+The April-2026 `.so` ran these dispatch arms fine; the regression came
+from the lock drifting forward (blake3 1.5 -> 1.8, borsh 1.5 -> 1.6,
+the RustCrypto 0.10 -> 0.11 / edition2024 wave). #88 tracks the
+coordinated pin-back + a CI job that actually executes the on-chain
+tests so it cannot silently regress to skip-only again.
+
+Until #88 lands, the harness runs in skip mode (host guard only) and
+the on-chain matrix is reproduced manually with the pinned tree. **This
+is a build/CI-infrastructure gap, not a determinism gap**: the
 verifier's determinism properties are a function of its source, not of
-which machine runs the test.
+which dependency versions or machine run the test.
 
 ## Relationship to other evidence
 
