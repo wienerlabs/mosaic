@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- Cross-validator determinism harness (T-5 mitigation, #70) —
+  `crates/mosaic-program/tests/cross_validator_determinism.rs`. Boots
+  `solana-program-test` under 6 `FeatureSet` personas modelling
+  validators at different points of the `alt_bn128` feature rollout
+  (modern mainnet / no-SIMD-0129 / no-SIMD-0222 / no-compression /
+  legacy-pre-both / ancient-no-base-syscall) and asserts: (1) result
+  determinism — identical accept/reject across every base-syscall
+  persona; (2) CU determinism — byte-identical CU for valid paths
+  across personas (fee-market stability); (3) intra-persona
+  determinism — 5 identical re-runs; (4) graceful degradation — the
+  ancient persona rejects everything (never silently accepts without
+  the curve syscall); (5) CU stability across SIMD-0129 error-code
+  simplification for the PLONK path. Prints the full persona × workload
+  matrix to stderr as the audit artifact. A host-only
+  `host_borsh_roundtrip_sanity` guard always runs (no SBF needed) so
+  instruction-encoding drift is caught in a plain `cargo test`. On-chain
+  tests skip cleanly without `SBF_OUT_DIR` — same contract as
+  `verify_proof_sbf.rs`. Methodology + evidence documented in
+  `docs/determinism.md`.
+
+- `docs/determinism.md` — the #70 methodology + audit artifact:
+  consensus + fee-market rationale, the 4 `alt_bn128` runtime features,
+  the persona table, the 5 assertions, the run instructions, and the
+  sBPF-version-must-match-the-VM toolchain note.
+
+- Discovered + filed #88 — SBF toolchain sBPF version skew
+  (`solana-sbpf 0.11.1` in `solana-program-test 2.3.13` vs v1.54
+  platform-tools bytecode) plus `constant_time_eq 0.4.2` edition2024 vs
+  cargo 1.84 catch-22, which currently keeps the on-chain SBF tests in
+  skip-only mode in CI. The determinism + compressed-path SBF tests are
+  written + correct; #88 is the gate to running them green in CI.
+
 - 4 new SBF integration tests for `VerifyCompressedProof` (instruction
   `0x03`) — one happy-path each for PLONK, HyperPlonk, Halo2, and Nova.
   SBF integration test surface grew from 13 → 17. Every BN254-curve
