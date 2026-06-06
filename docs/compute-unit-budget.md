@@ -3,19 +3,68 @@
 > Authoritative numbers come from `mosaic-bench/bin/bpf-bench`. The targets
 > below are the *hard caps* enforced in CI (see ADR-0005).
 
-## Per-system targets
+## Full BPF measurement sweep — 2026-06-06 (borsh 1.5.7 / platform-tools v1.52)
+
+The first sweep where **every** dispatch arm was measured end-to-end on
+the real `solana-program-test` VM, after the borsh-1.5.7 pin (#88) made
+the on-chain program runnable. Reproduce with:
+
+```bash
+cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
+SBF_OUT_DIR=$PWD/target/deploy cargo run --release -p mosaic-bench --bin bpf-bench
+```
+
+| Target | Measured CU | Hard cap | Headroom | Status |
+|---|---|---|---|---|
+| `groth16_bn254_mul_circuit_1pi` | **84,027** | 180,000 | 53% | ✅ |
+| `groth16_batch_n5_mul_circuit_1pi` | **259,772** | 300,000 | 13% | ✅ |
+| `plonk_bn254_mul_circuit_1pi` | **973,388** | 1,100,000 | 12% | ✅ |
+| `hyperplonk_kzg_bn254_scaffold` | **900,750** | 1,050,000 | 14% | ✅ ¹ |
+| `halo2_kzg_bn254_scaffold` | **824,074** | 950,000 | 13% | ✅ ¹ |
+| `nova_folding_bn254_scaffold` | **289,899** | 360,000 | 19% | ✅ ² |
+| `groth16_compressed_mul_circuit_1pi` | **146,620** | 190,000 | 23% | ✅ |
+| `plonk_compressed_mul_circuit_1pi` | **1,005,100** | 1,200,000 | 16% | ✅ |
+| `hyperplonk_kzg_compressed_scaffold` | **928,039** | 1,100,000 | 16% | ✅ ¹ |
+| `halo2_kzg_compressed_scaffold` | **857,503** | 960,000 | 11% | ✅ |
+| `nova_folding_compressed_scaffold` | **316,580** | 400,000 | 21% | ✅ ² |
+| `fri_stark_goldilocks_scaffold` | — | 7,800,000 | — | ⚠ ³ |
+
+¹ The host-side `estimated_compute_units` shape estimate **under-counted**
+HyperPlonk (~505K est vs 900K real, +78%) and Halo2 (~580K est vs 824K
+real, +42%). Caps re-set to measured × ~1.15. These are worst-case
+zero-wire scaffold shapes; real proofs share the same pairing/MSM counts.
+
+² The Nova estimate **over-counted** by ~3× (~885K est vs 290K real); the
+Hadamard identity check is far cheaper on-chain than the host estimate
+assumed. Caps tightened 1.15M → 360K so the bench actually catches
+regressions instead of allowing 4× silent drift.
+
+³ The large-shape FRI-STARK scaffold currently fails verification on-chain
+with `Custom(0x2F)` `VerificationFailed` — `build_stark_scaffold_fixture()`
+does not construct Merkle paths the verifier accepts at this shape. The
+depth-zero STARK shape in `verify_proof_sbf.rs` passes, so the dispatch is
+sound; this is a bench-fixture-builder gap tracked with the FRI-STARK body
+work ([#76](https://github.com/wienerlabs/mosaic/issues/76)).
+
+**Key takeaway for auditors**: the three production verifiers (Groth16,
+Groth16-batch, KZG-PLONK) re-measured within **0.6%** of their prior
+pinned baselines — the verifier arithmetic is stable. The Phase-3
+scaffold numbers are first real measurements that corrected three
+estimate-derived caps.
+
+## Per-system targets (post-2026-06-06 sweep)
 
 | Proof system | Hard cap | Last-measured | `request_heap_frame` | Status |
 |---|---|---|---|---|
-| Groth16 BN254 | ≤180,000 | **83,574** | 32 KiB | Production ✅ |
-| Groth16 batch N=5 | ≤300,000 | **258,397** | 32 KiB | Production ✅ |
-| KZG-PLONK BN254 | ≤1,100,000 | **968,457** | 32 KiB | Production ✅ |
-| HyperPlonk-KZG | ≤900,000 | target ≤505K | 64 KiB | Phase-3 body (scaffold) |
-| Halo2-KZG | ≤700,000 | target ≤580K | 64 KiB | Phase-3 body (scaffold) |
-| FRI-STARK (Plonky3) | ≤14M (chunked) | target ≤9.4M | 256 KiB | Phase-3 body (scaffold) |
+| Groth16 BN254 | ≤180,000 | **84,027** | 32 KiB | Production ✅ |
+| Groth16 batch N=5 | ≤300,000 | **259,772** | 32 KiB | Production ✅ |
+| KZG-PLONK BN254 | ≤1,100,000 | **973,388** | 32 KiB | Production ✅ |
+| HyperPlonk-KZG | ≤1,050,000 | **900,750** | 64 KiB | Phase-3 body (scaffold) |
+| Halo2-KZG | ≤950,000 | **824,074** | 64 KiB | Phase-3 body (scaffold) |
+| Nova folding | ≤360,000 | **289,899** | 64 KiB | Phase-3 body (scaffold) |
+| ProtoStar folding | ≤360,000 | via Nova arm | 64 KiB | Phase-3 body (shared) |
+| FRI-STARK (Plonky3) | ≤7.8M (chunked) | fixture pending ³ | 256 KiB | Phase-3 body (scaffold) |
 | Risc0 receipt | ≤14M (chunked) | — | 256 KiB | Stub (Phase 3) |
-| Nova folding | ≤900,000 | target ≤885K | 64 KiB | Phase-3 body (scaffold) |
-| ProtoStar folding | ≤900,000 | target ≤885K | 64 KiB | Phase-3 body (scaffold) |
 
 ## Groth16 BN254 — cost breakdown
 

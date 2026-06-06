@@ -65,9 +65,12 @@ impl CuStats {
 /// runner can compute drift without depending on the bench crate.
 /// Update alongside any change to `mosaic-bench::TARGETS`.
 pub fn pinned_baseline(dispatch_slug: &str) -> Option<u64> {
+    // Mirrors `mosaic-bench::TARGETS` baselines. Re-measured 2026-06-06
+    // on the borsh-1.5.7 / platform-tools v1.52 SBF build via
+    // `cargo run -p mosaic-bench --bin bpf-bench`.
     match dispatch_slug {
-        "groth16_bn254" => Some(83_574),
-        "plonk_kzg_bn254" => Some(968_457),
+        "groth16_bn254" => Some(84_027),
+        "plonk_kzg_bn254" => Some(973_388),
         _ => None,
     }
 }
@@ -396,8 +399,8 @@ mod tests {
 
     #[test]
     fn pinned_baseline_known_systems() {
-        assert_eq!(pinned_baseline("groth16_bn254"), Some(83_574));
-        assert_eq!(pinned_baseline("plonk_kzg_bn254"), Some(968_457));
+        assert_eq!(pinned_baseline("groth16_bn254"), Some(84_027));
+        assert_eq!(pinned_baseline("plonk_kzg_bn254"), Some(973_388));
         assert_eq!(pinned_baseline("unknown_system"), None);
     }
 
@@ -493,7 +496,7 @@ mod tests {
         assert!(md.contains("| Tampered proofs rejected | 1 |"));
         // Compute table includes the groth16 row + baseline column
         assert!(md.contains("`groth16_bn254`"));
-        assert!(md.contains("83574"));
+        assert!(md.contains("84027"));
         // Schema footer
         assert!(md.contains("Report schema v1"));
     }

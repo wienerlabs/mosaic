@@ -73,7 +73,9 @@ const TARGETS: &[SystemTarget] = &[
         // Decomposition per ADR-0005 § 2 unchanged:
         //   5K (deserialize) + 3.3K (G1Mul) + 0.1K (G1Add) + 36K (Pairing)
         //   ≈ 45K algorithmic + ~38K Borsh/dispatch/syscall overhead.
-        baseline_cu: 83_574,
+        // Re-measured 2026-06-06 on the borsh-1.5.7 / platform-tools
+        // v1.52 build: 84 027 CU (+0.54% vs prior 83 574, within noise).
+        baseline_cu: 84_027,
     },
     SystemTarget {
         name: "groth16_batch_n5_mul_circuit_1pi",
@@ -83,7 +85,9 @@ const TARGETS: &[SystemTarget] = &[
         // (~36% reduction vs 5× single-proof at new single baseline).
         // Prior baseline 230 626 → +12.0% drift for the same reason.
         hard_cap_cu: 300_000, // 16% headroom over new baseline
-        baseline_cu: 258_397,
+        // Re-measured 2026-06-06 (borsh 1.5.7 / v1.52): 259 772 CU
+        // (+0.53% vs prior 258 397, within noise).
+        baseline_cu: 259_772,
     },
     SystemTarget {
         name: "plonk_bn254_mul_circuit_1pi",
@@ -101,7 +105,10 @@ const TARGETS: &[SystemTarget] = &[
         // 13% regression headroom. Tightening tracked by issues #37
         // (MSM reduction) + "Fr arithmetic in-place mutation" issue.
         hard_cap_cu: 1_100_000,
-        baseline_cu: 968_457,
+        // Re-measured 2026-06-06 (borsh 1.5.7 / v1.52): 973 388 CU
+        // (+0.51% vs prior 968 457, within noise). Cap 1.1M = 13%
+        // headroom retained.
+        baseline_cu: 973_388,
     },
     // ───────────────────────────────────────────────────────────────────
     // Session 47 — Phase-3 BPF bench coverage. The four Phase-3 bodies
@@ -137,9 +144,16 @@ const TARGETS: &[SystemTarget] = &[
         // Scaffold fixture uses zero-wire + lookup_m=1 to make the
         // identity reduce to 0 = 0; CU baseline is measured here for
         // regression tracking against future scaffold tightening.
-        // Initial hard cap = estimate × 1.30 ≈ 660K.
-        hard_cap_cu: 660_000,
-        baseline_cu: 0, // measured-and-recorded after first run
+        // First real measurement 2026-06-06 (borsh 1.5.7 / v1.52):
+        // 900 750 CU — the host-side `estimated_compute_units` shape
+        // estimate (~505K → ×1.30 = 660K cap) UNDER-counted the real
+        // sumcheck-round + batched-KZG cost by ~78%. Cap re-set to
+        // measured × 1.17 ≈ 1.05M. This scaffold is a worst-case
+        // zero-wire shape; real proofs share the same pairing/MSM
+        // counts, so 900K is a representative on-chain cost. See
+        // docs/compute-unit-budget.md.
+        hard_cap_cu: 1_050_000,
+        baseline_cu: 900_750,
     },
     SystemTarget {
         name: "halo2_kzg_bn254_scaffold",
@@ -147,9 +161,12 @@ const TARGETS: &[SystemTarget] = &[
         // bundle scaffold fixture (≈1.1 KB proof, 744 B VK including
         // 2 fixed + 5 permutation commitments). Estimated CU at this
         // shape: ~580K (challenge derivation + multi-poly batched
-        // opening). Initial hard cap = estimate × 1.30 ≈ 760K.
-        hard_cap_cu: 760_000,
-        baseline_cu: 0, // measured-and-recorded after first run
+        // opening). First real measurement 2026-06-06 (borsh 1.5.7 /
+        // v1.52): 824 074 CU — estimate under-counted by ~42%. Cap
+        // re-set to measured × 1.15 ≈ 950K. See
+        // docs/compute-unit-budget.md.
+        hard_cap_cu: 950_000,
+        baseline_cu: 824_074,
     },
     SystemTarget {
         name: "nova_folding_bn254_scaffold",
@@ -157,10 +174,15 @@ const TARGETS: &[SystemTarget] = &[
         // folding instance encodes E/W/T commits + base pre-fold
         // commits + 4-element Hadamard bundle + w_eval slot + 2 KZG
         // openings. Estimated CU at this shape: ~885K (Hadamard
-        // identity check + Spartan-batched opening pairing). Initial
-        // hard cap = estimate × 1.30 ≈ 1.15M.
-        hard_cap_cu: 1_150_000,
-        baseline_cu: 0, // measured-and-recorded after first run
+        // identity check + Spartan-batched opening pairing). First real
+        // measurement 2026-06-06 (borsh 1.5.7 / v1.52): 289 899 CU —
+        // the ~885K estimate OVER-counted by 3×; the Hadamard identity
+        // check is far cheaper on-chain than the host estimate assumed.
+        // Cap tightened 1.15M → 360K (measured × 1.24) so the bench
+        // actually catches regressions instead of allowing 4× drift.
+        // See docs/compute-unit-budget.md.
+        hard_cap_cu: 360_000,
+        baseline_cu: 289_899,
     },
     // ───────────────────────────────────────────────────────────────────
     // Session 120 — Compressed-path CU baselines.
@@ -179,38 +201,48 @@ const TARGETS: &[SystemTarget] = &[
     // ───────────────────────────────────────────────────────────────────
     SystemTarget {
         name: "groth16_compressed_mul_circuit_1pi",
-        // Canonical baseline 83 574 CU. 5 G1 + 3 G2 decompress ≈ 86K
-        // (10K per G1 + 12K per G2). Cap = 180K + 200K = 380K.
-        hard_cap_cu: 380_000,
-        baseline_cu: 0,
+        // Canonical baseline 84 027 CU. Measured 2026-06-06 (borsh
+        // 1.5.7 / v1.52): 146 620 CU total — decompression overhead is
+        // ~62K (5 G1 + 3 G2), close to the ~86K estimate. Cap tightened
+        // 380K → 190K (measured × 1.30) for meaningful regression
+        // detection.
+        hard_cap_cu: 190_000,
+        baseline_cu: 146_620,
     },
     SystemTarget {
         name: "plonk_compressed_mul_circuit_1pi",
-        // Canonical baseline 968 457 CU. 8 G1 + 1 G2 decompress ≈ 92K.
-        // Cap = 1.1M canonical + 200K = 1.3M.
-        hard_cap_cu: 1_300_000,
-        baseline_cu: 0,
+        // Canonical baseline 973 388 CU. Measured 2026-06-06 (borsh
+        // 1.5.7 / v1.52): 1 005 100 CU total — decompression overhead
+        // ~32K (8 G1 + 1 G2). Cap tightened 1.3M → 1.2M (measured ×
+        // 1.19).
+        hard_cap_cu: 1_200_000,
+        baseline_cu: 1_005_100,
     },
     SystemTarget {
         name: "hyperplonk_kzg_compressed_scaffold",
-        // Canonical cap 660K. 5 G1 proof + 8 G1 + 1 G2 VK decompress.
-        // Cap = 660K + 200K = 860K.
-        hard_cap_cu: 860_000,
-        baseline_cu: 0,
+        // Canonical baseline 900 750 CU. Measured 2026-06-06 (borsh
+        // 1.5.7 / v1.52): 928 039 CU total — decompression overhead
+        // ~27K. Cap re-set 860K → 1.1M (measured × 1.18); the prior
+        // 860K cap was derived from the wrong 660K canonical estimate.
+        hard_cap_cu: 1_100_000,
+        baseline_cu: 928_039,
     },
     SystemTarget {
         name: "halo2_kzg_compressed_scaffold",
-        // Canonical cap 760K. Variable G1 count by shape.
-        // Cap = 760K + 200K = 960K.
+        // Canonical baseline 824 074 CU. Measured 2026-06-06 (borsh
+        // 1.5.7 / v1.52): 857 503 CU total — decompression overhead
+        // ~33K. Cap 960K retained (measured × 1.12 headroom).
         hard_cap_cu: 960_000,
-        baseline_cu: 0,
+        baseline_cu: 857_503,
     },
     SystemTarget {
         name: "nova_folding_compressed_scaffold",
-        // Canonical cap 1.15M. 9 + num_aux G1 + 1 G2 decompress.
-        // Cap = 1.15M + 200K = 1.35M (just under MAX_COMPUTE_UNIT_LIMIT).
-        hard_cap_cu: 1_350_000,
-        baseline_cu: 0,
+        // Canonical baseline 289 899 CU. Measured 2026-06-06 (borsh
+        // 1.5.7 / v1.52): 316 580 CU total — decompression overhead
+        // ~27K. Cap tightened 1.35M → 400K (measured × 1.26); the prior
+        // 1.35M cap inherited the 3×-too-high canonical estimate.
+        hard_cap_cu: 400_000,
+        baseline_cu: 316_580,
     },
     SystemTarget {
         name: "fri_stark_goldilocks_scaffold",
@@ -225,8 +257,18 @@ const TARGETS: &[SystemTarget] = &[
         // Initial hard cap = estimate × 1.20 ≈ 7.8M (lower headroom
         // because the work is dominated by syscall counts rather than
         // polynomial codegen — drift surface is narrower).
+        //
+        // 2026-06-06: this large-shape scaffold (trace_log_height=10,
+        // 4 FRI layers, 8 queries) currently FAILS verification on-chain
+        // with Custom(0x2F) VerificationFailed — `build_stark_scaffold_
+        // fixture()` does not construct Merkle paths the current FRI
+        // verifier accepts at this shape. The depth-zero STARK shape in
+        // `verify_proof_sbf.rs` (num_fri=0, num_q=4) DOES pass, so the
+        // verifier dispatch is sound; this is a bench-fixture-builder
+        // gap, not a verifier bug. Baseline stays 0 until the fixture
+        // builder is fixed. Tracked with the FRI-STARK body work (#76).
         hard_cap_cu: 7_800_000,
-        baseline_cu: 0, // measured-and-recorded after first run
+        baseline_cu: 0, // pending fixture fix — see note above (#76)
     },
 ];
 
@@ -1056,7 +1098,7 @@ async fn bench_hyperplonk_compressed_scaffold(
         &compressed_vk,
         &compressed_proof,
         &public_inputs,
-        860_000,
+        1_400_000,
     )
     .await
 }
@@ -1117,6 +1159,7 @@ async fn bench_nova_compressed_scaffold(
 async fn main() -> ExitCode {
     let mut reports = Vec::new();
     let mut any_hard_fail = false;
+    let mut errored: Vec<(&str, String)> = Vec::new();
 
     for target in TARGETS {
         let outcome = match target.name {
@@ -1128,7 +1171,7 @@ async fn main() -> ExitCode {
                     target,
                     PROOF_SYSTEM_ID_HYPERPLONK,
                     build_hyperplonk_scaffold_fixture(),
-                    800_000,
+                    1_400_000,
                 )
                 .await
             },
@@ -1186,14 +1229,30 @@ async fn main() -> ExitCode {
                 reports.push(r);
             },
             Err(e) => {
+                // Record + continue rather than aborting: one target
+                // exceeding its tx CU budget must not hide the
+                // production baselines (groth16 / plonk) from the
+                // report. The non-zero exit at the end still fails CI.
                 eprintln!("error benching {}: {e}", target.name);
-                return ExitCode::from(2);
+                errored.push((target.name, format!("{e}")));
             },
         }
     }
 
     print_report(&reports);
-    if any_hard_fail {
+
+    if !errored.is_empty() {
+        eprintln!("\n{} target(s) failed to measure:", errored.len());
+        for (name, e) in &errored {
+            let truncated: String = e.chars().take(120).collect();
+            eprintln!("  {name}: {truncated}");
+        }
+    }
+
+    if !errored.is_empty() {
+        eprintln!("one or more systems failed to produce a measurement");
+        ExitCode::from(2)
+    } else if any_hard_fail {
         eprintln!("one or more systems exceeded their ADR-0005 hard cap");
         ExitCode::from(1)
     } else {

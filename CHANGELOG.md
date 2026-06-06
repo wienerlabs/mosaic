@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- Real `bpf-bench` CU baselines for all 11 measurable dispatch arms
+  (#84) — the first sweep where every arm was measured end-to-end on
+  the `solana-program-test` VM, now possible thanks to the borsh-1.5.7
+  fix. Production verifiers re-measured within 0.6% of their pinned
+  baselines (groth16 84,027 / batch 259,772 / PLONK 973,388 CU),
+  confirming arithmetic stability. First real Phase-3 + compressed
+  measurements: HyperPlonk 900,750 · Halo2 824,074 · Nova 289,899 ·
+  groth16-compressed 146,620 · PLONK-compressed 1,005,100 ·
+  HyperPlonk-compressed 928,039 · Halo2-compressed 857,503 ·
+  Nova-compressed 316,580. Three estimate-derived hard caps were
+  corrected against real data: HyperPlonk (660K→1.05M) and Halo2
+  (760K→950K) had been **under-capped** (host estimate under-counted by
+  78% / 42%); Nova had been **over-capped** 4× (1.15M→360K) so the
+  bench now actually catches regressions. The 12th target,
+  `fri_stark_goldilocks_scaffold`, fails verification at its large
+  shape (`Custom(0x2F)`, a bench-fixture-builder gap, not a verifier
+  bug — the depth-zero STARK shape in `verify_proof_sbf` passes);
+  documented + tracked to #76. Full table + provenance in
+  `docs/compute-unit-budget.md`. Closes the measurement half of #84.
+
+- `bpf-bench` made resilient — a target that exceeds its tx CU budget
+  now records the failure and continues instead of aborting, so one
+  failing scaffold can't hide the production baselines from the report.
+  Exits non-zero at the end if any target failed to measure or exceeded
+  its hard cap.
+
+- `mosaic-soak` pinned baselines synced to the measured values
+  (groth16 84,027 / PLONK 973,388) so the soak drift-detector and the
+  bench regression guard agree.
+
 - Cross-validator determinism harness (T-5 mitigation, #70) —
   `crates/mosaic-program/tests/cross_validator_determinism.rs`. Boots
   `solana-program-test` under 6 `FeatureSet` personas modelling
