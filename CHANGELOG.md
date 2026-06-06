@@ -77,6 +77,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cargo run --release -p mosaic-bench --bin bpf-bench` (requires
   cargo-build-sbf artifact in `target/deploy/`).
 
+- `docs/hosted-prover-spec.md` — architecture spec for the optional
+  hosted prover service. 10 sections covering: service rationale +
+  target users; library/prover boundary (verifier never depends on
+  this service); proposed API (POST /v1/circuits, POST
+  /v1/circuits/<id>/prove, GET .../health); per-proof pricing tiers
+  with free hackathon tier; three confidentiality posture tiers
+  (C1 operator-trusted, C2 TEE-isolated, C3 split-prover); SLA +
+  region + on-call posture; 5 open product decisions documented for
+  decision-doc landing; H0-H5 build sequencing where everything
+  ships AFTER v1.0.0 mainnet + first external audit; explicit list
+  of 4 audit-firm review questions. Closes #80. Implementation
+  remains deferred to post-mainnet; this spec is the architectural
+  contract so the service can be commissioned separately from the
+  verifier-library audit.
+
 ### Planned beyond v0.9.16-multi-system-demo
 
 - Fixture-driven differential testing for the three remaining Phase-3
