@@ -162,6 +162,56 @@ const TARGETS: &[SystemTarget] = &[
         hard_cap_cu: 1_150_000,
         baseline_cu: 0, // measured-and-recorded after first run
     },
+    // ───────────────────────────────────────────────────────────────────
+    // Session 120 — Compressed-path CU baselines.
+    //
+    // Mirrors the canonical-path entries above but submits via
+    // `VerifyCompressedProof` (instruction tag 0x03, shipped at v0.9.15).
+    // Each compressed-path bench measures total CU = canonical-verify
+    // cost + on-chain alt_bn128 decompression overhead. The hard caps
+    // here are set to the canonical hard cap + 200K decompression
+    // headroom; tighter caps land once we have a stable baseline.
+    //
+    // `baseline_cu = 0` for every entry — measured-and-recorded on first
+    // successful run, same pattern as the original Phase-3 scaffold entries.
+    //
+    // Closes part of issue #84.
+    // ───────────────────────────────────────────────────────────────────
+    SystemTarget {
+        name: "groth16_compressed_mul_circuit_1pi",
+        // Canonical baseline 83 574 CU. 5 G1 + 3 G2 decompress ≈ 86K
+        // (10K per G1 + 12K per G2). Cap = 180K + 200K = 380K.
+        hard_cap_cu: 380_000,
+        baseline_cu: 0,
+    },
+    SystemTarget {
+        name: "plonk_compressed_mul_circuit_1pi",
+        // Canonical baseline 968 457 CU. 8 G1 + 1 G2 decompress ≈ 92K.
+        // Cap = 1.1M canonical + 200K = 1.3M.
+        hard_cap_cu: 1_300_000,
+        baseline_cu: 0,
+    },
+    SystemTarget {
+        name: "hyperplonk_kzg_compressed_scaffold",
+        // Canonical cap 660K. 5 G1 proof + 8 G1 + 1 G2 VK decompress.
+        // Cap = 660K + 200K = 860K.
+        hard_cap_cu: 860_000,
+        baseline_cu: 0,
+    },
+    SystemTarget {
+        name: "halo2_kzg_compressed_scaffold",
+        // Canonical cap 760K. Variable G1 count by shape.
+        // Cap = 760K + 200K = 960K.
+        hard_cap_cu: 960_000,
+        baseline_cu: 0,
+    },
+    SystemTarget {
+        name: "nova_folding_compressed_scaffold",
+        // Canonical cap 1.15M. 9 + num_aux G1 + 1 G2 decompress.
+        // Cap = 1.15M + 200K = 1.35M (just under MAX_COMPUTE_UNIT_LIMIT).
+        hard_cap_cu: 1_350_000,
+        baseline_cu: 0,
+    },
     SystemTarget {
         name: "fri_stark_goldilocks_scaffold",
         // Session 49 — Goldilocks STARK scaffold at the smallest sane
@@ -194,6 +244,17 @@ struct VerifyProofBatchData {
     vk: Vec<u8>,
     proofs: Vec<Vec<u8>>,
     public_inputs: Vec<Vec<u8>>,
+}
+
+// Session 120 — VerifyCompressedProof (instruction tag 0x03) payload.
+// Mirrors `mosaic_program::VerifyCompressedProofData` so we can serialise
+// without taking a direct dep on the cdylib crate.
+#[derive(BorshSerialize)]
+struct VerifyCompressedProofData {
+    proof_system_id: u8,
+    compressed_vk: Vec<u8>,
+    compressed_proof: Vec<u8>,
+    public_inputs: Vec<u8>,
 }
 
 fn workspace_root() -> PathBuf {
@@ -765,6 +826,86 @@ async fn run_bpf_verify(
     Ok(MeasurementReport::from_target(target, cu))
 }
 
+// Session 120 — compressed-path counterparts.
+
+async fn run_bpf_verify_compressed(
+    target: &SystemTarget,
+    proof_system_id: u8,
+    compressed_vk: &[u8],
+    compressed_proof: &[u8],
+    public_inputs: &[u8],
+    cu_limit: u32,
+) -> Result<MeasurementReport> {
+    sbf_artifact_exists()?;
+    require_sbf_env()?;
+    let (banks, payer, blockhash) = setup_banks().await;
+
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(cu_limit);
+    let verify_ix = build_verify_compressed_ix_for_system(
+        proof_system_id,
+        compressed_vk,
+        compressed_proof,
+        public_inputs,
+    );
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+
+    let meta = banks
+        .process_transaction_with_metadata(tx)
+        .await
+        .context("submit VerifyCompressedProof tx")?;
+
+    if let Err(e) = meta.result {
+        let logs = meta
+            .metadata
+            .as_ref()
+            .map(|m| m.log_messages.join("\n"))
+            .unwrap_or_default();
+        anyhow::bail!("compressed verify tx failed: {e:?}\nlogs:\n{logs}");
+    }
+
+    let logs = meta
+        .metadata
+        .ok_or_else(|| anyhow!("no transaction metadata returned"))?
+        .log_messages;
+    let cu = extract_cu(&logs).ok_or_else(|| {
+        anyhow!(
+            "could not find CU consumption line in logs:\n{}",
+            logs.join("\n")
+        )
+    })?;
+
+    Ok(MeasurementReport::from_target(target, cu))
+}
+
+fn build_verify_compressed_ix_for_system(
+    proof_system_id: u8,
+    compressed_vk: &[u8],
+    compressed_proof: &[u8],
+    public_inputs: &[u8],
+) -> Instruction {
+    let payload = VerifyCompressedProofData {
+        proof_system_id,
+        compressed_vk: compressed_vk.to_vec(),
+        compressed_proof: compressed_proof.to_vec(),
+        public_inputs: public_inputs.to_vec(),
+    };
+    let mut data = Vec::with_capacity(
+        1 + 1 + compressed_vk.len() + compressed_proof.len() + public_inputs.len() + 16,
+    );
+    data.push(0x03); // InstructionTag::VerifyCompressedProof
+    borsh::to_writer(&mut data, &payload).expect("borsh VerifyCompressedProofData");
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: Vec::<AccountMeta>::new(),
+        data,
+    }
+}
+
 fn build_verify_ix_for_system(
     proof_system_id: u8,
     vk: &[u8],
@@ -824,6 +965,154 @@ fn print_report(reports: &[MeasurementReport]) {
     println!();
 }
 
+// ───────────────────────────────────────────────────────────────────────
+// Session 120 — per-system compressed-path bench functions.
+//
+// Each fn: read canonical bytes (from fixtures or scaffold builders)
+// → compress host-side via the per-verifier helpers shipped at
+// v0.9.5..v0.9.13 → submit `VerifyCompressedProof` (instruction tag
+// 0x03) → measure CU.
+//
+// Same pattern as the canonical-path bench fns; the only delta is
+// the compression step and the new `run_bpf_verify_compressed`
+// runner. Closes part of issue #84.
+// ───────────────────────────────────────────────────────────────────────
+
+async fn bench_groth16_compressed_mul_circuit(
+    target: &SystemTarget,
+) -> Result<MeasurementReport> {
+    use mosaic_groth16::canonical::{Groth16Proof, Groth16VerifyingKey};
+    let canonical_vk = fixture_bytes("groth16", "vk.bin")?;
+    let canonical_proof = fixture_bytes("groth16", "proof.bin")?;
+    let public_inputs = fixture_bytes("groth16", "public_inputs.bin")?;
+
+    let backend = HostBackend::new();
+    let vk_struct = Groth16VerifyingKey::from_bytes(&canonical_vk)
+        .map_err(|e| anyhow!("parse Groth16 canonical VK: {e:?}"))?;
+    let compressed_vk = vk_struct
+        .to_compressed_bytes(&backend)
+        .map_err(|e| anyhow!("compress Groth16 VK: {e:?}"))?;
+    let compressed_proof =
+        Groth16Proof::compress_from_canonical_bytes(&backend, &canonical_proof)
+            .map_err(|e| anyhow!("compress Groth16 proof: {e:?}"))?;
+
+    run_bpf_verify_compressed(
+        target,
+        0x01,
+        &compressed_vk,
+        &compressed_proof,
+        &public_inputs,
+        380_000,
+    )
+    .await
+}
+
+async fn bench_plonk_compressed_mul_circuit(
+    target: &SystemTarget,
+) -> Result<MeasurementReport> {
+    use mosaic_plonk::canonical::{PlonkProof, PlonkVerifyingKey};
+    let canonical_vk = fixture_bytes("plonk", "vk.bin")?;
+    let canonical_proof = fixture_bytes("plonk", "proof.bin")?;
+    let public_inputs = fixture_bytes("plonk", "public_inputs.bin")?;
+
+    let backend = HostBackend::new();
+    let vk_struct = PlonkVerifyingKey::from_bytes(&canonical_vk)
+        .map_err(|e| anyhow!("parse PLONK canonical VK: {e:?}"))?;
+    let compressed_vk = vk_struct
+        .to_compressed_bytes(&backend)
+        .map_err(|e| anyhow!("compress PLONK VK: {e:?}"))?;
+    let compressed_proof =
+        PlonkProof::compress_from_canonical_bytes(&backend, &canonical_proof)
+            .map_err(|e| anyhow!("compress PLONK proof: {e:?}"))?;
+
+    run_bpf_verify_compressed(
+        target,
+        0x02,
+        &compressed_vk,
+        &compressed_proof,
+        &public_inputs,
+        1_300_000,
+    )
+    .await
+}
+
+async fn bench_hyperplonk_compressed_scaffold(
+    target: &SystemTarget,
+) -> Result<MeasurementReport> {
+    use mosaic_hyperplonk::canonical::{HyperPlonkProof, HyperPlonkVerifyingKey};
+    let (canonical_vk, canonical_proof, public_inputs) = build_hyperplonk_scaffold_fixture();
+
+    let backend = HostBackend::new();
+    let compressed_vk =
+        HyperPlonkVerifyingKey::to_compressed_bytes(&backend, &canonical_vk)
+            .map_err(|e| anyhow!("compress HyperPlonk VK: {e:?}"))?;
+    let compressed_proof =
+        HyperPlonkProof::compress_from_canonical_bytes(&backend, &canonical_proof)
+            .map_err(|e| anyhow!("compress HyperPlonk proof: {e:?}"))?;
+
+    run_bpf_verify_compressed(
+        target,
+        PROOF_SYSTEM_ID_HYPERPLONK,
+        &compressed_vk,
+        &compressed_proof,
+        &public_inputs,
+        860_000,
+    )
+    .await
+}
+
+async fn bench_halo2_compressed_scaffold(
+    target: &SystemTarget,
+) -> Result<MeasurementReport> {
+    use mosaic_halo2::canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
+    let (canonical_vk, canonical_proof, public_inputs) = build_halo2_scaffold_fixture();
+
+    let backend = HostBackend::new();
+    let vk_struct = Halo2KzgVerifyingKey::from_bytes(&canonical_vk)
+        .map_err(|e| anyhow!("parse Halo2 canonical VK: {e:?}"))?;
+    let compressed_vk = vk_struct
+        .to_compressed_bytes(&backend)
+        .map_err(|e| anyhow!("compress Halo2 VK: {e:?}"))?;
+    let compressed_proof =
+        Halo2KzgProof::compress_from_canonical_bytes(&backend, &canonical_proof)
+            .map_err(|e| anyhow!("compress Halo2 proof: {e:?}"))?;
+
+    run_bpf_verify_compressed(
+        target,
+        PROOF_SYSTEM_ID_HALO2,
+        &compressed_vk,
+        &compressed_proof,
+        &public_inputs,
+        960_000,
+    )
+    .await
+}
+
+async fn bench_nova_compressed_scaffold(
+    target: &SystemTarget,
+) -> Result<MeasurementReport> {
+    use mosaic_nova::canonical::{NovaFoldingProof, NovaFoldingVerifyingKey};
+    let (canonical_vk, canonical_proof, public_inputs) = build_nova_scaffold_fixture();
+
+    let backend = HostBackend::new();
+    let compressed_vk =
+        NovaFoldingVerifyingKey::to_compressed_bytes(&backend, &canonical_vk)
+            .map_err(|e| anyhow!("compress Nova VK: {e:?}"))?;
+    let compressed_proof =
+        NovaFoldingProof::compress_from_canonical_bytes(&backend, &canonical_proof)
+            .map_err(|e| anyhow!("compress Nova proof: {e:?}"))?;
+
+    run_bpf_verify_compressed(
+        target,
+        PROOF_SYSTEM_ID_NOVA,
+        &compressed_vk,
+        &compressed_proof,
+        &public_inputs,
+        1_350_000,
+    )
+    .await
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let mut reports = Vec::new();
@@ -869,6 +1158,22 @@ async fn main() -> ExitCode {
                     8_500_000,
                 )
                 .await
+            },
+            // Session 120 — compressed-path dispatch arms.
+            "groth16_compressed_mul_circuit_1pi" => {
+                bench_groth16_compressed_mul_circuit(target).await
+            },
+            "plonk_compressed_mul_circuit_1pi" => {
+                bench_plonk_compressed_mul_circuit(target).await
+            },
+            "hyperplonk_kzg_compressed_scaffold" => {
+                bench_hyperplonk_compressed_scaffold(target).await
+            },
+            "halo2_kzg_compressed_scaffold" => {
+                bench_halo2_compressed_scaffold(target).await
+            },
+            "nova_folding_compressed_scaffold" => {
+                bench_nova_compressed_scaffold(target).await
             },
             other => {
                 eprintln!("unknown bench target: {other}");

@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exercised across all four. Reproducibility:
   `BPF_OUT_DIR=target/deploy cargo test -p mosaic-program --test verify_proof_sbf`.
 
+- 5 new `bpf-bench` TARGETS for the compressed dispatch arm
+  (`groth16_compressed_mul_circuit_1pi`,
+  `plonk_compressed_mul_circuit_1pi`,
+  `hyperplonk_kzg_compressed_scaffold`,
+  `halo2_kzg_compressed_scaffold`,
+  `nova_folding_compressed_scaffold`). Bench targets now total 12 (was
+  7). Each compressed entry shares the canonical-path fixture / scaffold
+  builder + adds a host-side compression step + submits
+  `VerifyCompressedProof` (instruction `0x03`). Hard caps set to
+  canonical hard cap + 200K decompression headroom; pinned baselines
+  arrive on first successful run, same pattern as the original Phase-3
+  scaffold entries. Closes part of #84. Reproducibility:
+  `cargo run --release -p mosaic-bench --bin bpf-bench` (requires
+  cargo-build-sbf artifact in `target/deploy/`).
+
 ### Planned beyond v0.9.16-multi-system-demo
 
 - Fixture-driven differential testing for the three remaining Phase-3
