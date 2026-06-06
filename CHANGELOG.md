@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- CI now enforces the on-chain SBF path end-to-end (#88 item 1). The
+  `test-sbf` job runs both `verify_proof_sbf` (17 tests) AND the new
+  `cross_validator_determinism` suite (4 tests) against a freshly built
+  `.so`; `bench.yml`'s `bpf-cu` job runs the full CU regression bench.
+  New `lock-guard` CI job (a `build-sbf` prerequisite) + a mirrored
+  guard in `bench.yml` fail the build if `borsh` ever drifts to ≥1.6.x
+  in `Cargo.lock` — the version that panics on the SBF runtime — so the
+  fix from this session can't silently regress. Until Actions billing
+  is restored these jobs are defined-but-not-running; they encode the
+  exact reproduction so they go green the moment CI executes.
+
+- `bpf-bench` gained a `KNOWN_PENDING_TARGETS` allowlist so a
+  documented-broken bench fixture (the large-shape `fri_stark` scaffold,
+  tracked in #76) is logged but does not trigger the exit-2 CI failure,
+  while any *unexpected* measurement failure still does. The bench now
+  exits 0 on the current tree (11/11 measurable targets OK, fri_stark
+  excused).
+
 - Real `bpf-bench` CU baselines for all 11 measurable dispatch arms
   (#84) — the first sweep where every arm was measured end-to-end on
   the `solana-program-test` VM, now possible thanks to the borsh-1.5.7

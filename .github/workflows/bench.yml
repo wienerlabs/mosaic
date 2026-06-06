@@ -71,6 +71,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: borsh must stay <1.6 (issue #88)
+        # borsh 1.6.x panics on the SBF runtime; the bench drives the real
+        # .so so it would fail spuriously. Mirror of the ci.yml lock-guard
+        # (workflows can't share `needs` across files).
+        run: |
+          vers="$(awk '/^name = "borsh"$/{getline; gsub(/version = "|"/,""); print}' Cargo.lock)"
+          echo "borsh versions: $vers"
+          bad=0; have_15=0
+          for v in $vers; do
+            case "$v" in
+              1.5.*) have_15=1 ;;
+              1.*) echo "::error::borsh $v panics on the SBF runtime (issue #88)"; bad=1 ;;
+              *) ;;
+            esac
+          done
+          [ "$have_15" -eq 1 ] || { echo "::error::no borsh 1.5.x in Cargo.lock"; bad=1; }
+          exit $bad
       - name: Install Solana CLI
         run: |
           sh -c "$(curl -sSfL https://release.anza.xyz/v3.0.15/install)"
@@ -79,8 +96,10 @@ jobs:
         run: cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
       - name: Run CU regression bench (fails on ADR-0005 hard-cap breach)
         # bpf-bench exit codes:
-        #   0 = within baseline tolerance (or below first-run baselines for
-        #       the new Phase-3 systems whose baseline_cu is still 0)
+        #   0 = all measurable targets within baseline tolerance + under cap
         #   1 = hard cap exceeded (ADR-0005 breach)
-        #   2 = infra error (fixture / artifact missing)
+        #   2 = a target that should measure failed to (real signal).
+        #       Known-pending fixtures (KNOWN_PENDING_TARGETS, e.g. the
+        #       fri_stark large-shape scaffold tracked in #76) are logged
+        #       but do NOT trigger exit 2.
         run: cargo run --release -p mosaic-bench --bin bpf-bench

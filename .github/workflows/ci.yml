@@ -120,11 +120,49 @@ jobs:
       - name: Build SBF program
         run: cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
       - name: Run SBF integration tests
-        run: cargo test -p mosaic-program --test verify_proof_sbf
+        # verify_proof_sbf: 17 dispatch-arm tests (every ProofSystemId +
+        # compressed path). cross_validator_determinism: 4 tests proving
+        # identical verdict + CU across alt_bn128 FeatureSet personas
+        # (T-5, issue #70). Both self-skip when the .so is absent; here
+        # the build step above guarantees it exists, so they run for real.
+        run: |
+          cargo test -p mosaic-program --test verify_proof_sbf
+          cargo test -p mosaic-program --test cross_validator_determinism
+
+  lock-guard:
+    name: lockfile guard (SBF-critical pins)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # borsh 1.6.x's vec_from_reader (de/mod.rs:164) panics on the SBF
+      # runtime — the program dies at ~1900 CU before any verification.
+      # The whole SBF test + bench surface depends on borsh staying 1.5.x.
+      # This guard fails loudly if a `cargo update` ever drifts it back.
+      # See issue #88.
+      - name: borsh must stay <1.6 (issue #88)
+        run: |
+          # The lock carries two borsh majors: a legacy 0.x (harmless,
+          # pulled by an old solana crate) and the 1.x the mosaic program
+          # actually serializes with. Check every 1.x entry is 1.5.x.
+          vers="$(awk '/^name = "borsh"$/{getline; gsub(/version = "|"/,""); print}' Cargo.lock)"
+          echo "borsh versions in Cargo.lock: $vers"
+          bad=0; have_15=0
+          for v in $vers; do
+            case "$v" in
+              1.5.*) have_15=1 ;;
+              1.*) echo "::error::borsh $v panics on the SBF runtime (issue #88) — pin to 1.5.x in Cargo.lock"; bad=1 ;;
+              *) ;;  # 0.x legacy line, irrelevant to SBF
+            esac
+          done
+          if [ "$have_15" -ne 1 ]; then
+            echo "::error::no borsh 1.5.x in Cargo.lock — the mosaic program needs the SBF-compatible 1.5.x line"; bad=1
+          fi
+          exit $bad
 
   build-sbf:
     name: build-sbf
     runs-on: ubuntu-latest
+    needs: lock-guard
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -135,6 +173,8 @@ jobs:
       # platform-tools v1.52 ships rustc 1.89.0-dev; needed because some
       # transitive deps (constant_time_eq 0.4.x via blake3) require
       # edition2024, which the v1.51 default (rustc 1.84) cannot parse.
+      # v1.52 also emits sBPF the solana-program-test 0.11.1 VM runs
+      # correctly — newer tools (v1.54) mis-execute on that VM.
       - run: cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
       - name: Verify SBF artifact
         run: |
