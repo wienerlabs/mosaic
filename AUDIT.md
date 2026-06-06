@@ -10,6 +10,70 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-05-12 — v0.9.16-multi-system-demo release (sessions 117–119)
+
+| Field | Value |
+|---|---|
+| Tag | [`v0.9.16-multi-system-demo`](https://github.com/wienerlabs/mosaic/releases/tag/v0.9.16-multi-system-demo) |
+| Auditor | Internal (Wiener Labs) — pre-audit demo + mainnet-ladder scoping |
+| Scope | New `mosaic-demo-sudoku` host-only crate, `/demo/sudoku` interactive UI with proof anatomy + PLONK comparison, 22 mainnet-readiness issues (#66–#87), deployment scripts (devnet + mainnet, hard-gated), multi-sig upgrade-authority design doc. |
+| Findings | None — additive release, no production-path code changed. |
+| Status | ✅ Multi-system claim demonstrable end-to-end with reproducible artifacts. Mainnet ladder explicit in `ROADMAP.md` + 22 issues. |
+
+### What this milestone does for audit firms
+
+A single reproducible command — `cargo run -p mosaic-demo-sudoku
+--bin generate-fixtures --release` — exercises the full pipeline:
+arkworks Groth16 setup + prove on a real 1026-constraint sudoku
+circuit, encode to Mosaic canonical bytes via
+`mosaic-serde::arkworks::ArkworksCodec`, then verify through
+`mosaic-groth16::Groth16Verifier` (host backend, same code path as
+SBF). Same binary also verifies the existing snarkjs PLONK 0.7.6
+mul-circuit fixture through `mosaic-plonk` at the same commit.
+
+Measured locally on macOS arm64 at this commit:
+
+  setup:               80 ms
+  prove:               22 ms
+  arkworks verify:      1 ms — accept
+  Mosaic verify valid:  2 ms — Ok(())
+  Mosaic verify tamper: 0 ms — Err(PointNotOnCurve)
+  Mosaic PLONK verify:  2 ms — Ok(())
+
+### Mainnet ladder now explicit
+
+22 issues filed under the `[epic] Mainnet readiness` umbrella
+(#66 through #87). Audit firms can scope a quote against a concrete
+blocker list. See `ROADMAP.md` for the three-horizon view.
+
+### Test totals at v0.9.16
+
+| Surface | Count |
+|---|---|
+| Lib tests | 717 (was 712; +5 from `mosaic-demo-sudoku`) |
+| Fuzz harnesses | 37 |
+| Criterion benches | 14 |
+| SBF integration tests | 13 |
+| Workspace crates | 15 (+ `mosaic-demo-sudoku`) |
+| Public demo routes | 1 (`/demo/sudoku`) |
+
+### What this milestone DOES change
+
+- New host-only crate `mosaic-demo-sudoku` (no SBF impact)
+- New public demo route `/demo/sudoku`
+- 22 new GitHub issues (#66–#87)
+- `ROADMAP.md` separated from CHANGELOG
+- `scripts/deploy-devnet.sh` + `scripts/deploy-mainnet.sh`
+- `docs/upgrade-authority.md`
+
+### What this milestone does NOT change
+
+Verifier behaviour, on-chain CU consumption, canonical wire format,
+public API. The demo crate is host-only and never deploys to chain.
+Mainnet deploy script blocked behind audit sign-off file gate.
+
+---
+
 ## 2026-05-03 — v0.9.15-onchain-compressed-verify release (session 116)
 
 | Field | Value |

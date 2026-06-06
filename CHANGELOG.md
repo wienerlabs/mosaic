@@ -7,16 +7,181 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned beyond v0.9.15-onchain-compressed-verify
+### Planned beyond v0.9.16-multi-system-demo
 
 - Fixture-driven differential testing for the three remaining Phase-3
-  bodies (Espresso HyperPlonk, sonobe Nova, Plonky3 STARK). Halo2 now
-  has multi-column lookup wired end-to-end + KZG-bound at v0.9.1.
-- HyperPlonk full Zeromorph / PST / Gemini reduction (canonical
-  layout breaking change) — session 117.
-- Phase-3 differential test scaffold + 1 reference fixture per
-  vendor — session 118.
-- External security audit commission (target: post-v0.9.20 freeze).
+  bodies (Espresso HyperPlonk #73, sonobe Nova #75, Plonky3 STARK #76)
+- HyperPlonk Zeromorph partial reduction (canonical layout breaking
+  change) — #77
+- Halo2 two-point batched opening completion — #74
+- FRI-STARK chunked execution path (T-12 mitigation) — #76
+- Risc0Stark dispatch arm — #78 (closes Bonsol CIRCOM-wrap gap)
+- Devnet deployment + 24 h soak — #67
+- Mainnet PROGRAM_ID + multi-sig upgrade authority — #68, #86
+- External audit commission (IronNode + Halborn) — #71, #72
+
+See [`ROADMAP.md`](ROADMAP.md) for the structured horizon view and
+[`AUDIT-CHECKLIST.md`](AUDIT-CHECKLIST.md) for the audit-firm scope
+handoff.
+
+## [0.9.16-multi-system-demo] — 2026-05-12
+
+**Multi-system claim now demonstrable end-to-end.** Sessions 117–119
+shipped a real workspace demo crate (`mosaic-demo-sudoku`), an
+interactive `/demo/sudoku` Next.js route, and the full mainnet-ladder
+issue tracker (#66 through #87). Investors and auditors browsing the
+repo see a concrete pipeline: real arkworks Groth16 prover → Mosaic
+canonical bytes → real `mosaic-groth16` verifier accept → same library
+also accepting a snarkjs PLONK proof at the same commit. The library
+works; the path to mainnet is explicit.
+
+### Added — `crates/mosaic-demo-sudoku`
+
+New workspace crate (no SBF, host-only). What's inside:
+
+- **Sudoku R1CS circuit** — 1026 constraints, written against
+  arkworks low-level `ConstraintSynthesizer` API. In-range polynomial
+  for `v ∈ {1..9}`, clue-match constraints, group sum + sum-of-squares
+  for row/col/box permutation enforcement. Documented soundness
+  trade-off — see `circuit.rs` rustdoc.
+- **Groth16 setup + prover** — `ark-groth16` over BN254 with
+  deterministic seeds so artifacts reproduce byte-for-byte across runs.
+- **`generate-fixtures` binary** — produces real
+  `vk.bin` / `proof_valid.bin` / `proof_tampered.bin` /
+  `public_inputs.bin` under `site/public/demo/sudoku/` plus an
+  `evidence.json` provenance record with SHA-256 digests, timings,
+  and constraint breakdown.
+- **PLONK comparison pass** — same binary also verifies the existing
+  snarkjs PLONK 0.7.6 mul-circuit fixture through `mosaic-plonk` and
+  records the outcome into `evidence.json` under the
+  `plonk_comparison` field. Answers the recurring "could you use
+  PLONK instead?" question with real numbers from the same workspace.
+
+5 unit tests pass: puzzle validity, circuit satisfaction on correct
+solution, circuit rejection on a 2-cell swap, prover end-to-end
+through Mosaic, tampered proof rejection.
+
+### Added — `/demo/sudoku` Next.js route
+
+Public demo at `https://mosaic.wienerlabs.xyz/demo/sudoku` (and the
+local `pnpm next dev` equivalent). Mosaic-styled — same palette,
+same `mtm-*` terminal grammar, same `mag-*` magazine surfaces as the
+main onepager. Interactive surfaces:
+
+- **Hero strip** with the Mosaic tessellation mark (not the Wiener
+  wordmark) and the reproducibility recipe.
+- **Sudoku grid** — hover any cell to highlight the row, column, and
+  3×3 box that cell participates in (20 hover-highlighted cells for
+  the center cell — 8 row + 8 col + 4 box-non-overlap). The focus
+  readout strip below the grid prints "Cell row R · column C · box
+  (boxR, boxC) · Role: Public clue / Witness · Value: V · In-circuit
+  work: 1 in-range polynomial · 1 squared witness · 3 group sums · 3
+  group sum-of-squares · 1 clue match". Toggle between "Verifier's
+  view" (21 public clues) and "Reveal solution" (all 81 cells).
+- **Circuit instrumentation table** — 7-row breakdown of the 1026
+  constraints by family + rule + count.
+- **Cryptographic provenance grid** — 5 SHA-256 digest rows linked
+  to the raw `.bin` artifacts plus a 5-cell timing strip.
+- **Proof byte anatomy** — the 256-byte proof is fetched live and
+  split into 8 chunks (A.x / A.y / B.x.c1 / B.x.c0 / B.y.c1 / B.y.c0
+  / C.x / C.y). Hover or click any chunk; a terminal-styled detail
+  card shows what BN254 field element it encodes. Each chunk's left
+  border picks a different palette shade so the A / B / C grouping
+  reads at a glance. The B.x.c1 / B.x.c0 entries call out the
+  alt_bn128 Fq2 ordering quirk (ADR-0003).
+- **Verification terminal** — two tabs, valid and tampered. Each
+  replays captured `cargo test` output for the corresponding code
+  path. Valid returns `Ok(())` in 2 ms; tampered returns
+  `Err(PointNotOnCurve)` in 0 ms — same error path the on-chain
+  dispatcher emits.
+- **Multi-system comparison panel** — side-by-side stats: crate,
+  circuit, prover, trusted setup, VK size, proof size, host verify
+  time, on-chain CU baseline. Groth16 column on the left
+  (`mosaic-groth16` verifying our sudoku), KZG-PLONK column on the
+  right (`mosaic-plonk` verifying the snarkjs PLONK mul-circuit
+  fixture). Footer: terminal-styled body copy addressing "why
+  Groth16 for the sudoku demo" with the real PLONK SHA-256 digests
+  + artifact links.
+
+Route stats: 12.6 kB / 162 kB first load, prerendered static.
+
+### Added — mainnet readiness issue tracker
+
+22 new issues opened, covering the v1.0.0 deployment ladder:
+
+| # | Title | Theme |
+|---|---|---|
+| #66 | [epic] Mainnet readiness — v1.0.0 deployment ladder | Epic |
+| #67 | Devnet deploy + 24 h soak harness | Deployment |
+| #68 | Mainnet `PROGRAM_ID` + reproducible deploy script | Deployment |
+| #69 | Mainnet rollback + incident response playbook | Operations |
+| #70 | Testnet cross-validator determinism cross-check | Security |
+| #71 | Audit: commission IronNode | Audit |
+| #72 | Audit: re-engage Halborn | Audit |
+| #73 | HyperPlonk: Espresso reference fixture | Phase-3 |
+| #74 | Halo2: two-point batched opening completion | Phase-3 |
+| #75 | Nova: Spartan-wrapped multi-opening | Phase-3 |
+| #76 | FRI-STARK: Plonky3 reference + chunked execution (T-12) | Phase-3 |
+| #77 | HyperPlonk: Zeromorph partial reduction | Phase-3 |
+| #78 | Risc0Stark dispatch arm (closes Bonsol gap) | Phase-3 |
+| #79 | Bug bounty program post-audit | Audit |
+| #80 | Hosted prover service architecture spec | Product |
+| #81 | Tokenomics decision (commit or drop) | Product |
+| #82 | Reference dapp on Solana | DX |
+| #83 | `ROADMAP.md` separate from CHANGELOG | Docs |
+| #84 | `bpf-bench` `VerifyCompressedProof` CU measurements | Performance |
+| #85 | Devnet soak observability stack | Operations |
+| #86 | Multi-sig upgrade authority policy | Security |
+| #87 | Coordinated disclosure with Solana Foundation | Security |
+
+### Added — new artefacts in the repo
+
+- `ROADMAP.md` — three-horizon forward view, links to every issue
+  above. Updated weekly.
+- `scripts/deploy-devnet.sh` — pre-flight-checked devnet deployment
+  script. 6 hard gates: Solana CLI sanity, SBF artifact present + SHA
+  printed, keypair sanity (not inside repo dir!), wallet balance,
+  cluster guard, confirmation prompt.
+- `scripts/deploy-mainnet.sh` — same skeleton hardened for mainnet.
+  Adds 3 mainnet-only gates: audit sign-off file must exist at
+  `docs/audit-signoff.txt`, SBF SHA must match the audited SHA
+  (passed via `--audited-sha`), devnet soak report must exist under
+  `docs/devnet-soak/`. Two-operator confirmation pattern + 10-second
+  abort countdown.
+- `docs/upgrade-authority.md` — design doc for the 2-of-3 Squads V4
+  multi-sig that holds mainnet upgrade authority. Covers signer
+  hardware, key-loss recovery, freeze authorization, sunset to
+  immutability.
+
+### Coverage delta
+
+| Surface | Before (v0.9.15) | After (v0.9.16) | Δ |
+|---|---|---|---|
+| Workspace crates | 14 | **15** (+ `mosaic-demo-sudoku`) | +1 |
+| Lib tests | 712 | **717** (+ 5 sudoku) | +5 |
+| Public demo routes | 0 | **1** (`/demo/sudoku`) | +1 |
+| Real-prover circuits verified by Mosaic | 1 (mul-circuit) | **2** (mul-circuit + sudoku 1026-constraint) | +1 |
+| Mainnet-ladder issues filed | 0 | **22** (#66–#87) | +22 |
+| Deployment scripts | 0 | **2** (devnet + mainnet, both gated) | +2 |
+| Roadmap document | inline in CHANGELOG | `ROADMAP.md` separate | — |
+
+### What this milestone DOES change
+
+- Adds a real ZK demo crate that any visitor can reproduce locally
+- Public-facing artifacts at `/demo/sudoku` with cryptographic
+  provenance every visitor can verify
+- 22 new issues structuring the path to mainnet
+- 2 deployment scripts (devnet + mainnet) with pre-flight gating
+- Upgrade-authority design doc
+
+### What this milestone does NOT change
+
+Verifier behaviour, on-chain CU consumption, canonical wire format,
+public API. Pure additive — demo crate is host-only and never
+deploys to chain. The mainnet deployment scripts will not execute
+until issue #66 gating items are checked.
+
+## [0.9.15-onchain-compressed-verify] — 2026-05-02
 
 ## [0.9.15-onchain-compressed-verify] — 2026-05-03
 
