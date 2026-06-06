@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added since v0.9.16-multi-system-demo
+
+- 4 new SBF integration tests for `VerifyCompressedProof` (instruction
+  `0x03`) — one happy-path each for PLONK, HyperPlonk, Halo2, and Nova.
+  SBF integration test surface grew from 13 → 17. Every BN254-curve
+  verifier now has runtime evidence that the compressed dispatch arm
+  accepts a real (PLONK) or scaffold-acceptance (HyperPlonk / Halo2 /
+  Nova) proof on the actual `solana-program-test` rbpf VM. Same
+  compress-host-side → submit → decompress-on-chain → verify pipeline
+  exercised across all four. Reproducibility:
+  `BPF_OUT_DIR=target/deploy cargo test -p mosaic-program --test verify_proof_sbf`.
+
 ### Planned beyond v0.9.16-multi-system-demo
 
 - Fixture-driven differential testing for the three remaining Phase-3

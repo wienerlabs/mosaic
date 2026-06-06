@@ -1068,3 +1068,274 @@ async fn sbf_verify_compressed_rejects_risc0_unimplemented() {
         "expected UnimplementedProofSystem (0x{ERR_UNIMPLEMENTED_PROOF_SYSTEM:04x}), got: {s}",
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Session 120 — VerifyCompressedProof (0x03) coverage for the remaining
+// four BN254 verifiers.
+//
+// Up to session 116 the on-chain `VerifyCompressedProof` instruction
+// had only a Groth16 happy-path SBF integration test (plus two
+// rejection paths for FriStark / Risc0). The four other BN254
+// verifiers (PLONK, HyperPlonk, Halo2, Nova) have compression APIs
+// shipped at v0.9.7–v0.9.13 but no SBF runtime evidence that the
+// compressed-path dispatch arm accepts them on chain.
+//
+// This sweep closes that gap: one happy-path test per remaining
+// BN254 verifier, exercising
+//
+//     compress host-side → submit `VerifyCompressedProof` →
+//     dispatcher decompresses on chain → existing verify path runs.
+//
+// For Phase-3 scaffolds the canonical-path equivalents are already
+// covered (sbf_dispatches_*_scaffold tests at line ~644 onwards).
+// These new tests reuse the same scaffold builders + the existing
+// `compress_from_canonical_bytes` helpers from each verifier crate.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// PLONK end-to-end through the compressed dispatch arm. Real snarkjs
+/// PLONK 0.7.6 mul-circuit fixture; host-side compression; on-chain
+/// decompression; on-chain verify.
+#[tokio::test]
+async fn sbf_verify_compressed_plonk_succeeds() {
+    use mosaic_core::syscall::host::HostBackend;
+    use mosaic_plonk::canonical::{PlonkProof, PlonkVerifyingKey};
+
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+
+    let canonical_vk = fixture("plonk", "vk.bin");
+    let canonical_proof = fixture("plonk", "proof.bin");
+    let pi = fixture("plonk", "public_inputs.bin");
+
+    let host = HostBackend::new();
+    let vk_struct = PlonkVerifyingKey::from_bytes(&canonical_vk).expect("parse vk");
+    let compressed_vk = vk_struct.to_compressed_bytes(&host).expect("compress vk");
+    let compressed_proof =
+        PlonkProof::compress_from_canonical_bytes(&host, &canonical_proof)
+            .expect("compress proof");
+
+    assert!(
+        compressed_proof.len() < canonical_proof.len(),
+        "compressed PLONK proof must shrink: {} ≥ {}",
+        compressed_proof.len(),
+        canonical_proof.len(),
+    );
+
+    // Per CHANGELOG v0.9.10: PLONK proof 768 → 480 B = 37.5 %.
+    // Per CHANGELOG v0.9.10: PLONK VK 744 → 424 B = 43 %.
+    assert_eq!(compressed_proof.len(), 480, "PLONK proof size drift");
+    assert_eq!(compressed_vk.len(), 424, "PLONK VK size drift");
+
+    // PLONK canonical-path baseline 968 457 CU. Compression adds
+    // ~92 K (8 G1 + 1 G2 decompress). Request 1.3 M with headroom.
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_300_000);
+    let verify_ix =
+        build_verify_compressed_ix(PSID_PLONK_KZG, &compressed_vk, &compressed_proof, &pi);
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let meta = banks.process_transaction_with_metadata(tx).await.unwrap();
+    let logs = meta.metadata.map(|m| m.log_messages).unwrap_or_default();
+    assert!(
+        meta.result.is_ok(),
+        "compressed PLONK must verify on-chain: {:?}\nlogs:\n{}",
+        meta.result,
+        logs.join("\n"),
+    );
+
+    let needle = "mosaic: dispatch_compressed plonk_kzg_bn254";
+    assert!(
+        logs.iter().any(|l| l.contains(needle)),
+        "expected `{needle}`, got:\n{}",
+        logs.join("\n"),
+    );
+}
+
+/// HyperPlonk scaffold-acceptance fixture round-tripped through the
+/// compressed dispatch arm.
+#[tokio::test]
+async fn sbf_verify_compressed_hyperplonk_scaffold_succeeds() {
+    use mosaic_core::syscall::host::HostBackend;
+    use mosaic_hyperplonk::canonical::{HyperPlonkProof, HyperPlonkVerifyingKey};
+
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+    let (canonical_vk, canonical_proof, pi) = hyperplonk_scaffold();
+
+    let host = HostBackend::new();
+    let compressed_vk =
+        HyperPlonkVerifyingKey::to_compressed_bytes(&host, &canonical_vk)
+            .expect("compress vk");
+    let compressed_proof =
+        HyperPlonkProof::compress_from_canonical_bytes(&host, &canonical_proof)
+            .expect("compress proof");
+
+    assert!(
+        compressed_vk.len() < canonical_vk.len(),
+        "compressed HyperPlonk VK must shrink",
+    );
+    assert!(
+        compressed_proof.len() < canonical_proof.len(),
+        "compressed HyperPlonk proof must shrink",
+    );
+
+    // HyperPlonk canonical-path bpf-bench cap = 660 K. Compression
+    // adds ~92 K (12 G1 + 1 G2 decompress). 1.3 M with headroom.
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_300_000);
+    let verify_ix = build_verify_compressed_ix(
+        PSID_HYPERPLONK_KZG,
+        &compressed_vk,
+        &compressed_proof,
+        &pi,
+    );
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let meta = banks.process_transaction_with_metadata(tx).await.unwrap();
+    let logs = meta.metadata.map(|m| m.log_messages).unwrap_or_default();
+    assert!(
+        meta.result.is_ok(),
+        "compressed HyperPlonk scaffold must verify on-chain: {:?}\nlogs:\n{}",
+        meta.result,
+        logs.join("\n"),
+    );
+
+    let needle = "mosaic: dispatch_compressed hyperplonk_kzg_bn254";
+    assert!(
+        logs.iter().any(|l| l.contains(needle)),
+        "expected `{needle}`, got:\n{}",
+        logs.join("\n"),
+    );
+}
+
+/// Halo2 scaffold-acceptance fixture round-tripped through the
+/// compressed dispatch arm.
+#[tokio::test]
+async fn sbf_verify_compressed_halo2_scaffold_succeeds() {
+    use mosaic_core::syscall::host::HostBackend;
+    use mosaic_halo2::canonical::{Halo2KzgProof, Halo2KzgVerifyingKey};
+
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+    let (canonical_vk, canonical_proof, pi) = halo2_scaffold();
+
+    let host = HostBackend::new();
+    let vk_struct = Halo2KzgVerifyingKey::from_bytes(&canonical_vk).expect("parse vk");
+    let compressed_vk = vk_struct.to_compressed_bytes(&host).expect("compress vk");
+    let compressed_proof =
+        Halo2KzgProof::compress_from_canonical_bytes(&host, &canonical_proof)
+            .expect("compress proof");
+
+    assert!(
+        compressed_vk.len() < canonical_vk.len(),
+        "compressed Halo2 VK must shrink",
+    );
+    assert!(
+        compressed_proof.len() < canonical_proof.len(),
+        "compressed Halo2 proof must shrink",
+    );
+
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_300_000);
+    let verify_ix = build_verify_compressed_ix(
+        PSID_HALO2_KZG,
+        &compressed_vk,
+        &compressed_proof,
+        &pi,
+    );
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let meta = banks.process_transaction_with_metadata(tx).await.unwrap();
+    let logs = meta.metadata.map(|m| m.log_messages).unwrap_or_default();
+    assert!(
+        meta.result.is_ok(),
+        "compressed Halo2 scaffold must verify on-chain: {:?}\nlogs:\n{}",
+        meta.result,
+        logs.join("\n"),
+    );
+
+    let needle = "mosaic: dispatch_compressed halo2_kzg_bn254";
+    assert!(
+        logs.iter().any(|l| l.contains(needle)),
+        "expected `{needle}`, got:\n{}",
+        logs.join("\n"),
+    );
+}
+
+/// Nova scaffold-acceptance fixture round-tripped through the
+/// compressed dispatch arm. ProtoStar shares the dispatch path
+/// (alias) so this also exercises 0x08 indirectly.
+#[tokio::test]
+async fn sbf_verify_compressed_nova_scaffold_succeeds() {
+    use mosaic_core::syscall::host::HostBackend;
+    use mosaic_nova::canonical::{NovaFoldingProof, NovaFoldingVerifyingKey};
+
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+    let (canonical_vk, canonical_proof, pi) = nova_scaffold();
+
+    let host = HostBackend::new();
+    let compressed_vk =
+        NovaFoldingVerifyingKey::to_compressed_bytes(&host, &canonical_vk)
+            .expect("compress vk");
+    let compressed_proof =
+        NovaFoldingProof::compress_from_canonical_bytes(&host, &canonical_proof)
+            .expect("compress proof");
+
+    assert!(
+        compressed_vk.len() < canonical_vk.len(),
+        "compressed Nova VK must shrink",
+    );
+    assert!(
+        compressed_proof.len() < canonical_proof.len(),
+        "compressed Nova proof must shrink",
+    );
+
+    // Nova canonical-path bpf-bench cap = 1.15 M. Compression adds
+    // ~110 K (13 G1 + 1 G2 decompress at default shape). 1.4 M (tx cap).
+    let cu_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+    let verify_ix = build_verify_compressed_ix(
+        PSID_NOVA_FOLDING,
+        &compressed_vk,
+        &compressed_proof,
+        &pi,
+    );
+    let tx = Transaction::new_signed_with_payer(
+        &[cu_ix, verify_ix],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let meta = banks.process_transaction_with_metadata(tx).await.unwrap();
+    let logs = meta.metadata.map(|m| m.log_messages).unwrap_or_default();
+    assert!(
+        meta.result.is_ok(),
+        "compressed Nova scaffold must verify on-chain: {:?}\nlogs:\n{}",
+        meta.result,
+        logs.join("\n"),
+    );
+
+    let needle = "mosaic: dispatch_compressed nova_folding";
+    assert!(
+        logs.iter().any(|l| l.contains(needle)),
+        "expected `{needle}`, got:\n{}",
+        logs.join("\n"),
+    );
+}
