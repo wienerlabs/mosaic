@@ -1,0 +1,12 @@
+{
+  "_comment": "Devnet pre-mainnet gate soak. 24h run @ 12s submit interval = ~7200 txs. 10% tampered ratio = ~720 forced rejections. Pass criteria: unexpected_failure == 0. Edit program_id + payer_keypair before running.",
+  "rpc_url": "https://api.devnet.solana.com",
+  "program_id": "MosA1cVer1f1er11111111111111111111111111111",
+  "payer_keypair": "~/.config/solana/devnet-payer.json",
+  "fixtures_dir": "tests/fixtures",
+  "duration": 86400,
+  "submit_interval": 12,
+  "tampered_ratio": 0.10,
+  "report_path": "docs/devnet-soak/2026-06-06.md",
+  "cu_drift_tolerance": 0.10
+}

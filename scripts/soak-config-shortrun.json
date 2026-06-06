@@ -1,0 +1,12 @@
+{
+  "_comment": "Short-run smoke (10 minutes). Useful for verifying the harness end-to-end after a code change before committing to a 24h gate run. Pass criteria: unexpected_failure == 0; CU samples present for each fixture.",
+  "rpc_url": "https://api.devnet.solana.com",
+  "program_id": "MosA1cVer1f1er11111111111111111111111111111",
+  "payer_keypair": "~/.config/solana/devnet-payer.json",
+  "fixtures_dir": "tests/fixtures",
+  "duration": 600,
+  "submit_interval": 6,
+  "tampered_ratio": 0.20,
+  "report_path": "docs/devnet-soak/shortrun-2026-06-06.md",
+  "cu_drift_tolerance": 0.15
+}

@@ -350,3 +350,211 @@ fn unix_to_ymdhms(mut secs: i64) -> (i32, u32, u32, u32, u32, u32) {
 fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cu_stats_empty_returns_zeroes() {
+        let stats = CuStats::from_samples(vec![]);
+        assert_eq!(stats.samples, 0);
+        assert_eq!(stats.min, 0);
+        assert_eq!(stats.max, 0);
+        assert_eq!(stats.median, 0);
+        assert_eq!(stats.p95, 0);
+    }
+
+    #[test]
+    fn cu_stats_single_sample() {
+        let stats = CuStats::from_samples(vec![83_574]);
+        assert_eq!(stats.samples, 1);
+        assert_eq!(stats.min, 83_574);
+        assert_eq!(stats.max, 83_574);
+        assert_eq!(stats.median, 83_574);
+        assert_eq!(stats.p95, 83_574);
+    }
+
+    #[test]
+    fn cu_stats_unsorted_input_is_handled() {
+        let stats = CuStats::from_samples(vec![100, 50, 200, 75, 150]);
+        assert_eq!(stats.samples, 5);
+        assert_eq!(stats.min, 50);
+        assert_eq!(stats.max, 200);
+        // 5 samples sorted: [50, 75, 100, 150, 200]; median index 2 -> 100
+        assert_eq!(stats.median, 100);
+    }
+
+    #[test]
+    fn cu_stats_p95_clamps_to_last_index() {
+        // With 20 samples 0..=19, p95 index = (20 * 0.95).floor() = 19,
+        // which is the last index, so p95 = 19.
+        let s: Vec<u64> = (0..20).collect();
+        let stats = CuStats::from_samples(s);
+        assert_eq!(stats.p95, 19);
+    }
+
+    #[test]
+    fn pinned_baseline_known_systems() {
+        assert_eq!(pinned_baseline("groth16_bn254"), Some(83_574));
+        assert_eq!(pinned_baseline("plonk_kzg_bn254"), Some(968_457));
+        assert_eq!(pinned_baseline("unknown_system"), None);
+    }
+
+    #[test]
+    fn record_outcome_increments_correct_counter() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        report.record_outcome(DispatchOutcome::AcceptedValid, Some("groth16_bn254"), Some(80_000));
+        report.record_outcome(DispatchOutcome::RejectedTampered, None, None);
+        report.record_outcome(DispatchOutcome::UnexpectedFailure, None, None);
+        assert_eq!(report.total_txs, 3);
+        assert_eq!(report.accepted_valid, 1);
+        assert_eq!(report.rejected_tampered, 1);
+        assert_eq!(report.unexpected_failure, 1);
+        assert_eq!(report.cu_samples.get("groth16_bn254").map(|s| s.len()), Some(1));
+    }
+
+    #[test]
+    fn record_outcome_caps_cu_samples_at_max() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        // Push MAX + 5 samples; bucket should stop at MAX.
+        for i in 0..(MAX_SAMPLES_PER_DISPATCH + 5) {
+            report.record_outcome(
+                DispatchOutcome::AcceptedValid,
+                Some("groth16_bn254"),
+                Some(i as u64),
+            );
+        }
+        let bucket = report.cu_samples.get("groth16_bn254").unwrap();
+        assert_eq!(bucket.len(), MAX_SAMPLES_PER_DISPATCH);
+        // First sample preserved, last 5 dropped.
+        assert_eq!(bucket[0], 0);
+    }
+
+    #[test]
+    fn record_failure_caps_at_max_unexpected_failures() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        for i in 0..(MAX_UNEXPECTED_FAILURES + 10) {
+            report.record_failure(
+                format!("sig{i}"),
+                format!("err{i}"),
+                format!("logs{i}"),
+            );
+        }
+        assert_eq!(report.unexpected_failures.len(), MAX_UNEXPECTED_FAILURES);
+    }
+
+    #[test]
+    fn record_drift_alert_computes_correct_drift_pct() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        // baseline 100, measured 110 -> +10% drift
+        report.record_drift_alert("test".into(), 110, 100);
+        assert_eq!(report.cu_drift_alerts.len(), 1);
+        let alert = &report.cu_drift_alerts[0];
+        assert_eq!(alert.dispatch_slug, "test");
+        assert_eq!(alert.measured_cu, 110);
+        assert_eq!(alert.baseline_cu, 100);
+        assert!((alert.drift_pct - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn record_drift_alert_absolute_value_for_negative_drift() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        // baseline 100, measured 90 -> drift magnitude 10%
+        report.record_drift_alert("test".into(), 90, 100);
+        let alert = &report.cu_drift_alerts[0];
+        assert!((alert.drift_pct - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn render_markdown_contains_all_required_sections() {
+        let mut report = SoakReport::new(
+            "https://api.devnet.solana.com".into(),
+            "MosA1cVer1f1er11111111111111111111111111111".into(),
+        );
+        report.fixture_count = 2;
+        report.record_outcome(DispatchOutcome::AcceptedValid, Some("groth16_bn254"), Some(83_500));
+        report.record_outcome(DispatchOutcome::RejectedTampered, None, None);
+        report.finish();
+
+        let md = report.render_markdown();
+        // Header
+        assert!(md.starts_with("# Mosaic devnet soak"));
+        // Sections
+        assert!(md.contains("## Run identity"));
+        assert!(md.contains("## Outcomes"));
+        assert!(md.contains("## Compute-unit consumption per dispatch"));
+        // Run identity payload
+        assert!(md.contains("https://api.devnet.solana.com"));
+        assert!(md.contains("MosA1cVer1f1er11111111111111111111111111111"));
+        // Outcome counts present
+        assert!(md.contains("| Total transactions submitted | 2 |"));
+        assert!(md.contains("| Valid proofs accepted | 1 |"));
+        assert!(md.contains("| Tampered proofs rejected | 1 |"));
+        // Compute table includes the groth16 row + baseline column
+        assert!(md.contains("`groth16_bn254`"));
+        assert!(md.contains("83574"));
+        // Schema footer
+        assert!(md.contains("Report schema v1"));
+    }
+
+    #[test]
+    fn render_markdown_flags_unexpected_failures() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        report.record_outcome(DispatchOutcome::UnexpectedFailure, None, None);
+        report.record_failure(
+            "abc123".into(),
+            "Custom(0xdeadbeef)".into(),
+            "Program log: oops".into(),
+        );
+        report.finish();
+        let md = report.render_markdown();
+        assert!(md.contains("unexpected failures"));
+        assert!(md.contains("abc123"));
+        assert!(md.contains("Custom(0xdeadbeef)"));
+    }
+
+    #[test]
+    fn render_markdown_clean_run_shows_soundness_intact() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        report.record_outcome(DispatchOutcome::AcceptedValid, None, None);
+        report.finish();
+        let md = report.render_markdown();
+        assert!(md.contains("Soundness boundary intact"));
+    }
+
+    #[test]
+    fn render_markdown_includes_drift_section_when_alerts_present() {
+        let mut report = SoakReport::new("rpc".into(), "prog".into());
+        report.record_drift_alert("groth16_bn254".into(), 100_000, 83_574);
+        report.finish();
+        let md = report.render_markdown();
+        assert!(md.contains("## CU drift alerts"));
+        assert!(md.contains("groth16_bn254"));
+        assert!(md.contains("100000"));
+        assert!(md.contains("83574"));
+    }
+
+    #[test]
+    fn unix_to_ymdhms_known_epoch() {
+        // 2026-01-01 00:00:00 UTC = 1_767_225_600
+        let (y, m, d, h, mi, s) = unix_to_ymdhms(1_767_225_600);
+        assert_eq!((y, m, d, h, mi, s), (2026, 1, 1, 0, 0, 0));
+    }
+
+    #[test]
+    fn unix_to_ymdhms_leap_year_handling() {
+        // 2024-02-29 00:00:00 UTC = 1_709_164_800
+        // (sanity-checked: 1704067200 + 59*86400 = 1709164800)
+        let (y, m, d, h, mi, s) = unix_to_ymdhms(1_709_164_800);
+        assert_eq!((y, m, d, h, mi, s), (2024, 2, 29, 0, 0, 0));
+    }
+
+    #[test]
+    fn is_leap_year_rules() {
+        assert!(is_leap(2024)); // divisible by 4
+        assert!(!is_leap(2023));
+        assert!(!is_leap(2100)); // divisible by 100 but not 400
+        assert!(is_leap(2000)); // divisible by 400
+    }
+}

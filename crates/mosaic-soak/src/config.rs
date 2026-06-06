@@ -100,3 +100,80 @@ mod duration_seconds {
         Ok(Duration::from_secs(secs))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_JSON: &str = r#"{
+        "rpc_url": "https://api.devnet.solana.com",
+        "program_id": "MosA1cVer1f1er11111111111111111111111111111",
+        "payer_keypair": "/tmp/payer.json",
+        "fixtures_dir": "tests/fixtures",
+        "duration": 86400,
+        "submit_interval": 12,
+        "tampered_ratio": 0.10,
+        "report_path": "docs/devnet-soak/2026-06-06.md",
+        "cu_drift_tolerance": 0.10
+    }"#;
+
+    #[test]
+    fn parses_canonical_json_shape() {
+        let cfg: SoakConfig = serde_json::from_str(SAMPLE_JSON).expect("parse");
+        assert_eq!(cfg.rpc_url, "https://api.devnet.solana.com");
+        assert_eq!(
+            cfg.program_id.to_string(),
+            "MosA1cVer1f1er11111111111111111111111111111"
+        );
+        assert_eq!(cfg.payer_keypair, PathBuf::from("/tmp/payer.json"));
+        assert_eq!(cfg.fixtures_dir, PathBuf::from("tests/fixtures"));
+        assert_eq!(cfg.duration, Duration::from_secs(86_400));
+        assert_eq!(cfg.submit_interval, Duration::from_secs(12));
+        assert!((cfg.tampered_ratio - 0.10).abs() < 1e-9);
+        assert!((cfg.cu_drift_tolerance - 0.10).abs() < 1e-9);
+    }
+
+    #[test]
+    fn roundtrips_through_serde() {
+        let cfg: SoakConfig = serde_json::from_str(SAMPLE_JSON).unwrap();
+        let serialized = serde_json::to_string(&cfg).unwrap();
+        let cfg2: SoakConfig = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(cfg.rpc_url, cfg2.rpc_url);
+        assert_eq!(cfg.program_id, cfg2.program_id);
+        assert_eq!(cfg.duration, cfg2.duration);
+        assert_eq!(cfg.submit_interval, cfg2.submit_interval);
+    }
+
+    #[test]
+    fn rejects_invalid_program_id() {
+        let bad = SAMPLE_JSON.replace(
+            "MosA1cVer1f1er11111111111111111111111111111",
+            "not-a-base58-pubkey",
+        );
+        let result: Result<SoakConfig, _> = serde_json::from_str(&bad);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_reads_real_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mosaic-soak-config-test-{}.json", std::process::id()));
+        std::fs::write(&path, SAMPLE_JSON).unwrap();
+        let cfg = SoakConfig::load(&path).expect("load from disk");
+        assert_eq!(cfg.duration, Duration::from_secs(86_400));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ship_devnet_template_parses() {
+        // The template ship at scripts/soak-config-devnet.json is the
+        // canonical starting point for operators. Verify it stays
+        // parseable after any future edits.
+        //
+        // We allow the `_comment` key in the file because operators
+        // need a place to leave annotations. serde-json silently
+        // ignores unknown keys by default, so this just works.
+        let template = include_str!("../../../scripts/soak-config-devnet.json");
+        let _cfg: SoakConfig = serde_json::from_str(template).expect("template parses");
+    }
+}

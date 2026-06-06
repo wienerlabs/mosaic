@@ -31,6 +31,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -- --config <path>`. Closes part of #67. `docs/devnet-soak/README.md`
   documents the config schema + pass / fail criteria.
 
+- `mosaic-soak` test coverage — 22 unit tests across `config.rs` and
+  `report.rs`. Coverage: JSON config roundtrip, invalid `program_id`
+  rejection, real-file `load()`, shipped-template parseability,
+  `CuStats::from_samples` with empty / single / unsorted / boundary
+  inputs, pinned-baseline lookups, outcome counter increment +
+  sample bucket cap at `MAX_SAMPLES_PER_DISPATCH`, unexpected-failure
+  cap at `MAX_UNEXPECTED_FAILURES`, drift-alert percentage
+  computation (positive + negative magnitudes), full markdown render
+  with all expected sections + soundness-intact wording when clean +
+  failure flagging when not, leap-year date handling. Runs in 10 ms.
+
+- Operator-facing soak config templates at
+  `scripts/soak-config-devnet.json` (24 h pre-mainnet gate, 12 s
+  submit interval, 10 % tampered, 10 % drift tolerance) and
+  `scripts/soak-config-shortrun.json` (10 min smoke, 6 s submit, 20 %
+  tampered, 15 % tolerance). Both ship with a `_comment` field that
+  serde-ignores cleanly; test `ship_devnet_template_parses` keeps the
+  canonical template serde-loadable across edits.
+
+- `docs/rollback-playbook.md` — operational runbook closing issue
+  #69. Severity classification (P0 soundness break / P1 liveness
+  break / P2 perf regression / P3 docs-supply-chain); detection-source
+  trust order; per-channel communication tree with embargo cadence;
+  decision tree gating patch vs freeze; full patch-path runbook tied
+  to `scripts/deploy-mainnet.sh`'s 9-gate flow; freeze path including
+  Squads V4 multi-sig invocation; forward-fix migration plan after a
+  freeze; postmortem template at `docs/incidents/`; pre-coordinated
+  PAUSE / FREEZE / RESOLVED public message templates; T-1 / T-2 /
+  T-3 table-top exercise schedule mandatory before mainnet. 11
+  sections, audit-firm-review-ready. Closes #69.
+
 - 5 new `bpf-bench` TARGETS for the compressed dispatch arm
   (`groth16_compressed_mul_circuit_1pi`,
   `plonk_compressed_mul_circuit_1pi`,
