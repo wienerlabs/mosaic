@@ -3287,6 +3287,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mosaic-soak"
+version = "0.9.16-multi-system-demo"
+dependencies = [
+ "anyhow",
+ "borsh 1.6.1",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-client",
+ "solana-sdk",
+ "solana-transaction-status-client-types",
+ "tokio",
+]
+
+[[package]]
 name = "mosaic-stark"
 version = "0.9.16-multi-system-demo"
 dependencies = [

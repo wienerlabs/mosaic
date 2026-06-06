@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exercised across all four. Reproducibility:
   `BPF_OUT_DIR=target/deploy cargo test -p mosaic-program --test verify_proof_sbf`.
 
+- New workspace crate `mosaic-soak` — devnet/testnet soak runner that
+  submits `VerifyProof` transactions at a controlled rate, captures
+  per-tx CU + outcome, alerts on CU drift > tolerance vs pinned
+  baselines, and writes a markdown report to a configured path.
+  Mixed valid + tampered traffic; tampered txs must reject with one
+  of `PairingCheckFailed` / `PointNotOnCurve` /
+  `AltBn128SyscallFailed` — anything else is logged as
+  `unexpected_failure` and fails the soak. Workspace member count
+  15 → 16. Binary: `cargo run --release -p mosaic-soak --bin soak
+  -- --config <path>`. Closes part of #67. `docs/devnet-soak/README.md`
+  documents the config schema + pass / fail criteria.
+
 - 5 new `bpf-bench` TARGETS for the compressed dispatch arm
   (`groth16_compressed_mul_circuit_1pi`,
   `plonk_compressed_mul_circuit_1pi`,

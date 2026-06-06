@@ -1,0 +1,38 @@
+[package]
+name = "mosaic-soak"
+description = "Devnet/testnet soak-test harness for mosaic-program. Submits VerifyProof transactions in a controlled loop and writes a markdown report. Closes part of issue #67."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+# RPC client for devnet/testnet submission.
+solana-sdk = { workspace = true }
+solana-client = { workspace = true }
+# Direct dep — used to set the encoding when fetching tx details.
+# The version is unified with what solana-client pulls in.
+solana-transaction-status-client-types = "2.3"
+borsh = { workspace = true, features = ["std"] }
+
+# Error handling + async runtime + serialization.
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["std"] }
+hex = { workspace = true, features = ["std"] }
+
+[[bin]]
+name = "soak"
+path = "src/bin/soak.rs"
+
+[lints]
+workspace = true
