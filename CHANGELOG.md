@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- `docs/lint-policy.md` completed as a true audit artifact (#62). Added
+  a **Rust compiler lints** section leading with `unsafe_code = "forbid"`
+  (zero `unsafe` in the tree, reinforced by `#![forbid(unsafe_code)]` in
+  all 16 library crate roots so it survives crate extraction) plus the
+  other `[workspace.lints.rust]` entries, and a complete **suppression
+  registry** cataloguing all 23 `#[allow]` sites across the 16 library
+  crates + 3 host binaries — each with file:line, scope, and
+  justification. Establishes the auditor invariant that no suppression
+  touches `correctness`/`suspicious`/`unsafe_code`; every entry is a
+  compile-time assertion, an ABI-shaped signature, an external-format
+  field name, or host-tooling stdout. Closes #62.
+
 - CI now enforces the on-chain SBF path end-to-end (#88 item 1). The
   `test-sbf` job runs both `verify_proof_sbf` (17 tests) AND the new
   `cross_validator_determinism` suite (4 tests) against a freshly built
