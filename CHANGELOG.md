@@ -34,12 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the persona table, the 5 assertions, the run instructions, and the
   sBPF-version-must-match-the-VM toolchain note.
 
-- Discovered + filed #88 — SBF toolchain sBPF version skew
-  (`solana-sbpf 0.11.1` in `solana-program-test 2.3.13` vs v1.54
-  platform-tools bytecode) plus `constant_time_eq 0.4.2` edition2024 vs
-  cargo 1.84 catch-22, which currently keeps the on-chain SBF tests in
-  skip-only mode in CI. The determinism + compressed-path SBF tests are
-  written + correct; #88 is the gate to running them green in CI.
+- Discovered + fixed the primary half of #88 — borsh pinned 1.6.1 →
+  1.5.7. borsh 1.6.x's `vec_from_reader` (`de/mod.rs:164`) panics on
+  the SBF runtime, so the on-chain program died at ~1 900 CU before any
+  verification regardless of platform-tools version. With borsh 1.5.7 +
+  platform-tools v1.52 (cargo new enough to parse the tree's
+  edition2024 manifests, sBPF matched to the `solana-program-test`
+  0.11.1 VM), **all 17 `verify_proof_sbf` tests and all 4
+  cross-validator determinism tests pass with real on-chain
+  execution**. The on-chain SBF evidence went from skip-only / red to
+  fully green. Residual `blake3 1.8.4` / RustCrypto-0.11 drift +
+  CI wiring tracked in #88.
+
+- Fixed 2 pre-existing `verify_proof_sbf` test-expectation bugs
+  surfaced once the borsh fix let the assertions actually run: ProtoStar
+  (0x08) emits its own `protostar_folding` dispatch slug (not
+  `nova_folding`) even though it shares the Nova verifier; and
+  `OnChainError::UnsupportedOperation` is `0x0012`, not the `0x0018` the
+  test had hardcoded. The program behaviour was correct in both cases;
+  only the test constants were stale.
 
 - 4 new SBF integration tests for `VerifyCompressedProof` (instruction
   `0x03`) — one happy-path each for PLONK, HyperPlonk, Halo2, and Nova.

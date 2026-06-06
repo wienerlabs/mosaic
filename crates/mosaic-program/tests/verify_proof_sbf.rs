@@ -800,10 +800,12 @@ async fn sbf_dispatches_protostar_via_nova_verifier() {
         result,
         logs.join("\n"),
     );
-    // Dispatch slug is `nova_folding` because the verifier is shared;
-    // the discriminant log line is emitted by `ProofSystemId::slug()`
-    // for the resolved arm.
-    assert_dispatch_log(&logs, "nova_folding");
+    // ProtoStar (0x08) routes through the shared Nova verifier but
+    // keeps its own dispatch slug — `ProofSystemId::slug()` emits
+    // `protostar_folding` for the 0x08 discriminant. This is the
+    // arm-split the sibling test below guards against: the verifier is
+    // shared, the attribution log is not.
+    assert_dispatch_log(&logs, "protostar_folding");
 }
 
 /// Nova scaffold-acceptance fixture under the canonical Nova
@@ -895,8 +897,8 @@ struct VerifyCompressedProofData {
     public_inputs: Vec<u8>,
 }
 
-/// `OnChainError::UnsupportedOperation = 0x0018` — see `mosaic_core::error`.
-const ERR_UNSUPPORTED_OPERATION: u32 = 0x0018;
+/// `OnChainError::UnsupportedOperation = 0x0012` — see `mosaic_core::error`.
+const ERR_UNSUPPORTED_OPERATION: u32 = 0x0012;
 
 fn build_verify_compressed_ix(
     proof_system_id: u8,
@@ -1029,8 +1031,8 @@ async fn sbf_verify_compressed_rejects_fri_stark() {
     let s = format!("{err:?}");
     assert!(
         s.contains(&format!("Custom({ERR_UNSUPPORTED_OPERATION})"))
-            || s.contains("Custom(24)")
-            || s.contains("0x18"),
+            || s.contains("Custom(18)")
+            || s.contains("0x12"),
         "expected UnsupportedOperation (0x{ERR_UNSUPPORTED_OPERATION:04x}), got: {s}",
     );
 }

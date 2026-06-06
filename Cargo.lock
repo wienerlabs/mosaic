@@ -809,12 +809,11 @@ dependencies = [
 
 [[package]]
 name = "borsh"
-version = "1.6.1"
+version = "1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfd1e3f8955a5d7de9fab72fc8373fade9fb8a703968cb200ae3dc6cf08e185a"
+checksum = "ad8646f98db542e39fc66e68a20b2144f6a732636df7c2354e74645faaa433ce"
 dependencies = [
- "borsh-derive 1.6.1",
- "bytes",
+ "borsh-derive 1.5.7",
  "cfg_aliases",
 ]
 
@@ -833,9 +832,9 @@ dependencies = [
 
 [[package]]
 name = "borsh-derive"
-version = "1.6.1"
+version = "1.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfcfdc083699101d5a7965e49925975f2f55060f94f9a05e7187be95d530ca59"
+checksum = "fdd1d3c0c2f5833f22386f252fe8ed005c7f59fdcddeef025c01b4c3b9fd9ac3"
 dependencies = [
  "once_cell",
  "proc-macro-crate 3.5.0",
@@ -3045,7 +3044,7 @@ dependencies = [
  "anyhow",
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "criterion",
  "mosaic-core",
  "mosaic-groth16",
@@ -3065,7 +3064,7 @@ dependencies = [
 name = "mosaic-chunked"
 version = "0.9.16-multi-system-demo"
 dependencies = [
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "bytemuck",
  "mosaic-core",
  "proptest",
@@ -3081,7 +3080,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "arrayvec",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "light-poseidon 0.3.0",
  "proptest",
  "sha2 0.10.9",
@@ -3161,7 +3160,7 @@ name = "mosaic-groth16"
 version = "0.9.16-multi-system-demo"
 dependencies = [
  "arrayvec",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "mosaic-core",
  "mosaic-zk-primitives",
  "proptest",
@@ -3224,7 +3223,7 @@ dependencies = [
 name = "mosaic-program"
 version = "0.9.16-multi-system-demo"
 dependencies = [
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "mosaic-chunked",
  "mosaic-core",
  "mosaic-groth16",
@@ -3246,7 +3245,7 @@ name = "mosaic-sdk"
 version = "0.9.16-multi-system-demo"
 dependencies = [
  "anyhow",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "hex",
  "mosaic-chunked",
  "mosaic-core",
@@ -3291,7 +3290,7 @@ name = "mosaic-soak"
 version = "0.9.16-multi-system-demo"
 dependencies = [
  "anyhow",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "hex",
  "serde",
  "serde_json",
@@ -4865,7 +4864,7 @@ version = "2.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68548570c38a021c724b5aa0112f45a54bdf7ff1b041a042848e034a95a96994"
 dependencies = [
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "futures",
  "solana-account",
  "solana-banks-interface",
@@ -4994,7 +4993,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "718333bcd0a1a7aed6655aa66bef8d7fb047944922b2d3a18f49cbc13e73d004"
 dependencies = [
  "borsh 0.10.4",
- "borsh 1.6.1",
+ "borsh 1.5.7",
 ]
 
 [[package]]
@@ -5241,7 +5240,7 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8432d2c4c22d0499aa06d62e4f7e333f81777b3d7c96050ae9e5cb71a8c3aee4"
 dependencies = [
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "serde",
  "serde_derive",
  "solana-instruction",
@@ -5572,7 +5571,7 @@ version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5b96e9f0300fa287b545613f007dfe20043d7812bee255f418c1eb649c93b63"
 dependencies = [
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "bytemuck",
  "bytemuck_derive",
  "five8",
@@ -5601,7 +5600,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bab5682934bd1f65f8d2c16f21cb532526fcc1a09f796e2cacdb091eee5774ad"
 dependencies = [
  "bincode",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "getrandom 0.2.17",
  "js-sys",
  "num-traits",
@@ -6021,7 +6020,7 @@ dependencies = [
  "bincode",
  "blake3",
  "borsh 0.10.4",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "bs58",
  "bytemuck",
  "console_error_panic_hook",
@@ -6110,7 +6109,7 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ee2e0217d642e2ea4bee237f37bd61bb02aec60da3647c48ff88f6556ade775"
 dependencies = [
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "num-traits",
  "serde",
  "serde_derive",
@@ -6257,7 +6256,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b62adb9c3261a052ca1f999398c388f1daf558a1b492f60a6d9e64857db4ff1"
 dependencies = [
  "borsh 0.10.4",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "bytemuck",
  "bytemuck_derive",
  "curve25519-dalek 4.1.3",
@@ -6817,7 +6816,7 @@ version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baa3120b6cdaa270f39444f5093a90a7b03d296d362878f7a6991d6de3bbe496"
 dependencies = [
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "libsecp256k1",
  "solana-define-syscall",
  "thiserror 2.0.18",
@@ -7014,7 +7013,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5269e89fde216b4d7e1d1739cf5303f8398a1ff372a81232abbee80e554a838c"
 dependencies = [
  "borsh 0.10.4",
- "borsh 1.6.1",
+ "borsh 1.5.7",
  "num-traits",
  "serde",
  "serde_derive",

@@ -98,15 +98,31 @@ and enforces:
    failure, does not perturb the *cost* of the success path.
 
 The test prints the full matrix to stderr (`--nocapture`), so the test
-output itself is the audit evidence:
+output itself is the audit evidence. Captured 2026-06-06 against a real
+SBF build (`cargo build-sbf --tools-version v1.52`, borsh 1.5.7) on the
+`solana-program-test` VM:
 
 ```
 === cross-validator determinism matrix ===
 persona                       groth16_valid    groth16_tampered  plonk_valid
-modern_mainnet                accept/<cu>cu    reject/<cu>cu     accept/<cu>cu
-no_simd_0129_error_codes      accept/<cu>cu    reject/<cu>cu     accept/<cu>cu
-...
+modern_mainnet                accept/84027cu   reject/83855cu    accept/973388cu
+no_simd_0129_error_codes      accept/84027cu   reject/83855cu    accept/973388cu
+no_simd_0222_mul_len          accept/84027cu   reject/83855cu    accept/973388cu
+no_compression_syscall        accept/84027cu   reject/83855cu    accept/973388cu
+legacy_pre_simd_0129_0222     accept/84027cu   reject/83855cu    accept/973388cu
+ancient_no_base_syscall       reject/3310cu    reject/3310cu     reject/577289cu
+cross-validator determinism OK: 3 workloads × 5 base personas, all
+results + CU identical; ancient persona degraded gracefully.
 ```
+
+Read the matrix top to bottom: every base-syscall persona reports the
+**byte-identical** verdict and CU for each workload. groth16 verifies
+at 84 027 CU and rejects a tampered proof at 83 855 CU on every
+persona; PLONK verifies at 973 388 CU on every persona. The
+`ancient_no_base_syscall` row rejects all three (3 310 CU for the
+Groth16 attempts where the syscall is reached and fails, 577 289 for
+PLONK) — graceful degradation, never a silent accept. This is the
+determinism claim, demonstrated rather than asserted.
 
 ## A host-side guard that always runs
 
@@ -136,46 +152,41 @@ only the host guard runs — identical contract to
 `verify_proof_sbf.rs`, so `cargo test --workspace` stays green on any
 machine.
 
-## Toolchain note — the SBF dependency tree has drifted; tracked in #88
+## Toolchain note — reproducing the on-chain build (resolved; see #88)
 
-> This is the single operational gotcha for reproducing the on-chain
-> evidence. Full diagnosis + the coordinated fix live in issue
+> Full diagnosis + the remaining CI-wiring work live in issue
 > [#88](https://github.com/wienerlabs/mosaic/issues/88).
 
-Reproducing the on-chain matrix currently requires the dependency-tree
-fix from #88. The short version: the lockfile has drifted forward into
-a state the `solana-program-test 2.3.13` VM (embedding
-`solana-sbpf 0.11.1`) cannot run. Two compounding causes, both rooted
-in `blake3 1.8.4` (pulled at runtime via
-`solana-program -> solana-blake3-hasher -> blake3`, floored at
-`^1.8.2` by `solana-accounts-db` from the program-test dev-dep):
+The matrix above is reproduced with two pins:
 
-1. **Manifest parse.** The sBPF-0.11-matched older platform-tools ship
-   cargo 1.84, which cannot parse the `edition2024` manifests that
-   `constant_time_eq 0.4.2` and the `digest 0.11` line declare. Newer
-   tools (v1.52 / v1.54) parse them fine, so this alone is surmountable.
+1. **borsh pinned to 1.5.7.** borsh 1.6.x's `vec_from_reader`
+   (`src/de/mod.rs:164`) panics on the SBF runtime, so the program died
+   at ~1 900 CU before any verification regardless of platform-tools
+   version. Pinning borsh back to 1.5.7 (within the workspace's
+   declared `borsh = "1.5.1"` range) fixes it. With the pin, all 17
+   `verify_proof_sbf` tests and all 4 determinism tests pass.
 
-2. **Runtime panic.** Even with a successfully built `.so`, the program
-   panics at `borsh 1.6.1`'s `vec_from_reader` (`src/de/mod.rs:164`) on
-   every input — the program consumes only ~1 900 CU, far below any
-   real verification. This reproduces under both v1.52 and v1.54 tools,
-   so it is a `borsh 1.6.1` / SBF-runtime interaction, not an
-   sBPF-version artifact. Confirmed not an encoding bug: the host-only
-   `host_borsh_roundtrip_sanity` test decodes the identical instruction
-   bytes correctly. `crypto-common 0.2.1` additionally emits SBF
-   stack-offset errors for its `SerializableState` impls.
+2. **Platform-tools v1.52 for the build.** `cargo build-sbf
+   --tools-version v1.52` ships a cargo new enough to parse the
+   `edition2024` manifests in the tree (`constant_time_eq 0.4.2`, the
+   `digest 0.11` line — both dragged in by `blake3 1.8.4`) while
+   emitting sBPF the `solana-program-test 2.3.13` VM (sBPF 0.11.1)
+   executes correctly.
 
-The April-2026 `.so` ran these dispatch arms fine; the regression came
-from the lock drifting forward (blake3 1.5 -> 1.8, borsh 1.5 -> 1.6,
-the RustCrypto 0.10 -> 0.11 / edition2024 wave). #88 tracks the
-coordinated pin-back + a CI job that actually executes the on-chain
-tests so it cannot silently regress to skip-only again.
+`crypto-common 0.2.1` still emits SBF stack-offset *warnings* for its
+`[u128; N] SerializableState` impls; that code is unreachable in the
+verifier (we never hash with blake3's digest trait), the build still
+finishes, and the program runs correctly — confirmed by the green
+matrix above. #88 tracks tidying the residual `blake3 1.8.4` /
+RustCrypto-0.11 drift and wiring `SBF_OUT_DIR=... cargo test
+-p mosaic-program` into CI so the on-chain path runs on every push
+rather than skip-only.
 
-Until #88 lands, the harness runs in skip mode (host guard only) and
-the on-chain matrix is reproduced manually with the pinned tree. **This
-is a build/CI-infrastructure gap, not a determinism gap**: the
-verifier's determinism properties are a function of its source, not of
-which dependency versions or machine run the test.
+Without `SBF_OUT_DIR` set, the three on-chain tests skip cleanly and
+only the host guard runs, so `cargo test --workspace` stays green on
+any machine. **Determinism is a property of the verifier source, not of
+the toolchain**: these pins are about *running the demonstration*, not
+about *making the verifier deterministic*.
 
 ## Relationship to other evidence
 
@@ -192,9 +203,11 @@ which dependency versions or machine run the test.
 
 ## Status
 
-- Harness: shipped, compiles, host guard green, on-chain tests skip
-  cleanly without a matched toolchain.
-- On-chain matrix: reproducible with a matched toolchain; CI execution
-  gated on the SBF-toolchain pin.
+- Harness: shipped, compiles, host guard green.
+- On-chain matrix: **green** — 4/4 determinism tests + 17/17
+  `verify_proof_sbf` tests pass against a real SBF build (borsh 1.5.7,
+  platform-tools v1.52). Matrix captured above.
+- CI execution of the on-chain path on every push: gated on the #88
+  wiring (matched-toolchain build + `SBF_OUT_DIR` in the workflow).
 - Testnet cross-validator cross-check (the live-cluster half of #70):
   open, runs after devnet deploy (#68) lands.

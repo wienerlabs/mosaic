@@ -403,9 +403,16 @@ async fn intra_persona_repeat_determinism() {
     let (banks, payer, blockhash) = boot(&persona).await;
 
     let mut seen: Vec<Observation> = Vec::with_capacity(REPEATS);
-    for _ in 0..REPEATS {
+    for i in 0..REPEATS {
         let obs = observe(
-            &banks, &payer, blockhash, w.cu_limit, w.psid, &w.vk, &w.proof, &w.pi,
+            &banks,
+            &payer,
+            blockhash,
+            w.cu_limit + i as u32,
+            w.psid,
+            &w.vk,
+            &w.proof,
+            &w.pi,
         )
         .await;
         seen.push(obs);
