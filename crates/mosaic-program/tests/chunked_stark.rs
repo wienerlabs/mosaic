@@ -349,6 +349,57 @@ async fn chunked_stark_verifies_across_transactions() {
 }
 
 #[tokio::test]
+async fn chunked_stark_catches_tampered_proof() {
+    if !sbf_ready() {
+        return;
+    }
+    // Corrupt the trace commitment so every query's Merkle check fails.
+    // The setup gate (shape + PoW + OOD) still passes -- Merkle is
+    // per-query -- so BeginStarkVerify succeeds and the failure surfaces
+    // in the first StarkVerifyStep, exactly as it would single-shot.
+    let (vk, mut proof) = stark_scaffold();
+    use mosaic_stark::canonical::sizes::FIXED_HEADER_LEN;
+    proof[FIXED_HEADER_LEN] ^= 0x01;
+
+    let (banks, payer, vk_pubkey, blockhash) = setup_with_vk(&vk).await;
+    let session_id = [0x7C_u8; 32];
+    let total_len = proof.len() as u32;
+    let h_0 = compute_h0(&session_id, total_len, PSID_FRI_STARK);
+    let (session_pda, _bump) = derive_session_pda(&session_id, &payer.pubkey());
+
+    let init = init_ix(&payer.pubkey(), &session_pda, &session_id, total_len, &h_0);
+    let (appends, final_hash) = append_all(&payer.pubkey(), &session_pda, &proof, &h_0);
+    let begin = begin_ix(&payer.pubkey(), &session_pda, &vk_pubkey, &final_hash);
+
+    let mut ixs = vec![init];
+    ixs.extend(appends);
+    ixs.push(begin);
+    let tx1 = Transaction::new_signed_with_payer(&ixs, Some(&payer.pubkey()), &[&payer], blockhash);
+    banks.process_transaction(tx1).await.expect("tx1 begin should pass (setup gate only)");
+
+    // The step over the tampered queries must reject.
+    let tx2 = Transaction::new_signed_with_payer(
+        &[step_ix(&payer.pubkey(), &session_pda, &vk_pubkey, 4)],
+        Some(&payer.pubkey()),
+        &[&payer],
+        blockhash,
+    );
+    let err = banks.process_transaction(tx2).await.unwrap_err();
+    let s = format!("{err:?}");
+    // OnChainError::VerificationFailed = 0x002F = Custom(47).
+    assert!(
+        s.contains("Custom(47)") || s.contains("0x2F") || s.contains("0x2f"),
+        "tampered chunked-STARK step should fail VerificationFailed, got: {s}",
+    );
+    // The session must NOT be closed (a failed verification is not a
+    // completion); it stays open for inspection.
+    assert!(
+        banks.get_account(session_pda).await.unwrap().is_some(),
+        "a failed step must leave the session open, not close it",
+    );
+}
+
+#[tokio::test]
 async fn stark_step_before_begin_is_rejected() {
     if !sbf_ready() {
         return;
