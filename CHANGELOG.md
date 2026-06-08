@@ -33,7 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (0x15) and `StarkVerifyStep` (0x16), that finalize the session, run
     the verifier setup / a query-range batch, drive the session cursor,
     and close the session (refunding rent) when the final query passes.
-    Compiles to SBF; the 25 existing SBF integration tests still pass.
+  - End-to-end SBF integration test (`tests/chunked_stark.rs`):
+    uploads a valid 4-query STARK proof, then verifies it across THREE
+    separate transactions (init+upload+begin, then step 0..2, then
+    step 2..4). The session cursor persists across transactions
+    (0 -> 2 -> 4) and completion closes the PDA -- proving the resumable
+    verifier + checkpoint cursor compose correctly across transaction
+    boundaries on the real VM, which is the entire point of chunked
+    execution. A second test asserts a step before begin is rejected
+    with `StarkVerifyNotStarted`. Both pass; the 25 pre-existing SBF
+    tests still pass (27 total SBF integration tests now).
 
 - Security disclosure contact corrected repo-wide from
   `security@wienerlabs.com` to the actually-monitored
