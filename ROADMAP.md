@@ -38,7 +38,7 @@ production-real, not lab-demo-real.
 | HyperPlonk: Espresso reference fixture + integration | [#73](https://github.com/wienerlabs/mosaic/issues/73) |
 | Halo2: full two-point batched opening | [#74](https://github.com/wienerlabs/mosaic/issues/74) |
 | Nova: Spartan-wrapped multi-opening | [#75](https://github.com/wienerlabs/mosaic/issues/75) |
-| FRI-STARK: Plonky3 reference + chunked execution (T-12) | [#76](https://github.com/wienerlabs/mosaic/issues/76) |
+| FRI-STARK: chunked execution **done** (resumable verifier + on-chain driver + SDK + docs, T-12 mitigated); Plonky3 reference fixture pending | [#76](https://github.com/wienerlabs/mosaic/issues/76) |
 | HyperPlonk: Zeromorph partial reduction | [#77](https://github.com/wienerlabs/mosaic/issues/77) |
 | `VerifyCompressedProof` SBF CU baselines in `bpf-bench` | [#84](https://github.com/wienerlabs/mosaic/issues/84) |
 | Bug bounty program live (post-audit) | [#79](https://github.com/wienerlabs/mosaic/issues/79) |
