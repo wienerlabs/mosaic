@@ -550,6 +550,42 @@ async fn sbf_verify_proof_succeeds_on_valid_groth16() {
     assert_dispatch_log(&logs, "groth16_bn254");
 }
 
+/// G2 subgroup-check parity (issue #35), on-chain half. Splice a G2 point
+/// that is on the curve but outside the prime-order subgroup into the
+/// proof's `B` element (bytes 64..192 of the canonical A||B||C layout) and
+/// assert the program rejects it. The host backend rejects the same class
+/// at decode time (`mosaic_zk_primitives::msm::tests::
+/// pairing_rejects_wrong_subgroup_g2`); this asserts the on-chain
+/// `alt_bn128_pairing` path does not accept it either. The two together
+/// are the subgroup-check parity claim.
+#[tokio::test]
+async fn sbf_rejects_wrong_subgroup_g2_in_proof_b() {
+    if !sbf_ready() {
+        return;
+    }
+    let (banks, payer, blockhash) = setup().await;
+
+    let vk = fixture("groth16", "vk.bin");
+    let mut proof = fixture("groth16", "proof.bin");
+    let pi = fixture("groth16", "public_inputs.bin");
+
+    // Canonical Groth16 proof = A(G1, 64) || B(G2, 128) || C(G1, 64).
+    assert_eq!(proof.len(), 256, "expected uncompressed 256-byte proof");
+    let wrong_b = mosaic_zk_primitives::g1_consts::wrong_subgroup_g2_canonical();
+    proof[64..192].copy_from_slice(&wrong_b);
+
+    let (result, logs) = submit(
+        &banks, &payer, blockhash, 300_000, PSID_GROTH16, &vk, &proof, &pi,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "a proof whose B is outside the prime-order subgroup must be \
+         rejected on chain, but it verified:\nlogs:\n{}",
+        logs.join("\n"),
+    );
+}
+
 /// Tampered Groth16 proof: flip one bit in `proof.a.x`, expect either
 /// `PairingCheckFailed` (0x20), `AltBn128SyscallFailed` (0x40), or
 /// `PointNotOnCurve` (0x06) — all are valid rejections depending on

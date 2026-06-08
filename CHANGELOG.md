@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- BN254 G2 subgroup-check parity (#35), the last self-contained security
+  item before audit. Established + test-backed that Mosaic's host backend
+  and the on-chain `alt_bn128` pairing reject the same adversarial G2
+  classes (off-curve + on-curve-but-wrong-subgroup, the 2022 BN254
+  subgroup bug class). Host rejects at decode time with `PointNotOnCurve`
+  (`0x06`); the on-chain syscall rejects the wrong-subgroup point at the
+  syscall boundary with `AltBn128SyscallFailed` (`0x40`) -- different
+  codes, identical reject decision (neither pairs over a non-subgroup
+  point). New reusable fixture
+  `mosaic_zk_primitives::g1_consts::wrong_subgroup_g2_canonical()` +
+  three tests: `pairing_rejects_off_curve_g2`,
+  `pairing_rejects_wrong_subgroup_g2` (host), and
+  `sbf_rejects_wrong_subgroup_g2_in_proof_b` (on-chain VM, splices the
+  point into a real proof's B element). Report:
+  `docs/subgroup-check-parity.md`; AUDIT.md entry added.
+
 - Mainnet deploy toolchain (#68). `scripts/grind-program-id.sh` grinds a
   vanity PROGRAM_ID (`solana-keygen grind` wrapper, base58 validation,
   slowness warnings, next-steps runbook; validated end-to-end).

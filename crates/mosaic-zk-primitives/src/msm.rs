@@ -695,6 +695,86 @@ mod tests {
         assert!(matches!(r, Err(OnChainError::InvalidPointEncoding)));
     }
 
+    // ---- G2 subgroup-check parity (issue #35) ----
+    //
+    // The 2022 BN254 subgroup bug class (geth EIP-196/197, early Solana)
+    // came from accepting G2 points that are on the curve but not in the
+    // prime-order subgroup. A pairing over such a point can let a forged
+    // proof verify. These tests assert the backend rejects the adversarial
+    // G2 classes outright, before any pairing arithmetic.
+
+    /// Helper: a G1·G2 pairing input (192 B) with the given raw G2 bytes.
+    fn pairing_input_with_g2(g2: &[u8; 128]) -> alloc::vec::Vec<u8> {
+        let g1 = crate::g1_consts::g1_generator_bytes();
+        let mut input = alloc::vec::Vec::with_capacity(192);
+        input.extend_from_slice(&g1);
+        input.extend_from_slice(g2);
+        input
+    }
+
+    #[test]
+    fn pairing_rejects_off_curve_g2() {
+        let backend = HostBackend::new();
+        let mut g2 = crate::g1_consts::g2_generator_bytes();
+        // Perturb one byte of the y coordinate so the point leaves the curve.
+        g2[100] ^= 0x01;
+        let input = pairing_input_with_g2(&g2);
+        let r = backend.alt_bn128_group_op(
+            AltBn128Op::Pairing,
+            InputEndianness::BigEndian,
+            &input,
+        );
+        assert!(
+            matches!(
+                r,
+                Err(OnChainError::PointNotOnCurve) | Err(OnChainError::InvalidFieldEncoding)
+            ),
+            "off-curve G2 must be rejected, got {r:?}",
+        );
+    }
+
+    #[test]
+    fn pairing_rejects_wrong_subgroup_g2() {
+        use ark_bn254::{Fq2, G2Affine};
+        use ark_ec::AffineRepr;
+
+        // Find an on-curve G2 point that is NOT in the prime-order
+        // subgroup. BN254's G2 cofactor is large, so a raw point from a
+        // candidate x (no cofactor clearing) is almost always outside the
+        // subgroup; we assert both properties to be sure the fixture is
+        // genuinely adversarial.
+        let mut adversarial = None;
+        for c in 1u64..512 {
+            let x = Fq2::from(c);
+            if let Some(p) = G2Affine::get_point_from_x_unchecked(x, true) {
+                if p.is_on_curve() && !p.is_in_correct_subgroup_assuming_on_curve() {
+                    adversarial = Some(p);
+                    break;
+                }
+            }
+        }
+        let p = adversarial.expect("an on-curve, non-subgroup G2 point");
+        assert!(p.is_on_curve(), "fixture must be on the curve");
+        assert!(
+            !p.is_in_correct_subgroup_assuming_on_curve(),
+            "fixture must be outside the prime-order subgroup",
+        );
+
+        let g2 = crate::g1_consts::g2_affine_to_canonical(&p);
+        let input = pairing_input_with_g2(&g2);
+        let backend = HostBackend::new();
+        let r = backend.alt_bn128_group_op(
+            AltBn128Op::Pairing,
+            InputEndianness::BigEndian,
+            &input,
+        );
+        assert!(
+            matches!(r, Err(OnChainError::PointNotOnCurve)),
+            "on-curve but wrong-subgroup G2 must be rejected by the subgroup \
+             check, got {r:?}",
+        );
+    }
+
     // ---- verify_n_pair_pairing (session 66) ----
 
     #[test]

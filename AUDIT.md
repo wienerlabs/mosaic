@@ -10,6 +10,16 @@ audit-coverage surface listed below.
 
 ---
 
+## 2026-06-08 - G2 subgroup-check parity (issue #35)
+
+| Field | Value |
+|---|---|
+| Scope | Verify that Mosaic's host backend and the on-chain `alt_bn128` pairing reject the same class of malformed G2 inputs (off-curve + on-curve-but-wrong-subgroup), the 2022 BN254 subgroup bug class. |
+| Result | **Parity holds.** Host rejects at decode time with `PointNotOnCurve` (`0x06`); the on-chain syscall rejects the wrong-subgroup point at the syscall boundary with `AltBn128SyscallFailed` (`0x40`). Different codes, identical reject decision: neither backend computes a pairing over a non-subgroup G2. |
+| Findings | No divergence. The on-chain rejection is at the syscall level (point refused), not a pairing-result mismatch, matching Light Protocol's `groth16-solana` posture. |
+| Evidence | `pairing_rejects_off_curve_g2` + `pairing_rejects_wrong_subgroup_g2` (host, `mosaic-zk-primitives`); `sbf_rejects_wrong_subgroup_g2_in_proof_b` (on-chain VM, `verify_proof_sbf.rs`). Reusable fixture `wrong_subgroup_g2_canonical()`. |
+| Report | [`docs/subgroup-check-parity.md`](docs/subgroup-check-parity.md) |
+
 ## 2026-05-12 — v0.9.16-multi-system-demo release (sessions 117–119)
 
 | Field | Value |

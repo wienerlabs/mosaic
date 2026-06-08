@@ -54,6 +54,34 @@ pub fn g2_affine_to_canonical(p: &G2Affine) -> [u8; 128] {
     out
 }
 
+/// **Adversarial test vector (issue #35): G2 subgroup-check parity.**
+///
+/// Canonical 128-byte encoding of a G2 point that is on the curve but
+/// **not** in the prime-order subgroup. The 2022 BN254 subgroup bug
+/// class (geth EIP-197, early Solana) came from pairings accepting such
+/// points, which can let a forged proof verify. Any conformant BN254
+/// pairing MUST reject this fixture; host + on-chain backends (and
+/// downstream integrators) use it to assert that rejection.
+///
+/// Deterministic: derived from the smallest candidate `x` whose
+/// (uncleared) curve point lands outside the subgroup. BN254's G2
+/// cofactor is large, so this terminates in a handful of iterations.
+#[must_use]
+pub fn wrong_subgroup_g2_canonical() -> [u8; 128] {
+    use ark_bn254::Fq2;
+    let mut x_c = 1u64;
+    loop {
+        let x = Fq2::from(x_c);
+        if let Some(p) = G2Affine::get_point_from_x_unchecked(x, true) {
+            if p.is_on_curve() && !p.is_in_correct_subgroup_assuming_on_curve() {
+                return g2_affine_to_canonical(&p);
+            }
+        }
+        x_c += 1;
+        assert!(x_c < 1024, "no non-subgroup G2 point found (unreachable)");
+    }
+}
+
 /// Canonical bytes for G1 generator (1, 2). Computed once per call but
 /// cheap (~30 CU) because arkworks' generator is a const.
 #[must_use]
