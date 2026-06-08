@@ -34,15 +34,14 @@ use crate::canonical::{
     sizes::{FR_LEN, G1_LEN},
     Halo2KzgProof, Halo2KzgVerifyingKey,
 };
-use alloc::vec::Vec;
 use ark_bn254::Fr;
 use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
     msm::{
-        add_g1, commitment_minus_scalar_g1, compute_kzg_opening_lhs, msm_g1, negate_g1,
-        scalar_mul_g1, verify_two_pair_pairing,
+        add_g1, commitment_minus_scalar_g1, compute_kzg_opening_lhs, negate_g1, scalar_mul_g1,
+        verify_two_pair_pairing,
     },
 };
 

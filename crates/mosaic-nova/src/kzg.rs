@@ -34,7 +34,7 @@ use mosaic_core::{syscall::SyscallBackend, OnChainError};
 use mosaic_zk_primitives::{
     field::{fr_from_canonical_bytes, fr_to_canonical_bytes},
     g1_consts::g2_generator_bytes,
-    msm::{compute_kzg_opening_lhs, msm_g1, negate_g1, verify_two_pair_pairing},
+    msm::{compute_kzg_opening_lhs, negate_g1, verify_two_pair_pairing},
 };
 
 /// Scaffold single-commitment KZG opening check for a folded Nova
