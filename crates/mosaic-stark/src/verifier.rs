@@ -803,13 +803,13 @@ mod tests {
         assert!(r.is_ok(), "FRI fold chain with zero openings should pass, got {r:?}");
     }
 
-    /// Builds a valid 4-query depth-zero proof identical in shape to
-    /// `full_pipeline_accepts_fri_fold_chain` but with `num_q = 4`, used
-    /// by the chunked-execution agreement tests below.
-    fn valid_four_query() -> (Vec<u8>, Vec<u8>) {
+    /// Builds a valid depth-zero proof with `n` queries, identical in
+    /// shape to `full_pipeline_accepts_fri_fold_chain`. Used by the
+    /// chunked-execution agreement + property tests below.
+    fn valid_n_query(n: u16) -> (Vec<u8>, Vec<u8>) {
         let mut vk_bytes = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
         vk_bytes[40..48].copy_from_slice(&7u64.to_le_bytes());
-        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 1, 4, 0, 32, 0, 0xAB);
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 1, n, 0, 32, 0, 0xAB);
         let trace_off = sizes::FIXED_HEADER_LEN;
         let constraint_off = trace_off + sizes::DIGEST_LEN;
         for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
@@ -819,6 +819,10 @@ mod tests {
             *byte = 0xAB;
         }
         (vk_bytes, proof)
+    }
+
+    fn valid_four_query() -> (Vec<u8>, Vec<u8>) {
+        valid_n_query(4)
     }
 
     /// Chunked verification (#76): `verify_setup` + a sequence of
@@ -877,6 +881,42 @@ mod tests {
             v.verify_query_range(&vk, &proof, &[], 0, 1).is_err(),
             "first query already authenticates against the tampered root"
         );
+    }
+
+    proptest::proptest! {
+        /// For a valid proof, ANY contiguous partition of the query set
+        /// [0, n) verified in sequence is equivalent to the single-shot
+        /// accept. The `cuts` bitmask decides where the partition breaks.
+        #[test]
+        fn chunked_any_contiguous_partition_equals_single_shot(
+            cuts in proptest::collection::vec(proptest::bool::ANY, 7)
+        ) {
+            let n: u16 = 8;
+            let backend = mosaic_core::syscall::host::HostBackend::new();
+            let v = FriStark::new(&backend);
+            let (vk, proof) = valid_n_query(n);
+
+            proptest::prop_assert!(FriStark::verify(&v, &vk, &proof, &[]).is_ok());
+
+            // Build contiguous ranges from the cut bitmask: a cut after
+            // query i+1 closes the current range there.
+            let mut start: u16 = 0;
+            for (i, &cut) in cuts.iter().enumerate() {
+                if cut {
+                    let end = (i as u16) + 1;
+                    v.verify_query_range(&vk, &proof, &[], start, end)
+                        .map_err(|e| proptest::test_runner::TestCaseError::fail(
+                            alloc::format!("range {start}..{end} failed: {e:?}")
+                        ))?;
+                    start = end;
+                }
+            }
+            // Final range to n.
+            v.verify_query_range(&vk, &proof, &[], start, n)
+                .map_err(|e| proptest::test_runner::TestCaseError::fail(
+                    alloc::format!("final range {start}..{n} failed: {e:?}")
+                ))?;
+        }
     }
 
     /// Session-14c OOD quotient soundness: set constraint_eval in
