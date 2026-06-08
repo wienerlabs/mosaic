@@ -188,6 +188,9 @@ advisory unless they prefer anonymity.
 If a vulnerability potentially affects other Solana ZK projects (Light
 Protocol, Bonsol, ZK Compression, etc.) we will coordinate disclosure with
 the Solana Foundation security team and the respective project maintainers
-under the standard [Solana security disclosure policy][solana-sdp].
+under the standard [Solana security disclosure policy][solana-sdp]. The
+trigger conditions, ecosystem contact tree, embargo timeline, and shared
+advisory format are specified in
+[`docs/coordinated-disclosure.md`](docs/coordinated-disclosure.md).
 
 [solana-sdp]: https://solana.com/docs/security-disclosure

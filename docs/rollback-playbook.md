@@ -93,8 +93,8 @@ to **all** of:
 | Internal incident channel | `#mosaic-incidents` on Slack (private) | Operational coordination |
 | Audit firm (current) | Per `SECURITY.md` audit-firm contact | Embargo + technical review |
 | Solana Foundation security | per `SECURITY.md` § coordinated disclosure | Ecosystem-wide impact assessment |
-| Light Protocol security | (TBD; per #87) | Light's groth16-solana shares syscall surface |
-| Bonsol / Anagram security | (TBD; per #87) | Risc0-in-CIRCOM users; potentially affected if `alt_bn128` is the issue |
+| Light Protocol security | Per `docs/coordinated-disclosure.md` | Light's groth16-solana shares syscall surface |
+| Bonsol / Anagram security | Per `docs/coordinated-disclosure.md` | Risc0-in-CIRCOM users; potentially affected if `alt_bn128` is the issue |
 | Major integrators | Mailing list (TBD; per #82 reference dapp launch) | Pause new integrations notice |
 
 Initial message template:
