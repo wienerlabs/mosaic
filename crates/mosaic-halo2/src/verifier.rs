@@ -77,7 +77,7 @@ use mosaic_core::{
     syscall::SyscallBackend,
     OnChainError,
 };
-use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes};
+use mosaic_zk_primitives::field::{fr_from_canonical_bytes, fr_to_canonical_bytes, root_of_unity_2k};
 use mosaic_zk_primitives::transcript::derive_fr_challenge;
 
 /// Halo2-KZG verifier over BN254 (Privacy Scaling Explorations fork).
@@ -224,7 +224,13 @@ impl<'a, B: SyscallBackend + ?Sized> Halo2KzgBn254<'a, B> {
         //    its paired evaluation now propagates into the batched
         //    pairing → PairingCheckFailed (structurally matches PSE
         //    `halo2_proofs::plonk::verify_proof`).
-        let omega = fr_from_canonical_bytes(&vk.omega_fr)?;
+        let omega = root_of_unity_2k(vk.k)?;
+        if vk.omega_fr.iter().any(|&b| b != 0) {
+            let supplied = fr_from_canonical_bytes(&vk.omega_fr)?;
+            if supplied != omega {
+                return Err(OnChainError::VerifyingKeyProofMismatch);
+            }
+        }
         let xi_omega = challenges.xi * omega;
 
         // Canonical commit/eval ordering at ξ (matches the bundle

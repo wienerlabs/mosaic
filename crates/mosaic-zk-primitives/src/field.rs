@@ -132,6 +132,31 @@ pub fn fr_pow_u64(fr: &Fr, exp: u64) -> Fr {
     fr.pow([exp])
 }
 
+/// Compute the primitive `2^k`-th root of unity in `Fr` on chain.
+///
+/// BN254's scalar field has 2-adicity 28, so a multiplicative subgroup
+/// of order `2^k` exists for any `k ≤ 28`. The generator is
+/// `TWO_ADIC_ROOT_OF_UNITY ^ (2^(28-k))`, which costs `28-k` Fr
+/// squarings (the exponent is a single set bit).
+///
+/// This is the sound replacement for trusting a prover-supplied domain
+/// generator: the verifier derives `ω` from the VK's `k` alone, so a
+/// malicious prover cannot degenerate the evaluation domain (e.g. by
+/// supplying `ω = 0`).
+///
+/// # Errors
+///
+/// - [`OnChainError::PublicInputOutOfRange`] if `k > 28` (no `2^k`-th
+///   root of unity exists in BN254's scalar field).
+pub fn root_of_unity_2k(k: u32) -> Result<Fr, OnChainError> {
+    use ark_ff::FftField;
+    if k > Fr::TWO_ADICITY {
+        return Err(OnChainError::PublicInputOutOfRange);
+    }
+    let extra = Fr::TWO_ADICITY - k;
+    Ok(Fr::TWO_ADIC_ROOT_OF_UNITY.pow([1_u64 << extra]))
+}
+
 /// First Lagrange basis polynomial `L_1(ξ)` for an evaluation domain of
 /// size `n`:
 ///
@@ -521,6 +546,39 @@ mod tests {
         assert_eq!(n, 1 << k, "n must be a power of 2 for this helper");
         let extra = Fr::TWO_ADICITY - k;
         two_adic.pow([1_u64 << extra])
+    }
+
+    #[test]
+    fn root_of_unity_2k_is_primitive() {
+        for k in 0..=16u32 {
+            let omega = root_of_unity_2k(k).unwrap();
+            let order = 1u64 << k;
+            assert_eq!(
+                fr_pow_u64(&omega, order),
+                Fr::one(),
+                "omega^(2^{k}) must be 1"
+            );
+            if k >= 1 {
+                assert_ne!(
+                    fr_pow_u64(&omega, order / 2),
+                    Fr::one(),
+                    "omega must be a *primitive* 2^{k}-th root (order exactly 2^{k})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn root_of_unity_2k_matches_test_oracle() {
+        for k in 1..=20u32 {
+            assert_eq!(root_of_unity_2k(k).unwrap(), find_primitive_nth_root(1 << k));
+        }
+    }
+
+    #[test]
+    fn root_of_unity_2k_rejects_above_two_adicity() {
+        assert!(root_of_unity_2k(29).is_err());
+        assert!(root_of_unity_2k(28).is_ok());
     }
 
     // ---- fr_from_be_bytes_reduced ----
