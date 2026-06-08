@@ -100,15 +100,41 @@ pub struct ProofUploadSession {
     pub expires_at_slot: u64,
     /// Rolling SHA-256 over `(DOMAIN_TAG ‖ session_id ‖ total_len_le ‖ proof_system_id ‖ chunk_0 ‖ chunk_1 ‖ …)`.
     pub rolling_hash: [u8; 32],
+    /// Chunked-verification progress for systems whose single-shot
+    /// verify exceeds the 1.4M CU per-transaction cap (FRI-STARK, #76).
+    /// `Default` (all zero / false) until `stark_verify_begin` runs.
+    pub stark_verify: StarkVerifyProgress,
     /// Future-compat padding. Bumping `layout_version` takes from here first.
-    pub reserved: [u8; 32],
+    pub reserved: [u8; 26],
     /// Assembled proof bytes (length grows with each `append_chunk`).
     pub assembled: Vec<u8>,
 }
 
+/// Resumable verification cursor for chunked STARK verification (#76).
+///
+/// A production STARK proof exceeds the per-transaction CU cap, so its
+/// verification is split across instructions: one `begin` step runs the
+/// once-per-proof setup (`FriStark::verify_setup`) and records
+/// `num_queries`; subsequent steps each verify a contiguous query range
+/// (`FriStark::verify_query_range`) and advance `next_query`. When
+/// `next_query == num_queries` the proof is fully verified.
+#[derive(Debug, Clone, Copy, Default, BorshSerialize, BorshDeserialize, PartialEq, Eq)]
+pub struct StarkVerifyProgress {
+    /// `true` once the setup step (shape + PoW + OOD) has passed.
+    pub setup_done: bool,
+    /// Next query index still to verify. Advances monotonically to
+    /// `num_queries`.
+    pub next_query: u16,
+    /// Total query count, recorded by the setup step.
+    pub num_queries: u16,
+    /// `true` once every query has been verified.
+    pub complete: bool,
+}
+
 impl ProofUploadSession {
     /// Current account layout version. Bump to perform a migration.
-    pub const LAYOUT_VERSION: u8 = 1;
+    /// v2 added the `stark_verify` progress cursor (#76).
+    pub const LAYOUT_VERSION: u8 = 2;
 
     /// Maximum borsh-serialized length of the fixed-size header.
     /// Computed at compile time so handlers can size accounts correctly.
@@ -125,7 +151,8 @@ impl ProofUploadSession {
         + 8                                 // created_at_slot
         + 8                                 // expires_at_slot
         + 32                                // rolling_hash
-        + 32                                // reserved
+        + 6                                 // stark_verify (1 + 2 + 2 + 1)
+        + 26                                // reserved
         + 4; // borsh Vec<u8> length prefix for `assembled`
 
     /// Total serialized account size for a session declaring `total_len`
@@ -171,7 +198,8 @@ impl ProofUploadSession {
             created_at_slot,
             expires_at_slot: created_at_slot.saturating_add(EXPIRY_SLOTS),
             rolling_hash: h_0,
-            reserved: [0; 32],
+            stark_verify: StarkVerifyProgress::default(),
+            reserved: [0; 26],
             assembled: Vec::with_capacity(total_len as usize),
         }
     }
@@ -246,6 +274,73 @@ impl ProofUploadSession {
         Ok(())
     }
 
+    /// Begin chunked STARK verification (#76): record the once-per-proof
+    /// setup result. The caller must have run
+    /// `FriStark::verify_setup(...)` (shape + PoW + OOD) successfully and
+    /// pass the returned `num_queries`. Requires a finalized session.
+    ///
+    /// Idempotent on re-call with the same `num_queries` (a retried
+    /// transaction does not corrupt the cursor); a different
+    /// `num_queries` is rejected.
+    ///
+    /// # Errors
+    ///
+    /// - [`OnChainError::SessionNotFinalized`] — proof bytes incomplete.
+    /// - [`OnChainError::StarkVerifyOutOfOrder`] — re-begun with a
+    ///   different `num_queries` after queries were already verified.
+    pub fn stark_verify_begin(&mut self, num_queries: u16) -> Result<(), OnChainError> {
+        if !self.finalized {
+            return Err(OnChainError::SessionNotFinalized);
+        }
+        if self.stark_verify.setup_done {
+            if self.stark_verify.num_queries != num_queries {
+                return Err(OnChainError::StarkVerifyOutOfOrder);
+            }
+            return Ok(());
+        }
+        self.stark_verify = StarkVerifyProgress {
+            setup_done: true,
+            next_query: 0,
+            num_queries,
+            complete: num_queries == 0,
+        };
+        Ok(())
+    }
+
+    /// Advance the chunked STARK verification cursor after a query range
+    /// `[next_query, new_next)` verified successfully via
+    /// `FriStark::verify_query_range(...)`. `new_next` must strictly
+    /// advance the cursor and not overshoot `num_queries`. When it
+    /// reaches `num_queries` the proof is marked complete.
+    ///
+    /// # Errors
+    ///
+    /// - [`OnChainError::StarkVerifyNotStarted`] — `stark_verify_begin`
+    ///   has not run.
+    /// - [`OnChainError::StarkVerifyOutOfOrder`] — `new_next` does not
+    ///   strictly advance the cursor or exceeds `num_queries`.
+    pub fn stark_verify_advance(&mut self, new_next: u16) -> Result<(), OnChainError> {
+        if !self.stark_verify.setup_done {
+            return Err(OnChainError::StarkVerifyNotStarted);
+        }
+        if new_next <= self.stark_verify.next_query || new_next > self.stark_verify.num_queries {
+            return Err(OnChainError::StarkVerifyOutOfOrder);
+        }
+        self.stark_verify.next_query = new_next;
+        if new_next == self.stark_verify.num_queries {
+            self.stark_verify.complete = true;
+        }
+        Ok(())
+    }
+
+    /// `true` once every query has been verified through the chunked
+    /// path. The driver checks this before treating the proof as
+    /// accepted.
+    #[must_use]
+    pub const fn stark_verify_complete(&self) -> bool {
+        self.stark_verify.complete
+    }
+
     /// Record a verifier failure. Used after `finalize` succeeded but the
     /// verifier returned an error — the session stays open for cancellation.
     pub fn record_verify_failure(&mut self, error_code: u32) {
@@ -307,6 +402,109 @@ mod tests {
         session.finalize([0xCC; 32]).unwrap();
         assert!(session.finalized);
         assert_eq!(session.assembled, alloc::vec![1, 2, 3, 4]);
+    }
+
+    fn finalized_session() -> ProofUploadSession {
+        let mut s = fixture_session(0);
+        s.finalized = true;
+        s
+    }
+
+    #[test]
+    fn stark_verify_begin_requires_finalized() {
+        let mut s = fixture_session(0);
+        assert_eq!(
+            s.stark_verify_begin(4),
+            Err(OnChainError::SessionNotFinalized)
+        );
+    }
+
+    #[test]
+    fn stark_verify_full_sequence() {
+        let mut s = finalized_session();
+        s.stark_verify_begin(4).unwrap();
+        assert!(s.stark_verify.setup_done);
+        assert_eq!(s.stark_verify.num_queries, 4);
+        assert_eq!(s.stark_verify.next_query, 0);
+        assert!(!s.stark_verify_complete());
+
+        s.stark_verify_advance(2).unwrap();
+        assert_eq!(s.stark_verify.next_query, 2);
+        assert!(!s.stark_verify_complete());
+
+        s.stark_verify_advance(4).unwrap();
+        assert_eq!(s.stark_verify.next_query, 4);
+        assert!(s.stark_verify_complete());
+    }
+
+    #[test]
+    fn stark_verify_advance_before_begin_errors() {
+        let mut s = finalized_session();
+        assert_eq!(
+            s.stark_verify_advance(1),
+            Err(OnChainError::StarkVerifyNotStarted)
+        );
+    }
+
+    #[test]
+    fn stark_verify_rejects_regress_and_overshoot() {
+        let mut s = finalized_session();
+        s.stark_verify_begin(4).unwrap();
+        // not strictly advancing
+        assert_eq!(
+            s.stark_verify_advance(0),
+            Err(OnChainError::StarkVerifyOutOfOrder)
+        );
+        // overshoot num_queries
+        assert_eq!(
+            s.stark_verify_advance(5),
+            Err(OnChainError::StarkVerifyOutOfOrder)
+        );
+        s.stark_verify_advance(2).unwrap();
+        // regress
+        assert_eq!(
+            s.stark_verify_advance(2),
+            Err(OnChainError::StarkVerifyOutOfOrder)
+        );
+        assert_eq!(
+            s.stark_verify_advance(1),
+            Err(OnChainError::StarkVerifyOutOfOrder)
+        );
+    }
+
+    #[test]
+    fn stark_verify_begin_idempotent_same_count() {
+        let mut s = finalized_session();
+        s.stark_verify_begin(4).unwrap();
+        s.stark_verify_advance(2).unwrap();
+        // re-begin with same count is a no-op (retried tx), cursor kept
+        s.stark_verify_begin(4).unwrap();
+        assert_eq!(s.stark_verify.next_query, 2);
+        // re-begin with a different count is rejected
+        assert_eq!(
+            s.stark_verify_begin(8),
+            Err(OnChainError::StarkVerifyOutOfOrder)
+        );
+    }
+
+    #[test]
+    fn stark_verify_zero_queries_complete_immediately() {
+        let mut s = finalized_session();
+        s.stark_verify_begin(0).unwrap();
+        assert!(s.stark_verify_complete());
+    }
+
+    #[test]
+    fn session_borsh_roundtrip_carries_stark_verify() {
+        let mut s = finalized_session();
+        s.stark_verify_begin(7).unwrap();
+        s.stark_verify_advance(3).unwrap();
+        let bytes = borsh::to_vec(&s).unwrap();
+        let back = ProofUploadSession::try_from_slice(&bytes).unwrap();
+        assert_eq!(s, back);
+        assert_eq!(back.stark_verify.next_query, 3);
+        assert_eq!(back.stark_verify.num_queries, 7);
+        assert_eq!(back.layout_version, 2);
     }
 
     #[test]

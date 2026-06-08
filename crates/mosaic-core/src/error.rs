@@ -87,6 +87,14 @@ pub enum OnChainError {
     SessionAlreadyInitialized = 0x0035,
     /// `CancelExpiredSession` called before `expires_at_slot`.
     SessionNotExpired = 0x0036,
+    /// Chunked STARK verify `begin` step called before the session was
+    /// finalized (the proof bytes are not yet complete).
+    SessionNotFinalized = 0x0037,
+    /// Chunked STARK verify `step` called before the `begin` setup step.
+    StarkVerifyNotStarted = 0x0038,
+    /// Chunked STARK verify `step` range does not contiguously advance
+    /// the cursor (regressing, overshooting `num_queries`, or empty).
+    StarkVerifyOutOfOrder = 0x0039,
 
     // 0x0040..0x004F — syscall surface errors
     /// `sol_alt_bn128_group_op` returned a non-zero status.
@@ -146,6 +154,9 @@ impl OnChainError {
             Self::SessionContextMismatch => "session_context_mismatch",
             Self::SessionAlreadyInitialized => "session_already_initialized",
             Self::SessionNotExpired => "session_not_expired",
+            Self::SessionNotFinalized => "session_not_finalized",
+            Self::StarkVerifyNotStarted => "stark_verify_not_started",
+            Self::StarkVerifyOutOfOrder => "stark_verify_out_of_order",
             Self::AltBn128SyscallFailed => "alt_bn128_syscall_failed",
             Self::AltBn128CompressionSyscallFailed => "alt_bn128_compression_syscall_failed",
             Self::PoseidonSyscallFailed => "poseidon_syscall_failed",
