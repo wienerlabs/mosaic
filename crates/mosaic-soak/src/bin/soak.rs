@@ -111,6 +111,13 @@ async fn real_main(config_path: &std::path::Path) -> Result<()> {
         .with_context(|| format!("writing report to {report_path:?}"))?;
     eprintln!("mosaic-soak: report written to {report_path:?}");
 
+    // Prometheus metrics alongside the markdown, for Grafana / Datadog
+    // ingestion (issue #85). Same stem, `.prom` extension.
+    let metrics_path = report_path.with_extension("prom");
+    fs::write(&metrics_path, report.render_prometheus().as_bytes())
+        .with_context(|| format!("writing metrics to {metrics_path:?}"))?;
+    eprintln!("mosaic-soak: metrics written to {metrics_path:?}");
+
     if report.unexpected_failure > 0 {
         eprintln!(
             "mosaic-soak: ⚠ {} unexpected failure(s) — soak does NOT pass",

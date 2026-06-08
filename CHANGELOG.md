@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- Mainnet deploy toolchain (#68). `scripts/grind-program-id.sh` grinds a
+  vanity PROGRAM_ID (`solana-keygen grind` wrapper, base58 validation,
+  slowness warnings, next-steps runbook; validated end-to-end).
+  `scripts/verify-build.sh` is the trustless-deployment verifier:
+  rebuild with pinned platform-tools v1.52 and either assert the
+  artifact SHA matches a published reference or `solana program dump`
+  the deployed program and diff byte-for-byte (tolerating BPF loader
+  zero padding), exit 2 on mismatch. `docs/reproducible-build.md`
+  documents the closed-loop trust property + the Docker pattern for
+  cross-machine bit-for-bit determinism. The CI build-sbf job records
+  the canonical SBF SHA-256 per commit.
+
+- Soak observability (#85). `mosaic-soak` now emits a Prometheus
+  text-exposition metrics file (`*.prom`) next to its markdown report:
+  outcome counters, per-dispatch CU gauges (min/median/p95/max +
+  pinned baseline), drift-alert + duration metrics. The load-bearing
+  series is `mosaic_soak_unexpected_failure_total` (alert when > 0 = the
+  soak's pass/fail gate). `docs/devnet-soak/observability.md` specifies
+  Grafana/Datadog ingestion, dashboard panels, and the P0/P1/P2 alert
+  rules tied to the rollback playbook.
+
 - Chunked STARK execution (#76, the largest remaining Phase-3 item).
   A production FRI-STARK proof consumes ~7.8M CU, far above Solana's
   1.4M per-transaction cap, so it cannot be verified in one
