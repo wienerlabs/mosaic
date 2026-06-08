@@ -578,11 +578,20 @@ mod tests {
 
     #[test]
     fn instruction_tag_roundtrip() {
-        for byte in [0x10_u8, 0x11, 0x12, 0x13, 0x14] {
+        // 0x15 / 0x16 added for chunked STARK verification (#76).
+        for byte in [0x10_u8, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16] {
             assert!(ChunkedInstructionTag::from_byte(byte).is_some());
         }
+        assert_eq!(
+            ChunkedInstructionTag::from_byte(0x15),
+            Some(ChunkedInstructionTag::BeginStarkVerify)
+        );
+        assert_eq!(
+            ChunkedInstructionTag::from_byte(0x16),
+            Some(ChunkedInstructionTag::StarkVerifyStep)
+        );
         assert!(ChunkedInstructionTag::from_byte(0x00).is_none());
-        assert!(ChunkedInstructionTag::from_byte(0x15).is_none());
+        assert!(ChunkedInstructionTag::from_byte(0x17).is_none());
     }
 
     #[test]
@@ -872,14 +881,14 @@ mod tests {
             prop_assert_eq!(session.is_expired(current_slot), expected);
         }
 
-        /// Instruction tag mapping: bytes 0x10..=0x14 round-trip as
+        /// Instruction tag mapping: bytes 0x10..=0x16 round-trip as
         /// `Some(variant)`; everything else is `None`. Exhaustive over
-        /// the entire u8 space.
+        /// the entire u8 space. (0x15/0x16 added for chunked STARK, #76.)
         #[test]
         fn proptest_instruction_tag_mapping(byte in any::<u8>()) {
             let parsed = ChunkedInstructionTag::from_byte(byte);
             match byte {
-                0x10..=0x14 => prop_assert!(parsed.is_some()),
+                0x10..=0x16 => prop_assert!(parsed.is_some()),
                 _ => prop_assert!(parsed.is_none()),
             }
         }
