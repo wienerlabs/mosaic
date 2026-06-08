@@ -24,8 +24,14 @@
 //! the scaffold:
 //!
 //! - [`verifier::HyperPlonkKzgBn254`] implements
-//!   [`mosaic_core::ProofSystem`] and wire-format length-checks inputs,
-//!   then returns [`mosaic_core::OnChainError::UnimplementedProofSystem`].
+//!   [`mosaic_core::ProofSystem`] and runs the real-shaped pipeline:
+//!   Fiat-Shamir challenge derivation, per-round sumcheck identity
+//!   checks, the gate + permutation claim reduction, the 12-way MSM,
+//!   and the alt_bn128 KZG pairing. It is a Phase-3 *scaffold*: the
+//!   claim reduction omits the `eq(ξ,·)` zero-check factor and the
+//!   multi-point reduction is approximated, so a successful return
+//!   means "structurally valid" not "HyperPlonk-sound". Closing those
+//!   (plus an Espresso reference fixture) is tracked in #73 / #77.
 //! - [`canonical`] defines a placeholder byte layout with the TODO
 //!   markers pointing at the exact fields that need to be pinned.
 //! - Shared cryptographic primitives (Fr arithmetic, MSM, Keccak

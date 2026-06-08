@@ -37,14 +37,20 @@
 //!
 //! [eprint 2025/1741]: https://eprint.iacr.org/2025/1741
 //!
-//! ## What ships in this Phase-2 freeze
+//! ## Current state (Phase-3 scaffold)
 //!
 //! - [`canonical`] — placeholder wire format parametrized by field id
 //!   (Goldilocks / BabyBear / Mersenne31), trace width, trace log-height,
 //!   FRI layer count, query count, and PoW grinding bits.
-//! - [`verifier::FriStark`] implements [`mosaic_core::ProofSystem`],
-//!   wire-validates then returns
-//!   [`mosaic_core::OnChainError::UnimplementedProofSystem`].
+//! - [`verifier::FriStark`] implements [`mosaic_core::ProofSystem`] and
+//!   runs the hash-based verification body: per-query trace + constraint
+//!   Merkle path checks, the FRI fold-chain low-degree test across
+//!   layers, per-layer Merkle authentication, and the PoW grind check.
+//!   Scaffold-pending: the OOD / DEEP quotient identity is not yet bound
+//!   to the committed openings, the wire format is not yet pinned to a
+//!   Plonky3 / Winterfell reference, and a production-shaped proof
+//!   (~7.8M CU) exceeds the 1.4M per-tx cap so it needs chunked
+//!   execution. Tracked in #76.
 //!
 //! Tracking issue: [#3](https://github.com/wienerlabs/mosaic/issues/3).
 //!

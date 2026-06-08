@@ -1,9 +1,9 @@
 //! FRI-STARK verifier scaffold.
 //!
-//! Phase-2 freeze ships wire-format validation + a `ProofSystem` impl
-//! returning `UnimplementedProofSystem`. Phase 3 lands the hash-based
-//! verification body: trace/constraint Merkle checks, FRI low-degree
-//! test across layers, out-of-domain quotient consistency, and the PoW
+//! Phase-3 scaffold. Wire-format validation + the hash-based
+//! verification body are live: trace/constraint Merkle checks, FRI
+//! low-degree test across layers, out-of-domain quotient consistency
+//! (currently unbound to openings), and the PoW
 //! grinding check.
 //!
 //! ## Phase-3 round plan (for the implementer)
