@@ -77,7 +77,9 @@
 
 use crate::{
     canonical::{FriStarkProof, FriStarkVerifyingKey},
-    challenges::{derive_challenges, derive_layer_betas, derive_query_indices, verify_pow},
+    challenges::{
+        derive_challenges, derive_layer_betas, derive_query_indices, verify_pow, StarkChallenges,
+    },
     fri::verify_fri_query,
     goldilocks::{eval_poly_le_bytes, Goldilocks},
     merkle::verify_path,
@@ -146,13 +148,7 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
         let vk = FriStarkVerifyingKey::from_bytes(vk_bytes)?;
         let proof = FriStarkProof::from_bytes(proof_bytes)?;
 
-        if vk.field_id != proof.field_id
-            || vk.trace_width != proof.trace_width
-            || vk.trace_log_height != proof.trace_log_height
-            || vk.log_blowup != proof.log_blowup
-        {
-            return Err(OnChainError::VerifyingKeyProofMismatch);
-        }
+        check_shape(&vk, &proof)?;
 
         // Derive the three scaffold challenges via SHA-256 transcript.
         let challenges = derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
@@ -220,35 +216,7 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
         // Skipped when `ood_evals` is empty (session-6 scaffold edge
         // case). Requires at least 8 bytes (constraint_eval) when
         // non-empty; session 14c's happy path carries ≥16 bytes.
-        if !proof.ood_evals.is_empty() {
-            if proof.ood_evals.len() < 8 {
-                return Err(OnChainError::ProofLengthMismatch);
-            }
-            // Parse constraint_eval (first 8 bytes).
-            let mut constraint_bytes = [0u8; 8];
-            constraint_bytes.copy_from_slice(&proof.ood_evals[..8]);
-            let constraint_eval = Goldilocks::from_bytes_le(&constraint_bytes)?;
-
-            // Reduce the alpha transcript challenge to Goldilocks.
-            // Same convention as `derive_layer_betas`: take the first
-            // 8 bytes LE and reduce mod p.
-            let alpha_u64 = u64::from_le_bytes([
-                challenges.alpha[0], challenges.alpha[1],
-                challenges.alpha[2], challenges.alpha[3],
-                challenges.alpha[4], challenges.alpha[5],
-                challenges.alpha[6], challenges.alpha[7],
-            ]);
-            let alpha_g = Goldilocks::new(alpha_u64);
-
-            // Evaluate quotient polynomial at α: Σ α^i · q_i.
-            let quotient_coefs = &proof.ood_evals[8..];
-            let expected =
-                eval_poly_le_bytes(quotient_coefs, alpha_g)?;
-
-            if constraint_eval != expected {
-                return Err(OnChainError::VerificationFailed);
-            }
-        }
+        verify_ood(&proof, &challenges)?;
 
         // FRI fold-chain verification (session 13b + 14a). For each
         // query, walk the layer openings, ensure the fold relation
@@ -371,6 +339,213 @@ impl<'a, B: SyscallBackend + ?Sized> FriStark<'a, B> {
 
         Ok(())
     }
+
+    /// Resumable setup step for chunked STARK verification (#76).
+    ///
+    /// Runs the once-per-proof checks that gate every query: shape
+    /// cross-check, transcript-derived proof-of-work grind, and the
+    /// out-of-domain quotient consistency check. Returns `num_queries`
+    /// so a chunked driver knows how many query steps remain.
+    ///
+    /// On chain this is the first instruction of a chunked verify;
+    /// [`Self::verify_query_range`] then processes the queries in
+    /// batches that each fit under the 1.4M CU per-transaction cap.
+    /// A production STARK consumes ~7.8M CU in a single shot, so it
+    /// cannot be verified in one transaction — this split is the only
+    /// way STARK fits Solana's compute model.
+    pub fn verify_setup(
+        &self,
+        vk_bytes: &[u8],
+        proof_bytes: &[u8],
+        public_inputs_bytes: &[u8],
+    ) -> Result<u16, OnChainError> {
+        let vk = FriStarkVerifyingKey::from_bytes(vk_bytes)?;
+        let proof = FriStarkProof::from_bytes(proof_bytes)?;
+        check_shape(&vk, &proof)?;
+        let challenges = derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
+        verify_pow(
+            self.backend,
+            &challenges.query_seed,
+            proof.pow_nonce,
+            proof.pow_bits,
+        )?;
+        verify_ood(&proof, &challenges)?;
+        Ok(proof.num_queries)
+    }
+
+    /// Resumable per-query verification of the half-open range
+    /// `[start_query, end_query)` for chunked STARK verification (#76).
+    ///
+    /// Re-derives the deterministic plan (challenges, query indices,
+    /// FRI betas, ω) from the proof bytes — all cheap pure functions of
+    /// the input — then runs the trace + constraint Merkle path checks
+    /// and the FRI fold-chain + per-layer authentication for each query
+    /// in the range. Per-step memory is bounded by `span` queries, not
+    /// by the full proof.
+    ///
+    /// A driver calls this with contiguous ranges covering
+    /// `[0, num_queries)`; the union is equivalent to the single-shot
+    /// [`Self::verify`] query loop. Ranges may be processed in separate
+    /// transactions provided every query is covered exactly once and
+    /// [`Self::verify_setup`] ran first.
+    pub fn verify_query_range(
+        &self,
+        vk_bytes: &[u8],
+        proof_bytes: &[u8],
+        public_inputs_bytes: &[u8],
+        start_query: u16,
+        end_query: u16,
+    ) -> Result<(), OnChainError> {
+        let vk = FriStarkVerifyingKey::from_bytes(vk_bytes)?;
+        let proof = FriStarkProof::from_bytes(proof_bytes)?;
+        check_shape(&vk, &proof)?;
+        if start_query > end_query || end_query > proof.num_queries {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        if start_query == end_query {
+            return Ok(());
+        }
+        let start = start_query as usize;
+        let end = end_query as usize;
+        let span = end - start;
+
+        let challenges = derive_challenges(self.backend, &vk, public_inputs_bytes, &proof)?;
+        let domain_log = proof.trace_log_height as u32 + proof.log_blowup as u32;
+        if domain_log >= 64 {
+            return Err(OnChainError::ProofLengthMismatch);
+        }
+        let domain_size: u64 = 1u64 << domain_log;
+        let indices = derive_query_indices(
+            self.backend,
+            &challenges.query_seed,
+            proof.num_queries,
+            domain_size,
+        )?;
+
+        let qr_iter = proof
+            .query_response_iter()
+            .ok_or(OnChainError::ProofLengthMismatch)?;
+        for ((t_leaf, t_path, c_leaf, c_path), &idx) in
+            qr_iter.skip(start).take(span).zip(indices[start..end].iter())
+        {
+            verify_path(self.backend, t_leaf, t_path, idx, proof.trace_commitment)?;
+            verify_path(self.backend, c_leaf, c_path, idx, proof.constraint_commitment)?;
+        }
+
+        if proof.num_fri_layers > 0 {
+            let beta_u64s = derive_layer_betas(
+                self.backend,
+                &challenges.query_seed,
+                proof.fri_layer_commits,
+                proof.num_fri_layers,
+            )?;
+            let betas: Vec<Goldilocks> = beta_u64s.iter().map(|&b| Goldilocks::new(b)).collect();
+            let omega = Goldilocks::from_bytes_le(&vk.omega_g)?;
+            let n_layers = proof.num_fri_layers as usize;
+            let depth = (proof.trace_log_height as usize) + (proof.log_blowup as usize);
+            let path_bytes_per_leaf = depth * 32;
+            let path_bytes_per_layer_per_query = 2 * path_bytes_per_leaf;
+
+            let opening_iter = proof
+                .fri_layer_opening_iter()
+                .ok_or(OnChainError::ProofLengthMismatch)?;
+            let range_openings: Vec<(Goldilocks, Goldilocks)> = opening_iter
+                .skip(start * n_layers)
+                .take(span * n_layers)
+                .map(|(f_x_bytes, f_neg_x_bytes)| {
+                    let f_x_arr: [u8; 8] = f_x_bytes
+                        .try_into()
+                        .map_err(|_| OnChainError::ProofLengthMismatch)?;
+                    let f_neg_x_arr: [u8; 8] = f_neg_x_bytes
+                        .try_into()
+                        .map_err(|_| OnChainError::ProofLengthMismatch)?;
+                    let f_x = Goldilocks::from_bytes_le(&f_x_arr)?;
+                    let f_neg_x = Goldilocks::from_bytes_le(&f_neg_x_arr)?;
+                    Ok::<_, OnChainError>((f_x, f_neg_x))
+                })
+                .collect::<Result<_, _>>()?;
+
+            for q in start..end {
+                let global_idx = indices[q];
+                let x_0 = omega.pow(global_idx);
+                let local = q - start;
+                let layer_evals = &range_openings[local * n_layers..local * n_layers + n_layers];
+                verify_fri_query(layer_evals, &betas, x_0, proof.fri_final_poly)?;
+
+                if depth > 0 {
+                    for (l_idx, (f_x, f_neg_x)) in layer_evals.iter().enumerate() {
+                        let layer_root_start = l_idx * 32;
+                        let layer_root =
+                            &proof.fri_layer_commits[layer_root_start..layer_root_start + 32];
+                        let path_base = (q * n_layers + l_idx) * path_bytes_per_layer_per_query;
+                        let f_x_path =
+                            &proof.fri_layer_auth_paths[path_base..path_base + path_bytes_per_leaf];
+                        let f_neg_x_path = &proof.fri_layer_auth_paths
+                            [path_base + path_bytes_per_leaf..path_base + 2 * path_bytes_per_leaf];
+                        let mut f_x_leaf = [0u8; 32];
+                        f_x_leaf[..8].copy_from_slice(&f_x.to_bytes_le());
+                        let mut f_neg_x_leaf = [0u8; 32];
+                        f_neg_x_leaf[..8].copy_from_slice(&f_neg_x.to_bytes_le());
+                        verify_path(self.backend, &f_x_leaf, f_x_path, global_idx, layer_root)?;
+                        verify_path(
+                            self.backend,
+                            &f_neg_x_leaf,
+                            f_neg_x_path,
+                            global_idx ^ 1,
+                            layer_root,
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn check_shape(
+    vk: &FriStarkVerifyingKey,
+    proof: &FriStarkProof<'_>,
+) -> Result<(), OnChainError> {
+    if vk.field_id != proof.field_id
+        || vk.trace_width != proof.trace_width
+        || vk.trace_log_height != proof.trace_log_height
+        || vk.log_blowup != proof.log_blowup
+    {
+        return Err(OnChainError::VerifyingKeyProofMismatch);
+    }
+    Ok(())
+}
+
+fn verify_ood(
+    proof: &FriStarkProof<'_>,
+    challenges: &StarkChallenges,
+) -> Result<(), OnChainError> {
+    if proof.ood_evals.is_empty() {
+        return Ok(());
+    }
+    if proof.ood_evals.len() < 8 {
+        return Err(OnChainError::ProofLengthMismatch);
+    }
+    let mut constraint_bytes = [0u8; 8];
+    constraint_bytes.copy_from_slice(&proof.ood_evals[..8]);
+    let constraint_eval = Goldilocks::from_bytes_le(&constraint_bytes)?;
+    let alpha_u64 = u64::from_le_bytes([
+        challenges.alpha[0],
+        challenges.alpha[1],
+        challenges.alpha[2],
+        challenges.alpha[3],
+        challenges.alpha[4],
+        challenges.alpha[5],
+        challenges.alpha[6],
+        challenges.alpha[7],
+    ]);
+    let alpha_g = Goldilocks::new(alpha_u64);
+    let quotient_coefs = &proof.ood_evals[8..];
+    let expected = eval_poly_le_bytes(quotient_coefs, alpha_g)?;
+    if constraint_eval != expected {
+        return Err(OnChainError::VerificationFailed);
+    }
+    Ok(())
 }
 
 impl<B: SyscallBackend + ?Sized + Send + Sync + 'static> ProofSystem for FriStark<'_, B> {
@@ -626,6 +801,82 @@ mod tests {
 
         let r = FriStark::verify(&v, &vk_bytes, &proof, &[]);
         assert!(r.is_ok(), "FRI fold chain with zero openings should pass, got {r:?}");
+    }
+
+    /// Builds a valid 4-query depth-zero proof identical in shape to
+    /// `full_pipeline_accepts_fri_fold_chain` but with `num_q = 4`, used
+    /// by the chunked-execution agreement tests below.
+    fn valid_four_query() -> (Vec<u8>, Vec<u8>) {
+        let mut vk_bytes = matching_vk(StarkFieldId::Goldilocks, 0, 32, 0);
+        vk_bytes[40..48].copy_from_slice(&7u64.to_le_bytes());
+        let mut proof = proof_bytes(StarkFieldId::Goldilocks, 1, 4, 0, 32, 0, 0xAB);
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        let constraint_off = trace_off + sizes::DIGEST_LEN;
+        for byte in proof[trace_off..trace_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        for byte in proof[constraint_off..constraint_off + sizes::DIGEST_LEN].iter_mut() {
+            *byte = 0xAB;
+        }
+        (vk_bytes, proof)
+    }
+
+    /// Chunked verification (#76): `verify_setup` + a sequence of
+    /// `verify_query_range` calls covering `[0, num_queries)` must accept
+    /// exactly the same proof the single-shot `verify` accepts.
+    #[test]
+    fn chunked_query_ranges_agree_with_single_shot_accept() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let (vk, proof) = valid_four_query();
+
+        assert!(FriStark::verify(&v, &vk, &proof, &[]).is_ok());
+
+        let n = v.verify_setup(&vk, &proof, &[]).expect("setup");
+        assert_eq!(n, 4);
+
+        // Two contiguous batches covering all four queries.
+        v.verify_query_range(&vk, &proof, &[], 0, 2).expect("range 0..2");
+        v.verify_query_range(&vk, &proof, &[], 2, 4).expect("range 2..4");
+        // Single full range is equivalent.
+        v.verify_query_range(&vk, &proof, &[], 0, 4).expect("range 0..4");
+        // Per-query batches.
+        for q in 0..4u16 {
+            v.verify_query_range(&vk, &proof, &[], q, q + 1)
+                .unwrap_or_else(|e| panic!("single-query range {q} should pass: {e:?}"));
+        }
+        // Empty range is a no-op.
+        v.verify_query_range(&vk, &proof, &[], 2, 2).expect("empty range");
+    }
+
+    #[test]
+    fn chunked_query_ranges_reject_out_of_bounds() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let (vk, proof) = valid_four_query();
+        // end past num_queries.
+        assert!(v.verify_query_range(&vk, &proof, &[], 0, 5).is_err());
+        // start > end.
+        assert!(v.verify_query_range(&vk, &proof, &[], 3, 2).is_err());
+    }
+
+    /// A tamper that breaks every query (corrupted trace commitment)
+    /// must be caught by the chunked path exactly as by single-shot:
+    /// the very first query range fails.
+    #[test]
+    fn chunked_query_ranges_catch_tamper() {
+        let backend = mosaic_core::syscall::host::HostBackend::new();
+        let v = FriStark::new(&backend);
+        let (vk, mut proof) = valid_four_query();
+        let trace_off = sizes::FIXED_HEADER_LEN;
+        proof[trace_off] ^= 0x01; // corrupt the trace commitment
+
+        assert!(FriStark::verify(&v, &vk, &proof, &[]).is_err());
+        assert!(v.verify_query_range(&vk, &proof, &[], 0, 4).is_err());
+        assert!(
+            v.verify_query_range(&vk, &proof, &[], 0, 1).is_err(),
+            "first query already authenticates against the tampered root"
+        );
     }
 
     /// Session-14c OOD quotient soundness: set constraint_eval in
