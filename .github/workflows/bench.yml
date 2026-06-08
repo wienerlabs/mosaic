@@ -29,7 +29,7 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
-  # Host-side criterion benches — both Groth16 (production) and
+  # Host-side criterion benches - both Groth16 (production) and
   # Phase-3 scaffold-acceptance benches. Wall-clock numbers are the
   # canary for CPU regressions before they hit on-chain CU.
   # ─────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ jobs:
           path: output.txt
 
   # ─────────────────────────────────────────────────────────────────
-  # On-chain CU regression bench — drives the SBF program through
+  # On-chain CU regression bench - drives the SBF program through
   # solana-program-test and parses CU consumption from program logs.
   # Hard-cap exceedance fails CI (ADR-0005); baseline drift logs a
   # WARN and rolls into the report.

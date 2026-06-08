@@ -19,7 +19,7 @@ on:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
-  # PR mode — runs a representative subset for ~5 minutes each. Keeps
+  # PR mode - runs a representative subset for ~5 minutes each. Keeps
   # PR CI under ~90 minutes wall-clock while still exercising every
   # system at least once and every Phase-3 audit gate + compression
   # surface directly. The full 33-target sweep runs nightly.
@@ -50,7 +50,7 @@ jobs:
           - fuzz_halo2_combined
           - fuzz_nova_combined
           - fuzz_stark_combined
-          # Session 95 — audit-gate algebraic-surface harnesses.
+          # Session 95 - audit-gate algebraic-surface harnesses.
           # All four run in PR mode because they exercise the
           # ADR-0006 soundness boundaries directly; a regression in
           # an audit gate is a soundness regression and should fail
@@ -59,7 +59,7 @@ jobs:
           - fuzz_halo2_lookup_gate
           - fuzz_stark_fri_query_gate
           - fuzz_hyperplonk_claim_reduction_gate
-          # Session 111 — compressed wire format harnesses
+          # Session 111 - compressed wire format harnesses
           # (sessions 106-110 added Halo2/Groth16/PLONK compressed
           # proof + VK paths). Fuzzing the decompression entry
           # points catches panics on hostile compressed bytes.
@@ -69,7 +69,7 @@ jobs:
           - fuzz_plonk_compressed_vk
           - fuzz_halo2_compressed_proof
           - fuzz_halo2_compressed_vk
-          # Session 114 — Phase-3 compressed wire format harnesses.
+          # Session 114 - Phase-3 compressed wire format harnesses.
           # Mirrors session 111's Phase-2 sweep for HyperPlonk + Nova.
           # STARK has no BN254 curve points so alt_bn128 compression
           # is not applicable.
@@ -86,7 +86,7 @@ jobs:
         working-directory: crates/mosaic-fuzz
 
   # ─────────────────────────────────────────────────────────────────
-  # Nightly mode — full 33-target sweep, 1 hour per harness. Total
+  # Nightly mode - full 33-target sweep, 1 hour per harness. Total
   # wall-clock ≈ 33 hours across the matrix (parallel runners cap
   # at GitHub's free-tier limit of 20 concurrent jobs, so the matrix
   # finishes in ~2 batches).
@@ -127,20 +127,20 @@ jobs:
           - fuzz_halo2_combined
           - fuzz_nova_combined
           - fuzz_stark_combined
-          # Session 95 — audit-gate algebraic-surface harnesses (4).
+          # Session 95 - audit-gate algebraic-surface harnesses (4).
           # See ADR-0006 for the audit-gate extraction pattern.
           - fuzz_nova_consistency_gate
           - fuzz_halo2_lookup_gate
           - fuzz_stark_fri_query_gate
           - fuzz_hyperplonk_claim_reduction_gate
-          # Session 111 — compressed wire format harnesses (6).
+          # Session 111 - compressed wire format harnesses (6).
           - fuzz_groth16_compressed_proof
           - fuzz_groth16_compressed_vk
           - fuzz_plonk_compressed_proof
           - fuzz_plonk_compressed_vk
           - fuzz_halo2_compressed_proof
           - fuzz_halo2_compressed_vk
-          # Session 114 — Phase-3 compressed wire format harnesses (4).
+          # Session 114 - Phase-3 compressed wire format harnesses (4).
           - fuzz_hyperplonk_compressed_proof
           - fuzz_hyperplonk_compressed_vk
           - fuzz_nova_compressed_proof

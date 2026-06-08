@@ -9,7 +9,7 @@ on:
 
 # Lock the workflow to read-only by default. Individual jobs can
 # escalate via their own `permissions:` block when they actually need
-# write access — none of the current jobs do.
+# write access - none of the current jobs do.
 permissions:
   contents: read
 
@@ -137,7 +137,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # borsh 1.6.x's vec_from_reader (de/mod.rs:164) panics on the SBF
-      # runtime — the program dies at ~1900 CU before any verification.
+      # runtime - the program dies at ~1900 CU before any verification.
       # The whole SBF test + bench surface depends on borsh staying 1.5.x.
       # This guard fails loudly if a `cargo update` ever drifts it back.
       # See issue #88.
@@ -152,12 +152,12 @@ jobs:
           for v in $vers; do
             case "$v" in
               1.5.*) have_15=1 ;;
-              1.*) echo "::error::borsh $v panics on the SBF runtime (issue #88) — pin to 1.5.x in Cargo.lock"; bad=1 ;;
+              1.*) echo "::error::borsh $v panics on the SBF runtime (issue #88) - pin to 1.5.x in Cargo.lock"; bad=1 ;;
               *) ;;  # 0.x legacy line, irrelevant to SBF
             esac
           done
           if [ "$have_15" -ne 1 ]; then
-            echo "::error::no borsh 1.5.x in Cargo.lock — the mosaic program needs the SBF-compatible 1.5.x line"; bad=1
+            echo "::error::no borsh 1.5.x in Cargo.lock - the mosaic program needs the SBF-compatible 1.5.x line"; bad=1
           fi
           exit $bad
 
@@ -176,12 +176,24 @@ jobs:
       # transitive deps (constant_time_eq 0.4.x via blake3) require
       # edition2024, which the v1.51 default (rustc 1.84) cannot parse.
       # v1.52 also emits sBPF the solana-program-test 0.11.1 VM runs
-      # correctly — newer tools (v1.54) mis-execute on that VM.
+      # correctly - newer tools (v1.54) mis-execute on that VM.
       - run: cargo build-sbf --tools-version v1.52 --manifest-path crates/mosaic-program/Cargo.toml
       - name: Verify SBF artifact
         run: |
           test -f target/deploy/mosaic_program.so
           file target/deploy/mosaic_program.so | grep -q "ELF 64-bit LSB"
+      - name: Record canonical SBF SHA-256
+        # Logs the per-commit artifact hash so a reproducible-build
+        # verifier (scripts/verify-build.sh) has a reference, and a
+        # bytecode change is visible in CI history. See
+        # docs/reproducible-build.md (#68).
+        run: |
+          sha=$(sha256sum target/deploy/mosaic_program.so | awk '{print $1}')
+          size=$(wc -c < target/deploy/mosaic_program.so | tr -d ' ')
+          echo "mosaic_program.so: $size bytes, sha256=$sha"
+          echo "### Canonical SBF artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "- size: $size bytes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sha256: \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
 
   doc:
     name: rustdoc
