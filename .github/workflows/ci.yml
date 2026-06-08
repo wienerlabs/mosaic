@@ -87,6 +87,18 @@ jobs:
             -D clippy::todo \
             -D clippy::unimplemented
 
+  shellcheck:
+    name: shellcheck (deploy scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The deploy / verify / grind scripts are the highest-stakes
+      # operational code (the mainnet deploy ceremony runs them). Lint
+      # them so a bash bug can't slip into the ceremony. ubuntu-latest
+      # ships shellcheck. The scripts are clean at `warning` severity
+      # today; keep them there.
+      - run: shellcheck --severity=warning scripts/*.sh
+
   test-host:
     name: tests (host)
     runs-on: ubuntu-latest
