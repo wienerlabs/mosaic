@@ -9,7 +9,7 @@ auditors can verify we operate a disciplined disclosure process.
 
 ### Stage 1 — Acknowledgement (≤ 48 hours)
 
-On receipt of a report at `security@wienerlabs.com`:
+On receipt of a report at `baturalp@wienerlabs.com`:
 
 - **Automated acknowledgement** of receipt within 1 hour (business days
   when PGP-signed; anytime otherwise).

@@ -69,7 +69,7 @@ production behaviour.
 Order of trust, top to bottom. A higher-trust source overrides a
 lower-trust source.
 
-1. **Audit firm direct contact** to <security@wienerlabs.com>
+1. **Audit firm direct contact** to <baturalp@wienerlabs.com>
 2. **Solana Foundation security team** via their coordinated
    disclosure channel
 3. **Independent researcher PoC** with reproducible code
@@ -281,7 +281,7 @@ integrations while we investigate. We will share details on
 the recommended actions for current users within the next 24
 hours. Existing on-chain transactions are unaffected.
 
-For coordinated-disclosure inquiries: security@wienerlabs.com.
+For coordinated-disclosure inquiries: baturalp@wienerlabs.com.
 
 — The Mosaic team
 ```

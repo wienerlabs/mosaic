@@ -26,7 +26,7 @@ review before sending a quote.
 ## Reporting a vulnerability
 
 If you discover a security vulnerability in Mosaic, please **do not open a
-public GitHub issue**. Instead, email <security@wienerlabs.com> (PGP key
+public GitHub issue**. Instead, email <baturalp@wienerlabs.com> (PGP key
 coming soon) with:
 
 - A description of the vulnerability and its potential impact.

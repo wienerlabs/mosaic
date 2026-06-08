@@ -14,7 +14,7 @@
 | **Scope (LoC)** | ~2 400 LoC in-scope library/program code + ~1 300 LoC test scaffolding |
 | **Requested audit window** | *[TBD — suggest 2026-Q3]* |
 | **Budget range** | *[TBD per firm's proposal — typical Solana + ZK engagements $30–80 K USD]* |
-| **Primary contact** | *[@0raclus / security@wienerlabs.com]* |
+| **Primary contact** | *[@0raclus / baturalp@wienerlabs.com]* |
 
 ## Why an audit now
 
@@ -165,7 +165,7 @@ engagement triggers extraordinary scope expansion.
 
 ## How to respond
 
-Please reply to `security@wienerlabs.com` with:
+Please reply to `baturalp@wienerlabs.com` with:
 
 1. **Confirmation of interest** and availability window.
 2. **Quote** (fixed-fee preferred; T&M acceptable if scoped).

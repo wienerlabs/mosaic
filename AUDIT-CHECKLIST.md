@@ -536,7 +536,7 @@ cargo +nightly fuzz run fuzz_groth16_proof_bytes -- -max_total_time=300
 
 ## Audit-firm contact
 
-- **Email**: <security@wienerlabs.com>
+- **Email**: <baturalp@wienerlabs.com>
 - **PGP key**: coming soon (issue
   [#19](https://github.com/wienerlabs/mosaic/issues/19))
 - **Pre-audit outreach**: issue

@@ -63,7 +63,7 @@ Thanks for your time,
 
 [SENDER NAME]
 [ROLE], Wiener Labs
-security@wienerlabs.com
+baturalp@wienerlabs.com
 ```
 
 ---
