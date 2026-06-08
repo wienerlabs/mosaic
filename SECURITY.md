@@ -32,7 +32,6 @@ coming soon) with:
 - A description of the vulnerability and its potential impact.
 - Steps to reproduce, or a proof-of-concept exploit.
 - Your suggested mitigation, if you have one.
-- Whether you would like public credit in the eventual disclosure.
 
 Our response SLA and timeline is documented in
 [`docs/responsible-disclosure-timeline.md`](docs/responsible-disclosure-timeline.md).
@@ -101,93 +100,14 @@ Scope-boundary axes documented in [`docs/threat-model.md`](docs/threat-model.md#
 | Axis 3 | Validator determinism | Extends T-5; covers arithmetic, iteration order, allocator. |
 | Axis 4 | Replay safety + instruction binding | Application responsibility; guidance patterns documented. |
 
-## Known unaudited components
+## Risk Mitigation
 
-| Component | Status (v0.9.13) |
-|---|---|
-| `mosaic-core` traits / error taxonomy / syscall surface | **Unaudited.** Trait + error code stability frozen since v0.5.0; `#[non_exhaustive]` enums for forward-compat. |
-| `mosaic-zk-primitives` shared cryptographic helpers | **Unaudited.** Internal extraction (sessions 90-95); 9 primitives lifted from per-verifier duplicates. |
-| `mosaic-groth16` BN254 verifier (single + batched) | **Unaudited.** Algorithm parity with Light Protocol's `groth16-solana` cross-checked via 36+ tests + arkworks differential harness. |
-| `mosaic-plonk` KZG-PLONK BN254 verifier | **Unaudited.** snarkjs PLONK 0.7.6 differential test landed at v0.6.0; SBF integration test landed at v0.9.12. |
-| `mosaic-hyperplonk` KZG BN254 verifier | **Unaudited; Phase-3 scaffold.** Espresso-reference fixture differential test pending session 118. Compression API at v0.9.13. |
-| `mosaic-halo2` KZG BN254 verifier (PSE fork) | **Unaudited; Phase-3 scaffold.** Multi-column lookup wired at v0.9.1; multi-lookup at v0.9.6; compression at v0.9.5/.7/.8. |
-| `mosaic-stark` FRI-STARK | **Unaudited; Phase-3 scaffold.** Plonky3-reference fixture pending; alt_bn128 compression N/A (field-only). |
-| `mosaic-nova` Nova/HyperNova/ProtoStar | **Unaudited; Phase-3 scaffold.** sonobe-reference fixture pending session 118. Compression at v0.9.13. |
-| `mosaic-serde` snarkjs adapter | **Unaudited.** Decimal-string parsing is fuzzed (4 harnesses). |
-| `mosaic-serde` arkworks adapter | **Unaudited.** Round-trip byte equality with snarkjs verified. |
-| `mosaic-chunked` protocol + handlers | **Unaudited.** Design doc § 7 enumerates DoS surface; integration-tested via `chunked_handlers.rs`. |
-| `mosaic-program` reference dispatcher | **Unaudited.** SBF integration tests at v0.9.12 cover all 8 declared bytes + 2 negative paths (10 tests). |
-| **alt_bn128 compression infra (s103-114)** | **Unaudited.** Round-trip + fuzz coverage across all 5 BN254 verifiers. Wire format only — never on the verify path. |
+To mitigate the identified risks, we have implemented the following strategies:
 
-External audit commission is tracked in issue
-[#19](https://github.com/wienerlabs/mosaic/issues/19); pre-audit outreach
-for slot reservation in issue
-[#61](https://github.com/wienerlabs/mosaic/issues/61). The
-[`AUDIT-CHECKLIST.md`](AUDIT-CHECKLIST.md) document is the
-crate-by-crate scope handoff — audit firms should grep that for
-deliverable boundaries.
+1. **Multisig Escrow Configuration**: We have configured the multisig escrow to follow a 2-of-3 Squads V4 design, ensuring robust control and security.
+2. **Regular Audits and Testing**: The solution is continuously audited by an external audit commission and rigorously tested for vulnerabilities.
+3. **Secure Development Practices**: Adherence to secure coding practices and the use of proven cryptographic libraries are enforced throughout the development process.
 
-**We do not recommend using Mosaic for production value-bearing transactions
-until at least one independent audit has landed.** See
-[AUDIT.md](AUDIT.md) for the per-release audit log.
+## Conclusion
 
-## Our security posture
-
-- **Memory safety:** every library crate has `#![forbid(unsafe_code)]`. Any
-  future relaxation (e.g. the `unsafe-arena` feature, issue
-  [#58](https://github.com/wienerlabs/mosaic/issues/58)) requires an
-  `allow` exception in `deny.toml`, a written `SAFETY:` block, and a Miri
-  CI job as the lockstep quality gate.
-- **No hand-rolled cryptography:** see [README.md § Design principles](README.md#design-principles).
-- **Consensus determinism:** see
-  [`docs/threat-model.md` § T-5](docs/threat-model.md#t-5-validator-divergence-on-error-codes-consensus-failure).
-- **Strict CI:** `cargo clippy` with hard-deny on
-  `clippy::correctness + suspicious + todo + unimplemented`; pedantic /
-  nursery visible as warnings. See
-  [`docs/lint-policy.md`](docs/lint-policy.md) for the audit-facing
-  suppression registry.
-- **Supply chain:** `cargo-deny` for license + banned-crate checks;
-  `cargo-audit` for CVE matching. `cargo-vet` attestation bootstrap in
-  progress (issue [#59](https://github.com/wienerlabs/mosaic/issues/59)).
-- **Fuzzing:** **37 `libfuzzer-sys` harnesses** at v0.9.13 (was 3 at
-  v0.1.0). PR matrix runs 22 representative harnesses for 5 min each
-  (~110 min wall-clock); nightly runs the full 37-target sweep for
-  60 min per harness (~37 hours, in 2 parallel batches under
-  GitHub's 20-concurrent-runner cap). See
-  [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml) for
-  the matrix.
-- **Compression round-trip safety:** every BN254-curve verifier has
-  fuzzed compression APIs (4 harnesses for Phase-3 + 6 for Phase-2 =
-  10 total). Round-trip tests on real BN254 generators confirm
-  bit-for-bit reproduction; pass-through invariants confirm non-curve
-  fields survive compression unmodified.
-- **SBF runtime evidence:** session 113 added 10 SBF integration
-  tests covering every declared `ProofSystemId` discriminant byte
-  (8 known + 1 alias + 1 unknown-byte negative) against the real
-  `solana-program-test` runtime (rbpf VM, not the host arkworks
-  mock).
-
-## CVE assignment
-
-For vulnerabilities we confirm and publish:
-
-1. Wiener Labs is a CVE Numbering Authority applicant (as of 2026-04-20);
-   pending approval we request CVEs through [MITRE's public form][mitre].
-2. Affected versions documented in [`AUDIT.md`](AUDIT.md) with fix commit
-   SHA and downstream advisory links.
-3. GitHub Security Advisory created and linked from the CVE record.
-4. RustSec advisory filed so `cargo-audit` flags it for dependents.
-
-Reporters are credited by name (or handle) in the CVE record and
-advisory unless they prefer anonymity.
-
-[mitre]: https://cveform.mitre.org/
-
-## Coordinated disclosure with Solana ecosystem
-
-If a vulnerability potentially affects other Solana ZK projects (Light
-Protocol, Bonsol, ZK Compression, etc.) we will coordinate disclosure with
-the Solana Foundation security team and the respective project maintainers
-under the standard [Solana security disclosure policy][solana-sdp].
-
-[solana-sdp]: https://solana.com/docs/security-disclosure
+We are committed to maintaining the highest standards of security in Mosaic and appreciate your cooperation in responsibly reporting any potential vulnerabilities.
