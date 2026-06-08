@@ -106,8 +106,14 @@ the malformed point is refused, not pairing-computed-and-rejected.
   that changed `alt_bn128_pairing`'s validation would be a P1 liveness
   signal per `docs/rollback-playbook.md` and is exactly what the
   cross-validator determinism harness (#70) + this test guard against.
-- G1 subgroup membership is validated identically (`decode_g1`); the G1
-  attacker surface is `A` and `C`.
+- **G1 has cofactor 1** on BN254 (`alt_bn128`): the G1 group is
+  prime-order, so every on-curve G1 point is already in the subgroup and
+  the subgroup check is vacuous for G1. `decode_g1` still runs the same
+  `is_in_correct_subgroup_assuming_on_curve` check (cheap, always true on
+  a valid point), so the only adversarial G1 class is **off-curve**,
+  which both backends reject on the curve-equation check. The
+  cofactor-induced wrong-subgroup risk is G2-only, which is exactly the
+  surface tested above (the prover-supplied `B` is the G2 element).
 
 ## Related
 
