@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- Security disclosure contact corrected repo-wide from
+  `security@wienerlabs.com` to the actually-monitored
+  `baturalp@wienerlabs.com` (8 references across `SECURITY.md`,
+  `AUDIT-CHECKLIST.md`, `docs/responsible-disclosure-timeline.md`,
+  `docs/rollback-playbook.md`, `docs/audit/rfq.md`,
+  `docs/audit/outreach-email.md`). The prior address was not a set-up
+  alias, so disclosure reports sent there would have gone unreceived.
+  Surfaced while reviewing two external PRs (#89 / #90) that tried to
+  introduce a third, non-project address.
+
+- `docs/bug-bounty.md` (#79) — in-house bug-bounty program plan written
+  after declining the external PRs #89 / #90 (which published a
+  non-project security contact and unapproved payout commitments).
+  Marked draft / launches post-audit / gated on #66. Uses the correct
+  contact, the real 2-of-3 Squads V4 custody (not a fabricated 4-of-7),
+  Immunefi-vs-Cantina trade-off with a recommendation, scope aligned to
+  the actual verifier crates, and payout bands left as
+  pending-sign-off rather than committed figures.
+
 - `docs/lint-policy.md` completed as a true audit artifact (#62). Added
   a **Rust compiler lints** section leading with `unsafe_code = "forbid"`
   (zero `unsafe` in the tree, reinforced by `#![forbid(unsafe_code)]` in
