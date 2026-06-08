@@ -111,11 +111,11 @@ Scope-boundary axes documented in [`docs/threat-model.md`](docs/threat-model.md#
 | `mosaic-plonk` KZG-PLONK BN254 verifier | **Unaudited.** snarkjs PLONK 0.7.6 differential test landed at v0.6.0; SBF integration test landed at v0.9.12. |
 | `mosaic-hyperplonk` KZG BN254 verifier | **Unaudited; Phase-3 scaffold.** Espresso-reference fixture differential test pending session 118. Compression API at v0.9.13. |
 | `mosaic-halo2` KZG BN254 verifier (PSE fork) | **Unaudited; Phase-3 scaffold.** Multi-column lookup wired at v0.9.1; multi-lookup at v0.9.6; compression at v0.9.5/.7/.8. |
-| `mosaic-stark` FRI-STARK | **Unaudited; Phase-3 scaffold.** Plonky3-reference fixture pending; alt_bn128 compression N/A (field-only). |
+| `mosaic-stark` FRI-STARK | **Unaudited; Phase-3 scaffold.** Plonky3-reference fixture pending; alt_bn128 compression N/A (field-only). **Chunked-only on chain:** a production-shaped proof (~7.8M CU) exceeds the 1.4M per-transaction cap, so STARK MUST be verified via the chunked path (`verify_setup` + `verify_query_range`, driven by `BeginStarkVerify` / `StarkVerifyStep`), never single-shot `VerifyProof`. This mitigates T-12. SDK: `build_chunked_stark_plan`. |
 | `mosaic-nova` Nova/HyperNova/ProtoStar | **Unaudited; Phase-3 scaffold.** sonobe-reference fixture pending session 118. Compression at v0.9.13. |
 | `mosaic-serde` snarkjs adapter | **Unaudited.** Decimal-string parsing is fuzzed (4 harnesses). |
 | `mosaic-serde` arkworks adapter | **Unaudited.** Round-trip byte equality with snarkjs verified. |
-| `mosaic-chunked` protocol + handlers | **Unaudited.** Design doc § 7 enumerates DoS surface; integration-tested via `chunked_handlers.rs`. |
+| `mosaic-chunked` protocol + handlers | **Unaudited.** Design doc § 7 enumerates DoS surface; integration-tested via `chunked_handlers.rs`. Session layout v2 adds the `StarkVerifyProgress` resumable-verification cursor (chunked STARK, #76), end-to-end tested in `chunked_stark.rs`. |
 | `mosaic-program` reference dispatcher | **Unaudited.** SBF integration tests at v0.9.12 cover all 8 declared bytes + 2 negative paths (10 tests). |
 | **alt_bn128 compression infra (s103-114)** | **Unaudited.** Round-trip + fuzz coverage across all 5 BN254 verifiers. Wire format only — never on the verify path. |
 

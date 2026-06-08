@@ -222,12 +222,22 @@ the proof was malformed.
 
 **Mitigation**:
 
-1. **Steer callers into chunked execution.** The `mosaic-chunked`
-   crate exists exactly for this: it splits the verifier's body
-   across multiple instructions in the same atomic-bundle envelope,
-   maintaining the per-tx CU cap. STARK callers MUST use the
-   chunked-upload pattern; the SDK's helper builders default to
-   chunked mode for STARK proofs.
+1. **Chunked execution (implemented, #76).** The verifier exposes a
+   resumable API — `FriStark::verify_setup` (once-per-proof shape +
+   PoW + OOD gate) and `verify_query_range(start, end)` (per-query
+   batch) — because each query's checks (trace + constraint Merkle
+   paths, FRI fold-chain, per-layer auth) are independent. The
+   `mosaic-program` `BeginStarkVerify` (0x15) + `StarkVerifyStep`
+   (0x16) instructions drive this across separate transactions, with
+   a `StarkVerifyProgress` cursor in the session PDA enforcing that
+   `[0, num_queries)` is covered contiguously exactly once and that
+   the setup gate ran first. Each step processes a `queries_per_step`
+   batch sized to stay under the 1.4M cap. STARK callers MUST use this
+   path (never single-shot `VerifyProof`); the SDK's
+   `build_chunked_stark_plan` assembles the full instruction sequence.
+   End-to-end tested on the VM in `chunked_stark.rs` (verify across
+   three transactions, cursor `0 → 2 → 4`, session closes on
+   completion).
 2. **SBF integration test caveat.** Session 113's
    `sbf_dispatches_fri_stark_scaffold` uses the smallest passing
    shape (`num_q=4, num_fri=0, log_h=0, log_blowup=0`) — depth-zero
