@@ -43,6 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     execution. A second test asserts a step before begin is rejected
     with `StarkVerifyNotStarted`. Both pass; the 25 pre-existing SBF
     tests still pass (27 total SBF integration tests now).
+  - `mosaic-sdk`: `build_chunked_stark_plan(ChunkedStarkRequest)` ->
+    `ChunkedStarkPlan` — the client-side counterpart that assembles the
+    full instruction sequence (InitializeSession + AppendChunk×N +
+    BeginStarkVerify + StarkVerifyStep×M), derives the session PDA,
+    parses `num_queries` from the proof header, chains the rolling
+    upload hash, computes the rent-exempt account size, and groups the
+    instructions into transaction-sized batches via
+    `transaction_groups()`. 8 host tests, including one that recomputes
+    the rolling hash independently and asserts it matches the
+    `BeginStarkVerify` payload -- so the SDK and the on-chain handlers
+    agree on the upload-commitment by construction.
 
 - Security disclosure contact corrected repo-wide from
   `security@wienerlabs.com` to the actually-monitored
