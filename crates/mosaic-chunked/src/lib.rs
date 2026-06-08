@@ -369,6 +369,16 @@ pub enum ChunkedInstructionTag {
     CancelSession = 0x13,
     /// `cancel_expired_session()` — permissionless GC after `expires_at_slot`.
     CancelExpiredSession = 0x14,
+    /// `begin_stark_verify(expected_final_hash, vk_account_offset, public_inputs)`
+    /// — finalize the session, run the STARK setup gate (shape + PoW +
+    /// OOD), and record `num_queries`. First step of chunked STARK
+    /// verification (#76).
+    BeginStarkVerify = 0x15,
+    /// `stark_verify_step(vk_account_offset, public_inputs, batch)` —
+    /// verify the next `batch` queries of a chunked STARK proof,
+    /// advancing the session cursor; closes the session when the last
+    /// query passes.
+    StarkVerifyStep = 0x16,
 }
 
 impl ChunkedInstructionTag {
@@ -381,6 +391,8 @@ impl ChunkedInstructionTag {
             0x12 => Some(Self::CommitAndVerify),
             0x13 => Some(Self::CancelSession),
             0x14 => Some(Self::CancelExpiredSession),
+            0x15 => Some(Self::BeginStarkVerify),
+            0x16 => Some(Self::StarkVerifyStep),
             _ => None,
         }
     }

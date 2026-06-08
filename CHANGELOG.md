@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added since v0.9.16-multi-system-demo
 
+- Chunked STARK execution (#76, the largest remaining Phase-3 item).
+  A production FRI-STARK proof consumes ~7.8M CU, far above Solana's
+  1.4M per-transaction cap, so it cannot be verified in one
+  instruction. Verification now splits across transactions because each
+  query's checks (trace + constraint Merkle paths, FRI fold-chain,
+  per-layer auth) are independent:
+  - `mosaic-stark`: `FriStark::verify_setup` (once-per-proof shape +
+    PoW + OOD gate, returns `num_queries`) and
+    `verify_query_range(start, end)` (per-query batch). `verify` now
+    delegates to both so single-shot and chunked share one
+    implementation; 3 agreement tests prove the chunked path accepts
+    exactly what single-shot accepts and catches the same tampering.
+  - `mosaic-chunked`: `ProofUploadSession` layout v1 -> v2 adds a
+    `StarkVerifyProgress` cursor (carved from reserved padding, account
+    size unchanged) with `stark_verify_begin` / `stark_verify_advance` /
+    `stark_verify_complete`. The cursor enforces that `[0, num_queries)`
+    is covered contiguously exactly once and that setup ran before any
+    query step, so a driver cannot skip the PoW/OOD gate or a query
+    batch and still reach `complete`. 3 new error variants (0x37-0x39).
+    7 host unit tests.
+  - `mosaic-program`: two new chunked instructions, `BeginStarkVerify`
+    (0x15) and `StarkVerifyStep` (0x16), that finalize the session, run
+    the verifier setup / a query-range batch, drive the session cursor,
+    and close the session (refunding rent) when the final query passes.
+    Compiles to SBF; the 25 existing SBF integration tests still pass.
+
 - Security disclosure contact corrected repo-wide from
   `security@wienerlabs.com` to the actually-monitored
   `baturalp@wienerlabs.com` (8 references across `SECURITY.md`,

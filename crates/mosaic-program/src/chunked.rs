@@ -26,6 +26,8 @@ use solana_program::{
 };
 
 use crate::dispatch_verify;
+use mosaic_core::syscall::solana::SolanaSyscallBackend;
+use mosaic_stark::FriStark;
 
 /// Sub-dispatcher: read the chunked tag and route to a handler.
 pub fn dispatch(
@@ -45,6 +47,10 @@ pub fn dispatch(
         ChunkedInstructionTag::CancelExpiredSession => {
             cancel_expired_session(program_id, accounts, rest)
         },
+        ChunkedInstructionTag::BeginStarkVerify => {
+            begin_stark_verify(program_id, accounts, rest)
+        },
+        ChunkedInstructionTag::StarkVerifyStep => stark_verify_step(program_id, accounts, rest),
     }
 }
 
@@ -349,6 +355,157 @@ fn commit_and_verify(
             session.record_verify_failure(err.code());
             write_session(session_pda, &session)?;
             msg!("mosaic: chunked verify failed, error=0x{:04X}", err.code());
+            Err(ProgramError::from(err))
+        },
+    }
+}
+
+// ---------- 0x15 BeginStarkVerify ----------
+
+/// Finalize the session, run the STARK setup gate (shape + PoW + OOD)
+/// over the assembled proof, and record `num_queries` so the subsequent
+/// [`stark_verify_step`] instructions can verify the queries in batches
+/// that each fit under the 1.4M CU per-transaction cap (#76).
+///
+/// Payload: `expected_final_hash(32) ‖ vk_account_offset(u32 LE) ‖
+/// public_inputs_len(u16 LE) ‖ public_inputs`. Same shape as
+/// `commit_and_verify`.
+fn begin_stark_verify(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    payload: &[u8],
+) -> ProgramResult {
+    let expected_hash = read_array::<32>(payload, 0)?;
+    let vk_offset = read_u32_le(payload, 32)? as usize;
+    let pi_len = read_u16_le(payload, 36)? as usize;
+    let pi_start: usize = 38;
+    let pi_end = pi_start
+        .checked_add(pi_len)
+        .ok_or(ProgramError::InvalidInstructionData)?;
+    let public_inputs = payload
+        .get(pi_start..pi_end)
+        .ok_or(ProgramError::InvalidInstructionData)?;
+
+    let payer = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let session_pda = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
+    if !payer.is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+    let vk_account = accounts
+        .get(vk_offset)
+        .ok_or(ProgramError::NotEnoughAccountKeys)?;
+
+    let mut session = load_session(program_id, session_pda, payer.key)?;
+    assert_session_pda(program_id, &session, session_pda.key)?;
+
+    let psid = ProofSystemId::from_byte(session.proof_system_id).map_err(ProgramError::from)?;
+    if psid != ProofSystemId::FriStark {
+        return Err(ProgramError::from(OnChainError::UnsupportedOperation));
+    }
+
+    if !session.finalized {
+        session.finalize(expected_hash).map_err(ProgramError::from)?;
+        write_session(session_pda, &session)?;
+    }
+
+    let backend = SolanaSyscallBackend::new();
+    let v = FriStark::new(&backend);
+    let vk_data = vk_account.try_borrow_data()?;
+    let setup = FriStark::verify_setup(&v, &vk_data, &session.assembled, public_inputs);
+    drop(vk_data);
+    match setup {
+        Ok(num_queries) => {
+            session
+                .stark_verify_begin(num_queries)
+                .map_err(ProgramError::from)?;
+            msg!("mosaic: stark verify begun, {} queries", num_queries);
+            if session.stark_verify_complete() {
+                close_session(session_pda, payer)?;
+            } else {
+                write_session(session_pda, &session)?;
+            }
+            Ok(())
+        },
+        Err(err) => {
+            session.record_verify_failure(err.code());
+            write_session(session_pda, &session)?;
+            msg!("mosaic: stark setup failed, error=0x{:04X}", err.code());
+            Err(ProgramError::from(err))
+        },
+    }
+}
+
+// ---------- 0x16 StarkVerifyStep ----------
+
+/// Verify the next `batch` queries of a chunked STARK proof, advancing
+/// the session cursor. When the final query passes, the session is
+/// closed (rent refunded) and the proof is fully verified. A failing
+/// query records the error and leaves the session open for inspection.
+///
+/// Payload: `vk_account_offset(u32 LE) ‖ public_inputs_len(u16 LE) ‖
+/// public_inputs ‖ batch(u16 LE)`.
+fn stark_verify_step(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    payload: &[u8],
+) -> ProgramResult {
+    let vk_offset = read_u32_le(payload, 0)? as usize;
+    let pi_len = read_u16_le(payload, 4)? as usize;
+    let pi_start: usize = 6;
+    let pi_end = pi_start
+        .checked_add(pi_len)
+        .ok_or(ProgramError::InvalidInstructionData)?;
+    let public_inputs = payload
+        .get(pi_start..pi_end)
+        .ok_or(ProgramError::InvalidInstructionData)?;
+    let batch = read_u16_le(payload, pi_end)?;
+
+    let payer = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
+    let session_pda = accounts.get(1).ok_or(ProgramError::NotEnoughAccountKeys)?;
+    if !payer.is_signer {
+        return Err(ProgramError::MissingRequiredSignature);
+    }
+    let vk_account = accounts
+        .get(vk_offset)
+        .ok_or(ProgramError::NotEnoughAccountKeys)?;
+
+    let mut session = load_session(program_id, session_pda, payer.key)?;
+    assert_session_pda(program_id, &session, session_pda.key)?;
+
+    if !session.stark_verify.setup_done {
+        return Err(ProgramError::from(OnChainError::StarkVerifyNotStarted));
+    }
+    if session.stark_verify_complete() {
+        close_session(session_pda, payer)?;
+        return Ok(());
+    }
+
+    let start = session.stark_verify.next_query;
+    let num_queries = session.stark_verify.num_queries;
+    let end = start.saturating_add(batch.max(1)).min(num_queries);
+
+    let backend = SolanaSyscallBackend::new();
+    let v = FriStark::new(&backend);
+    let vk_data = vk_account.try_borrow_data()?;
+    let r =
+        FriStark::verify_query_range(&v, &vk_data, &session.assembled, public_inputs, start, end);
+    drop(vk_data);
+    match r {
+        Ok(()) => {
+            session.stark_verify_advance(end).map_err(ProgramError::from)?;
+            if session.stark_verify_complete() {
+                msg!("mosaic: stark verify complete, closing session");
+                close_session(session_pda, payer)?;
+            } else {
+                msg!("mosaic: stark verify advanced to {}/{}", end, num_queries);
+                write_session(session_pda, &session)?;
+            }
+            Ok(())
+        },
+        Err(err) => {
+            session.record_verify_failure(err.code());
+            write_session(session_pda, &session)?;
+            msg!("mosaic: stark step failed, error=0x{:04X}", err.code());
             Err(ProgramError::from(err))
         },
     }
